@@ -1,0 +1,29 @@
+[Unit]
+Description=SirpefOffice API
+Documentation=https://github.com/samuelgaravito/sirpefoffice
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=sirpefoffice
+Group=sirpefoffice
+WorkingDirectory=/srv/sirpefoffice/current/backend
+EnvironmentFile=/etc/sirpefoffice/backend.env
+
+# Se ejecuta tsx directamente para no depender de los scripts npm de desarrollo.
+ExecStart=/srv/sirpefoffice/current/backend/node_modules/.bin/tsx src/index.ts
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+LimitNOFILE=65535
+
+# Endurecimiento básico.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

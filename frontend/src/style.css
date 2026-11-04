@@ -1,0 +1,895 @@
+@import 'tailwindcss';
+
+@theme {
+  /* ── Superficies ─────────────────────────────────────────────── */
+  --color-canvas: #f4f6f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-surface-hover: #f1f4f8;
+
+  /* ── Tinta (jerarquía de texto) ──────────────────────────────── */
+  --color-ink: #111827;
+  --color-ink-muted: #5b6573;
+  --color-ink-subtle: #9aa4b2;
+  --color-ink-inverse: #ffffff;
+
+  /* ── Acento ──────────────────────────────────────────────────── */
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-soft: #eaf0ff;
+  --color-accent-ink: #ffffff;
+
+  /* ── Líneas ──────────────────────────────────────────────────── */
+  --color-hairline: #e4e8ee;
+  --color-hairline-strong: #cfd6df;
+
+  /* ── Estado ──────────────────────────────────────────────────── */
+  --color-success: #15803d;
+  --color-success-soft: #e8f5ec;
+  --color-warning: #b45309;
+  --color-warning-soft: #fef4e6;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fdeeee;
+
+  /* ── Tipografía ──────────────────────────────────────────────── */
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* ── Radios y sombras ────────────────────────────────────────── */
+  --radius-card: 14px;
+  --radius-field: 10px;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-pop: 0 8px 28px rgb(16 24 40 / 0.14), 0 2px 8px rgb(16 24 40 / 0.08);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-hairline);
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: #c9dbff;
+  }
+
+  /* Scrollbars discretas */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #c9d1dc;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #aeb9c7;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-medium transition-colors select-none;
+    border-radius: var(--radius-field);
+    height: 36px;
+    padding: 0 14px;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .btn:disabled {
+    @apply cursor-not-allowed opacity-50;
+  }
+
+  .btn-primary {
+    background: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-ink);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+  }
+
+  .btn-outline {
+    background: var(--color-surface);
+    color: var(--color-ink);
+    border: 1px solid var(--color-hairline-strong);
+  }
+  .btn-outline:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+  }
+
+  .btn-danger {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: #fbdada;
+  }
+
+  .btn-sm {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .field {
+    @apply w-full bg-surface;
+    border: 1px solid var(--color-hairline-strong);
+    border-radius: var(--radius-field);
+    height: 38px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: var(--color-ink);
+  }
+
+  .field::placeholder {
+    color: var(--color-ink-subtle);
+  }
+
+  .field:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgb(37 99 235 / 0.12);
+  }
+
+  textarea.field {
+    height: auto;
+    padding: 10px 12px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .label {
+    @apply mb-1.5 block font-medium text-ink-muted;
+    font-size: 12px;
+  }
+
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-hairline);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full font-medium;
+    height: 22px;
+    padding: 0 9px;
+    font-size: 11px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-muted);
+  }
+
+  /* ── Editor TipTap ───────────────────────────────────────────── */
+  .tiptap {
+    outline: none;
+    min-height: 400px;
+    position: relative;
+    z-index: 0;
+  }
+
+  .tiptap > * + * {
+    margin-top: 0.65em;
+  }
+
+  /* El primer bloque de una hoja no arrastra margen superior: si colapsara
+     fuera del flujo, la medición no lo contaría y la página se desbordaría. */
+  .tiptap > :first-child {
+    margin-top: 0;
+  }
+
+  .tiptap h1 {
+    font-size: 1.9em;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 1em 0 0.4em;
+  }
+  .tiptap h2 {
+    font-size: 1.45em;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1em 0 0.35em;
+  }
+  .tiptap h3 {
+    font-size: 1.2em;
+    font-weight: 600;
+    margin: 0.9em 0 0.3em;
+  }
+  .tiptap h4 {
+    font-size: 1.05em;
+    font-weight: 600;
+    margin: 0.8em 0 0.25em;
+  }
+  .tiptap p {
+    margin: 0;
+  }
+  .tiptap ul {
+    list-style: disc;
+    padding-left: 1.6em;
+    margin: 0.4em 0;
+  }
+  .tiptap ol {
+    list-style: decimal;
+    padding-left: 1.6em;
+    margin: 0.4em 0;
+  }
+  .tiptap li {
+    margin: 0.15em 0;
+  }
+  .tiptap li > p {
+    margin: 0;
+  }
+  .tiptap blockquote {
+    border-left: 3px solid var(--color-accent);
+    padding-left: 1em;
+    color: var(--color-ink-muted);
+    margin: 0.7em 0;
+  }
+  .tiptap hr {
+    border: 0;
+    border-top: 1px solid var(--color-hairline-strong);
+    margin: 1.2em 0;
+  }
+  .tiptap a {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+  .tiptap code {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+    background: #f0f2f5;
+    padding: 0.1em 0.3em;
+    border-radius: 4px;
+  }
+  .tiptap pre {
+    background: #f6f8fa;
+    border: 1px solid var(--color-hairline);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    overflow-x: auto;
+  }
+  .tiptap table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0.8em 0;
+    table-layout: fixed;
+    overflow: hidden;
+    background: var(--sd-table-bg, transparent);
+  }
+  .tiptap th,
+  .tiptap td {
+    border: var(--sd-table-border, 1px solid var(--color-hairline-strong));
+    padding: var(--sd-table-padding, 7px 9px);
+    vertical-align: top;
+    position: relative;
+    min-width: 40px;
+    background: var(--sd-cell-bg, transparent);
+  }
+  .tiptap th {
+    background: var(--sd-cell-bg, var(--color-surface-muted));
+    font-weight: 600;
+    text-align: left;
+  }
+  .tiptap .selectedCell::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgb(37 99 235 / 0.12);
+    pointer-events: none;
+  }
+  .tiptap .column-resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    background: var(--color-accent);
+    pointer-events: none;
+  }
+  .tiptap img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+  }
+
+  /* Nodo de imagen con redimensionado + arrastre flotante */
+  .tiptap .wp-image {
+    position: relative;
+    max-width: 100%;
+    margin: 0.5em 0;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .tiptap .wp-image[data-float='left'] {
+    float: left;
+  }
+  .tiptap .wp-image[data-float='right'] {
+    float: right;
+  }
+  /* El contenedor de la vista de nodo es flex: alineamos la imagen dentro. */
+  .tiptap .wp-image > [data-resize-container] {
+    width: 100%;
+  }
+  .tiptap .wp-image[data-align='center'] > [data-resize-container] {
+    justify-content: center;
+  }
+  .tiptap .wp-image[data-align='right'] > [data-resize-container] {
+    justify-content: flex-end;
+  }
+  .tiptap .wp-image[data-align='left'] > [data-resize-container] {
+    justify-content: flex-start;
+  }
+  .tiptap .wp-image.is-dragging {
+    cursor: grabbing;
+  }
+  .tiptap .wp-image[data-float='behind'] {
+    float: none;
+    position: absolute;
+    z-index: -1;
+    margin: 0;
+  }
+  /* Al seleccionar/hover se sube para poder moverla o redimensionarla. */
+  .tiptap .wp-image[data-float='behind']:hover,
+  .tiptap .wp-image[data-float='behind'].ProseMirror-selectednode {
+    z-index: 1;
+  }
+  .tiptap .wp-image img {
+    display: block;
+    cursor: move;
+    border-radius: 4px;
+  }
+  .tiptap .wp-image img:hover {
+    outline: 2px dashed color-mix(in srgb, var(--color-accent) 45%, transparent);
+    outline-offset: 2px;
+  }
+  .tiptap .wp-image.ProseMirror-selectednode img {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .tiptap .wp-image [data-resize-handle] {
+    width: 10px;
+    height: 10px;
+    background: var(--color-accent);
+    border: 2px solid #fff;
+    border-radius: 9999px;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.35);
+    z-index: 10;
+  }
+  .tiptap .wp-image [data-resize-handle='top-left'] {
+    transform: translate(-50%, -50%);
+    cursor: nwse-resize;
+  }
+  .tiptap .wp-image [data-resize-handle='top-right'] {
+    transform: translate(50%, -50%);
+    cursor: nesw-resize;
+  }
+  .tiptap .wp-image [data-resize-handle='bottom-left'] {
+    transform: translate(-50%, 50%);
+    cursor: nesw-resize;
+  }
+  .tiptap .wp-image [data-resize-handle='bottom-right'] {
+    transform: translate(50%, 50%);
+    cursor: nwse-resize;
+  }
+  .tiptap .is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    float: left;
+    color: var(--color-ink-subtle);
+    pointer-events: none;
+    height: 0;
+  }
+  .tiptap mark {
+    background: #fff3a3;
+    padding: 0 0.1em;
+  }
+  .tiptap p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    color: var(--color-ink-subtle);
+    pointer-events: none;
+    float: left;
+    height: 0;
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  .tool-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    width: 30px;
+    border-radius: 7px;
+    color: var(--color-ink-muted);
+    transition: background-color 120ms ease, color 120ms ease;
+    flex-shrink: 0;
+  }
+
+  .tool-btn:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+    color: var(--color-ink);
+  }
+
+  .tool-btn.is-active {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  .tool-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .tool-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--color-hairline);
+    margin: 0 4px;
+    flex-shrink: 0;
+  }
+
+  .tool-select {
+    height: 30px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    padding: 0 6px;
+    font-size: 12.5px;
+    color: var(--color-ink);
+    cursor: pointer;
+  }
+
+  .tool-select:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .tool-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+  }
+
+  /* Hoja del editor */
+  .doc-sheet {
+    background: var(--sheet-bg, #fff);
+    width: var(--sheet-width, 21cm);
+    min-height: var(--sheet-height, 29.7cm);
+    padding: 0;
+    box-shadow: 0 1px 3px rgb(16 24 40 / 0.12), 0 10px 32px rgb(16 24 40 / 0.10);
+    border-radius: 2px;
+    color: var(--sheet-text, #1a1f26);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap {
+    font-family: var(--sheet-font, var(--font-sans));
+    font-size: var(--sheet-size, 11pt);
+    line-height: var(--sheet-leading, 1.55);
+    color: inherit;
+    min-height: 0;
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h1,
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h2,
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h3,
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h4 {
+    color: var(--sheet-primary, #111827);
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h1 {
+    font-size: calc(1.9em * var(--sheet-scale, 1));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h2 {
+    font-size: calc(1.45em * var(--sheet-scale, 1));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h3 {
+    font-size: calc(1.2em * var(--sheet-scale, 1));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap h4 {
+    font-size: calc(1.05em * var(--sheet-scale, 1));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap th,
+  :is(.doc-sheet, .doc-paged-flow) .tiptap td {
+    border-color: var(--sheet-border, var(--color-hairline-strong));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap th {
+    background: var(--sheet-th, #eef2f7);
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap a {
+    color: var(--sheet-accent, var(--color-accent));
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap blockquote {
+    border-left-color: var(--sheet-accent, var(--color-accent));
+  }
+
+  /* Salto de página manual: línea visible solo dentro del editor. */
+  :is(.doc-sheet, .doc-paged-flow) .tiptap .page-break {
+    position: relative;
+    height: 0;
+    margin: 1.1em 0;
+    border-top: 1px dashed color-mix(in srgb, var(--color-accent) 55%, transparent);
+    user-select: none;
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap .page-break::after {
+    content: 'Salto de página';
+    position: absolute;
+    top: -0.7em;
+    right: 0;
+    padding: 0 6px;
+    background: var(--sheet-bg, #fff);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-ink-subtle);
+  }
+
+  /* Espaciadores invisibles que llevan el flujo a la hoja siguiente. */
+  .sd-page-spacer {
+    display: block;
+    width: 100%;
+    pointer-events: none;
+    user-select: none;
+  }
+
+  /* Variables {{clave}} resaltadas solo en el editor (decoraciones). */
+  :is(.doc-sheet, .doc-paged-flow) .tiptap .doc-var {
+    background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+    border-bottom: 1px dashed color-mix(in srgb, var(--color-accent) 55%, transparent);
+    border-radius: 3px;
+    color: color-mix(in srgb, var(--color-accent) 85%, #111827);
+    padding: 0 2px;
+    font-weight: 500;
+  }
+
+  :is(.doc-sheet, .doc-paged-flow) .tiptap .doc-var::selection {
+    background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+  }
+
+  /* Zonas de página: cabecera/pie fuera de los márgenes del cuerpo. */
+  :is(.doc-sheet, .doc-page-card) > .doc-page-top {
+    min-height: var(--sheet-margin-top, 2.4cm);
+    padding-bottom: 4mm;
+    display: flex;
+    flex-direction: column;
+  }
+
+  :is(.doc-sheet, .doc-page-card) > .doc-page-bottom {
+    min-height: var(--sheet-margin-bottom, 2.4cm);
+    padding-top: 4mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  /* ── Hojas físicas del editor paginado ─────────────────────────── */
+  .doc-sheet-wrap {
+    width: var(--sheet-width, 21cm);
+    margin-inline: auto;
+    color: var(--sheet-text, #1a1f26);
+  }
+
+  .doc-pages {
+    position: relative;
+    width: var(--sheet-width, 21cm);
+    margin-inline: auto;
+  }
+
+  .doc-page-cards {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .doc-page-card {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    background: var(--sheet-bg, #fff);
+    border-radius: 2px;
+    box-shadow: 0 1px 3px rgb(16 24 40 / 0.12), 0 10px 32px rgb(16 24 40 / 0.1);
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+  }
+
+  .doc-page-card > .doc-page-body {
+    min-height: 0;
+  }
+
+  /* Las bandas vivas (solo en edición de cabecera/pie) reciben clics. */
+  .doc-page-card .wp-chrome-band {
+    pointer-events: auto;
+  }
+
+  .doc-paged-flow {
+    position: absolute;
+    inset: 0 0 auto 0;
+    z-index: 1;
+    width: 100%;
+    padding-left: var(--sheet-margin-left, 2.2cm);
+    padding-right: var(--sheet-margin-right, 2.2cm);
+    pointer-events: none;
+  }
+
+  .doc-paged-flow .tiptap {
+    pointer-events: auto;
+    min-height: 0;
+  }
+
+  .doc-sheet-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px 12px;
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--color-ink-subtle);
+    text-align: center;
+  }
+
+  .doc-sheet-meta__info:empty {
+    display: none;
+  }
+
+  .doc-sheet-meta__count {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .doc-mode-toggle {
+    display: inline-flex;
+    padding: 2px;
+    border: 1px solid var(--color-hairline);
+    border-radius: 999px;
+    background: var(--color-surface);
+  }
+
+  .doc-mode-toggle button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    color: var(--color-ink-muted);
+  }
+
+  .doc-mode-toggle button.is-active {
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+  }
+
+  .doc-mode-toggle button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .doc-sheet > .doc-body-editor {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 10cm;
+    padding: 0 var(--sheet-margin-right, 2.2cm) 0 var(--sheet-margin-left, 2.2cm);
+  }
+
+  .doc-sheet > .doc-body-editor > div {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .doc-sheet > .doc-body-editor .tiptap {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .wp-chrome-band {
+    flex: 0 0 auto;
+    border-radius: 6px;
+    padding: 5px 0;
+    margin-bottom: 8px;
+  }
+
+  .wp-chrome-band.is-preview {
+    padding: 0;
+  }
+
+  .wp-chrome-band--footer {
+    margin-top: 8px;
+    margin-bottom: 0;
+  }
+
+  .wp-chrome-band__bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    margin-bottom: 5px;
+    padding: 0 7px;
+    user-select: none;
+  }
+
+  .wp-chrome-band__title {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-ink-muted);
+  }
+
+  .wp-chrome-band__source {
+    border-radius: 999px;
+    padding: 1px 6px;
+    font-size: 9.5px;
+    background: var(--color-surface-muted);
+    color: var(--color-ink-subtle);
+  }
+
+  .wp-chrome-band__source.is-own {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    color: var(--color-accent);
+  }
+
+  .wp-chrome-band__check,
+  .wp-chrome-band__height,
+  .wp-chrome-band__width {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--color-ink-muted);
+  }
+
+  .wp-chrome-band__height input {
+    width: 46px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--color-hairline);
+    border-radius: 4px;
+    background: #fff;
+    font-size: 10.5px;
+  }
+
+  .wp-chrome-band__width input[type='range'] {
+    width: 62px;
+    accent-color: var(--color-accent);
+  }
+
+  .wp-chrome-band__width span {
+    width: 30px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wp-chrome-band__reset {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-size: 10px;
+    color: var(--color-ink-muted);
+  }
+
+  .wp-chrome-band__reset:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+    color: var(--color-ink);
+  }
+
+  .wp-chrome-band__reset:disabled {
+    opacity: 0.4;
+  }
+
+  .wp-chrome-band__surface {
+    position: relative;
+    border-radius: 4px;
+    outline: 1px dashed transparent;
+    outline-offset: -1px;
+    transition: outline-color 0.15s ease, background-color 0.15s ease;
+  }
+
+  .wp-chrome-band--footer .wp-chrome-band__surface {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+
+  .wp-chrome-band.is-preview .wp-chrome-band__surface {
+    outline-color: transparent;
+    background: transparent;
+  }
+
+  .wp-chrome-band:not(.is-preview):hover .wp-chrome-band__surface {
+    outline-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 3%, transparent);
+  }
+
+  .wp-chrome-band.is-active .wp-chrome-band__surface {
+    outline-color: color-mix(in srgb, var(--color-accent) 65%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+  }
+
+  .wp-chrome-band__surface.is-disabled {
+    opacity: 0.5;
+  }
+
+  .wp-chrome-band:not(.is-preview):hover .wp-chrome-band__surface.is-disabled {
+    outline-color: transparent;
+    background: transparent;
+  }
+
+  .wp-chrome-band .tiptap {
+    min-height: 0 !important;
+    font-family: var(--sheet-font, var(--font-sans));
+    font-size: calc(var(--sheet-size, 11pt) * 0.9);
+    line-height: var(--sheet-leading, 1.55);
+  }
+
+  .wp-chrome-band__off {
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--color-ink-subtle);
+  }
+}
+

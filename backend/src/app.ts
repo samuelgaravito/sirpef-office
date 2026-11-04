@@ -1,0 +1,87 @@
+import cookie from '@fastify/cookie';
+import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
+import rateLimit from '@fastify/rate-limit';
+import Fastify, { type FastifyInstance } from 'fastify';
+
+import { corsOrigins, env, isProduction } from './env.js';
+import { errorHandler } from './lib/errors.js';
+import { authRoutes } from './modules/auth/routes.js';
+import { aiRoutes } from './modules/ai/routes.js';
+import { designRoutes } from './modules/designs/routes.js';
+import { documentRoutes } from './modules/documents/routes.js';
+import { exportRoutes } from './modules/exports/routes.js';
+import { inboxRoutes } from './modules/inbox/routes.js';
+import { menuRoutes } from './modules/menus/routes.js';
+import { numberingRoutes } from './modules/numbering/routes.js';
+import { templateRoutes } from './modules/templates/routes.js';
+
+export async function buildApp(): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: isProduction
+      ? { level: 'info' }
+      : {
+          level: 'debug',
+          transport: {
+            target: 'pino-pretty',
+            options: { colorize: true, translateTime: 'HH:MM:ss', ignore: 'pid,hostname' },
+          },
+        },
+    // Los documentos con imágenes embebidas pueden pesar varios MB
+    bodyLimit: 25 * 1024 * 1024,
+    trustProxy: true,
+  });
+
+  await app.register(cors, {
+    origin: (origin, callback) => {
+      // Permite herramientas sin Origin (curl, Postman) y los orígenes configurados
+      if (!origin || corsOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error(`Origen no permitido: ${origin}`), false);
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  });
+
+  await app.register(cookie, {
+    secret: env.JWT_REFRESH_SECRET,
+    hook: 'onRequest',
+  });
+
+  await app.register(rateLimit, {
+    max: 200,
+    timeWindow: '1 minute',
+    allowList: [],
+  });
+
+  await app.register(multipart, {
+    limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  });
+
+  app.setErrorHandler(errorHandler);
+
+  app.get('/api/health', async () => ({
+    ok: true,
+    service: 'sirpefoffice-api',
+    version: '0.1.0',
+    time: new Date().toISOString(),
+  }));
+
+  await app.register(authRoutes, { prefix: '/api/auth' });
+  await app.register(menuRoutes, { prefix: '/api/menus' });
+  await app.register(aiRoutes, { prefix: '/api' });
+  await app.register(templateRoutes, { prefix: '/api/templates' });
+  await app.register(numberingRoutes, { prefix: '/api/numbering' });
+  await app.register(designRoutes, { prefix: '/api/designs' });
+  await app.register(documentRoutes, { prefix: '/api/documents' });
+  await app.register(exportRoutes, { prefix: '/api/documents' });
+  await app.register(inboxRoutes, { prefix: '/api/inbox' });
+
+  app.setNotFoundHandler((request, reply) => {
+    reply.status(404).send({
+      error: 'NOT_FOUND',
+      message: `Ruta no encontrada: ${request.method} ${request.url}`,
+    });
+  });
+
+  return app;
+}

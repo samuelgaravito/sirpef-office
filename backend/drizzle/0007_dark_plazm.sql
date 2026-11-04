@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "menu_keys" text[] DEFAULT ARRAY['home','documents','templates','designs']::text[] NOT NULL;

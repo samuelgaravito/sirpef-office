@@ -1,0 +1,47 @@
+node_modules/
+dist/
+build/
+coverage/
+
+# Código compartido generado por scripts/sync-shared.mjs
+frontend/src/shared/
+backend/src/shared/
+.sync-shared.lock
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+.env.production
+!.env.example
+!.env.production.example
+
+# Datos locales de la app
+backend/data/
+backend/uploads/
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# Editor / SO
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Artefactos de producción generados por scripts/build-release.mjs
+release/
+
+# Entornos reales de producción (los .example sí se versionan)
+deploy/env/*.production.env
+
+# Sistema SVA (repositorio independiente; mantener fuera de este monorepo)
+sva/

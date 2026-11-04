@@ -1,0 +1,1 @@
+ALTER TABLE "document_messages" ADD COLUMN "allow_sender_edit" boolean DEFAULT true NOT NULL;

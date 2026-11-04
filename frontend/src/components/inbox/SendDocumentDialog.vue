@@ -1,0 +1,270 @@
+<script setup lang="ts">
+import { FileText, Loader2, Search, Send, Users, X } from 'lucide-vue-next';
+import { computed, ref, watch } from 'vue';
+
+import { api } from '@/api/client';
+import BaseModal from '@/components/ui/BaseModal.vue';
+import UserAvatar from '@/components/ui/UserAvatar.vue';
+import { useInboxBadge } from '@/composables/useInboxBadge';
+import { useToast } from '@/composables/useToast';
+import { useAuthStore } from '@/stores/auth';
+import type { ListResponse, UserListItem } from '@/types';
+
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    documentId: string;
+    documentTitle: string;
+    expectedVersion: number;
+    mode?: 'send' | 'approve';
+    messageId?: string | null;
+    initialSubject?: string;
+    initialBody?: string;
+    initialRecipientIds?: string[];
+  }>(),
+  { mode: 'send', messageId: null, initialSubject: '', initialBody: '', initialRecipientIds: () => [] },
+);
+
+const emit = defineEmits<{
+  close: [];
+  sent: [payload: { id: string; status: 'sent' | 'pending_approval' }];
+}>();
+
+const auth = useAuthStore();
+const toast = useToast();
+const { refresh: refreshInbox } = useInboxBadge();
+
+const users = ref<UserListItem[]>([]);
+const loadingUsers = ref(false);
+const search = ref('');
+const selected = ref<string[]>([]);
+const subject = ref('');
+const body = ref('');
+const allowSenderExport = ref(false);
+const submitting = ref(false);
+
+const isApprove = computed(() => props.mode === 'approve');
+const title = computed(() => (isApprove.value ? 'Aprobar y enviar' : 'Enviar documento'));
+const description = computed(() =>
+  isApprove.value
+    ? 'Revisa el asunto, el mensaje y los destinatarios antes de sellar el documento.'
+    : auth.isAdmin
+      ? 'El documento se enviará y quedará bloqueado como solo lectura.'
+      : 'El jefe recibirá la solicitud y, cuando la apruebe, se enviará a los destinatarios.',
+);
+
+const available = computed(() => {
+  const term = search.value.trim().toLowerCase();
+  return users.value
+    .filter((user) => user.id !== auth.user?.id)
+    .filter((user) => {
+      if (!term) return true;
+      return `${user.name} ${user.email ?? ''}`.toLowerCase().includes(term);
+    });
+});
+
+const selectedUsers = computed(() =>
+  selected.value
+    .map((id) => users.value.find((user) => user.id === id))
+    .filter((user): user is UserListItem => Boolean(user)),
+);
+
+const canSubmit = computed(
+  () =>
+    !submitting.value &&
+    Boolean(subject.value.trim()) &&
+    selected.value.length > 0 &&
+    (!isApprove.value || Boolean(props.messageId)),
+);
+
+async function loadUsers(): Promise<void> {
+  if (users.value.length > 0) return;
+  loadingUsers.value = true;
+  try {
+    const data = await api.get<ListResponse<UserListItem>>('/auth/users');
+    users.value = data.items;
+  } catch {
+    toast.error('No se pudo cargar la lista de usuarios');
+  } finally {
+    loadingUsers.value = false;
+  }
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) return;
+    subject.value = props.initialSubject || props.documentTitle;
+    body.value = props.initialBody;
+    selected.value = [...props.initialRecipientIds];
+    allowSenderExport.value = false;
+    search.value = '';
+    void loadUsers();
+  },
+);
+
+function toggle(userId: string): void {
+  selected.value = selected.value.includes(userId)
+    ? selected.value.filter((id) => id !== userId)
+    : [...selected.value, userId];
+}
+
+function remove(userId: string): void {
+  selected.value = selected.value.filter((id) => id !== userId);
+}
+
+async function submit(): Promise<void> {
+  if (!canSubmit.value) return;
+  submitting.value = true;
+  try {
+    const payload = {
+      subject: subject.value.trim(),
+      body: body.value.trim(),
+      recipientIds: selected.value,
+      expectedVersion: props.expectedVersion,
+      ...(isApprove.value ? { allowSenderExport: allowSenderExport.value } : {}),
+    };
+
+    if (isApprove.value && props.messageId) {
+      await api.post(`/inbox/${props.messageId}/approve`, payload);
+      toast.success(
+        allowSenderExport.value
+          ? 'Documento aprobado y enviado. El asistente también podrá exportarlo'
+          : 'Documento aprobado y enviado. Solo el administrador podrá exportarlo',
+      );
+      await refreshInbox();
+      emit('sent', { id: props.messageId, status: 'sent' });
+    } else {
+      const response = await api.post<{ id: string; status: 'sent' | 'pending_approval' }>(
+        '/inbox',
+        { ...payload, documentId: props.documentId },
+      );
+      if (response.status === 'pending_approval') {
+        toast.success('Enviado a aprobación del jefe');
+      } else {
+        toast.success('Documento enviado');
+      }
+      await refreshInbox();
+      emit('sent', { id: response.id, status: response.status });
+    }
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'No se pudo enviar el documento');
+  } finally {
+    submitting.value = false;
+  }
+}
+</script>
+
+<template>
+  <BaseModal :open="open" :title="title" :description="description" size="lg" @close="emit('close')">
+    <div class="space-y-4">
+      <!-- Documento adjunto -->
+      <div class="flex items-center gap-2.5 rounded-xl border border-hairline bg-surface-muted/60 px-3 py-2.5">
+        <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent">
+          <FileText class="size-4" />
+        </span>
+        <div class="min-w-0">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Documento adjunto</p>
+          <p class="truncate text-[13px] font-medium text-ink">{{ documentTitle }}</p>
+        </div>
+      </div>
+
+      <!-- Destinatarios -->
+      <div>
+        <div class="mb-1.5 flex items-center justify-between">
+          <label class="label mb-0">Destinatarios</label>
+          <span class="text-[11px] text-ink-subtle">{{ selected.length }} seleccionado{{ selected.length === 1 ? '' : 's' }}</span>
+        </div>
+
+        <div v-if="selectedUsers.length > 0" class="mb-2 flex flex-wrap gap-1.5">
+          <span
+            v-for="user in selectedUsers"
+            :key="user.id"
+            class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft py-1 pl-1 pr-2 text-[11.5px] font-medium text-accent"
+          >
+            <UserAvatar :name="user.name" :src="user.avatarUrl" size="xs" />
+            {{ user.name }}
+            <button type="button" class="rounded-full p-0.5 hover:bg-accent/15" :aria-label="`Quitar a ${user.name}`" @click="remove(user.id)">
+              <X class="size-3" />
+            </button>
+          </span>
+        </div>
+
+        <div class="relative">
+          <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
+          <input v-model="search" class="field pl-9" placeholder="Buscar por nombre o correo…" />
+        </div>
+
+        <div class="mt-2 max-h-52 overflow-y-auto rounded-xl border border-hairline">
+          <div v-if="loadingUsers" class="grid place-items-center py-8">
+            <Loader2 class="size-5 animate-spin text-ink-subtle" />
+          </div>
+          <p v-else-if="available.length === 0" class="px-3 py-6 text-center text-[12.5px] text-ink-muted">
+            No hay usuarios que coincidan.
+          </p>
+          <label
+            v-for="user in available"
+            :key="user.id"
+            class="flex cursor-pointer items-center gap-2.5 border-b border-hairline px-3 py-2 last:border-b-0 hover:bg-surface-hover"
+          >
+            <input
+              type="checkbox"
+              class="size-4 accent-[var(--color-accent)]"
+              :checked="selected.includes(user.id)"
+              @change="toggle(user.id)"
+            />
+            <UserAvatar :name="user.name" :src="user.avatarUrl" size="sm" />
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-[12.5px] font-medium text-ink">{{ user.name }}</span>
+              <span v-if="user.email" class="block truncate text-[11px] text-ink-subtle">{{ user.email }}</span>
+            </span>
+            <span v-if="user.role === 'admin'" class="chip">Jefe</span>
+          </label>
+        </div>
+        <p class="mt-1.5 flex items-center gap-1 text-[11px] text-ink-subtle">
+          <Users class="size-3" />
+          Los destinatarios podrán leerlo, pero no editarlo.
+        </p>
+      </div>
+
+      <label
+        v-if="isApprove"
+        class="flex cursor-pointer items-start gap-2.5 rounded-xl border border-hairline bg-surface-muted/50 px-3 py-2.5 text-[12.5px] leading-snug text-ink-muted"
+      >
+        <input
+          v-model="allowSenderExport"
+          type="checkbox"
+          class="mt-0.5 size-4 shrink-0 accent-accent"
+        />
+        <span>
+          <span class="block font-medium text-ink">Permitir que el asistente imprima o exporte el memo</span>
+          Si lo desactivas, solo el administrador podrá exportarlo en PDF, Word o HTML.
+        </span>
+      </label>
+
+      <div>
+        <label class="label" for="inbox-subject">Asunto</label>
+        <input id="inbox-subject" v-model="subject" class="field" maxlength="240" placeholder="Asunto del envío" />
+      </div>
+
+      <div>
+        <label class="label" for="inbox-body">Mensaje</label>
+        <textarea
+          id="inbox-body"
+          v-model="body"
+          class="field min-h-[110px] resize-y"
+          maxlength="5000"
+          placeholder="Escribe una nota para los destinatarios (opcional)…"
+        />
+      </div>
+    </div>
+
+    <template #footer>
+      <button type="button" class="btn btn-outline" :disabled="submitting" @click="emit('close')">Cancelar</button>
+      <button type="button" class="btn btn-primary" :disabled="!canSubmit" @click="submit">
+        <component :is="submitting ? Loader2 : Send" :class="['size-4', submitting ? 'animate-spin' : '']" />
+        {{ submitting ? 'Enviando…' : isApprove ? 'Aprobar y enviar' : auth.isAdmin ? 'Enviar' : 'Enviar a aprobación' }}
+      </button>
+    </template>
+  </BaseModal>
+</template>

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://opencode.ai/schemas/config.json",
+  "permission": {
+    "edit": "allow",
+    "bash": "ask",
+    "webfetch": "deny"
+  },
+  "agent": {
+    "plan": {
+      "permission": {
+        "edit": "deny",
+        "bash": "ask"
+      }
+    },
+    "explore": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny"
+      },
+      "description": "Agente ultrarrápido de solo lectura para buscar componentes Vue, esquemas Drizzle o funciones de render sin consumir tokens de escritura."
+    },
+    "security-auditor": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "deny",
+        "bash": "allow"
+      },
+      "description": "Audita rutas de Fastify, validaciones Zod, control de acceso assertDocument y seguridad de tokens JWT/refresh."
+    },
+    "vue-tiptap-expert": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "bash": "ask"
+      },
+      "description": "Especialista en TipTap 3, extensiones personalizadas de tablas, imágenes A+B y componentes de la SPA en Vue 3[cite: 1, 2]."
+    },
+    "backend-architect": {
+      "mode": "subagent",
+      "permission": {
+        "edit": "allow",
+        "bash": "allow"
+      },
+      "description": "Experto en Node.js, Fastify, migraciones Drizzle ORM, PostgreSQL y motores de exportación PDF (Chrome headless) y DOCX[cite: 1, 2]."
+    }
+  }
+}

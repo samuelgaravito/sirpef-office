@@ -1,0 +1,1 @@
+ALTER TABLE "document_messages" ADD COLUMN "allow_sender_export" boolean DEFAULT false NOT NULL;

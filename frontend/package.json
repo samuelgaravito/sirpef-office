@@ -1,0 +1,58 @@
+{
+  "name": "sirpefoffice-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "SPA de SirpefOffice: Vue 3, Vite y TipTap.",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "postinstall": "node ../scripts/sync-shared.mjs",
+    "predev": "node ../scripts/sync-shared.mjs",
+    "dev": "vite",
+    "prebuild": "node ../scripts/sync-shared.mjs",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "pretypecheck": "node ../scripts/sync-shared.mjs",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@fontsource/georama": "^5.3.0",
+    "@tiptap/core": "^3.32.0",
+    "@tiptap/extension-hard-break": "^3.32.0",
+    "@tiptap/extension-highlight": "^3.32.0",
+    "@tiptap/extension-image": "^3.32.0",
+    "@tiptap/extension-subscript": "^3.32.0",
+    "@tiptap/extension-superscript": "^3.32.0",
+    "@tiptap/extension-table": "^3.32.0",
+    "@tiptap/extension-task-item": "^3.32.0",
+    "@tiptap/extension-task-list": "^3.32.0",
+    "@tiptap/extension-text-align": "^3.32.0",
+    "@tiptap/extension-text-style": "^3.32.0",
+    "@tiptap/extension-typography": "^3.32.0",
+    "@tiptap/extension-unique-id": "^3.32.0",
+    "@tiptap/extensions": "^3.32.0",
+    "@tiptap/pm": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
+    "@tiptap/static-renderer": "^3.32.0",
+    "@tiptap/vue-3": "^3.32.0",
+    "lucide-vue-next": "^0.545.0",
+    "pinia": "^4.1.0",
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^20.19.43",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "tailwindcss": "^4.3.3",
+    "typescript": "5.9.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^3.3.13"
+  },
+  "overrides": {
+    "vite": "^6.3.5"
+  }
+}

@@ -1,0 +1,14 @@
+# SirpefOffice · TLS automático con Caddy
+#
+# Solo se usa con el perfil "tls" de docker-compose.prod.yml:
+#   docker compose --env-file .env.production -f docker-compose.prod.yml \
+#     --profile tls up -d
+#
+# El dominio se toma de SIRPEF_DOMAIN (.env.production).
+
+{$SIRPEF_DOMAIN} {
+    encode gzip
+
+    # Caddy habla con el contenedor `web`, que sirve la SPA y /api.
+    reverse_proxy web:80
+}

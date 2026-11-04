@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sirpefoffice-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sirpefoffice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sirpefoffice}
+      POSTGRES_DB: ${POSTGRES_DB:-sirpefoffice}
+      # Checksums de datos: Postgres 16+ requiere esto para integridad
+      POSTGRES_INITDB_ARGS: '--data-checksums'
+    ports:
+      # 5433 para no chocar con un Postgres del sistema en 5432
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      - sirpefoffice-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-sirpefoffice} -d ${POSTGRES_DB:-sirpefoffice}']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  sirpefoffice-pgdata:
+    name: sirpefoffice-pgdata

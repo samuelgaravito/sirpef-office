@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "document_messages_pending_unique_idx" ON "document_messages" USING btree ("document_id") WHERE "document_messages"."status" = 'pending_approval';

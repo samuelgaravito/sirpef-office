@@ -1,0 +1,31 @@
+# Dependencias y artefactos generados
+**/node_modules
+**/dist
+**/build
+**/coverage
+release
+sva
+
+# Entornos y secretos: nunca deben entrar en la imagen
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.production.example
+
+# Datos locales y logs
+backend/data
+backend/uploads
+*.log
+.sync-shared.lock
+
+# Código compartido generado: se regenera dentro de la imagen
+backend/src/shared
+frontend/src/shared
+
+# Git, editor y documentación
+.git
+.gitignore
+.opencode
+.opencode.json
+docs
+*.md

@@ -1,0 +1,128 @@
+name: sirpefoffice
+
+# SirpefOffice · stack Docker de producción
+#
+# Uso:
+#   docker compose --env-file .env.production -f docker-compose.prod.yml build
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d db
+#   docker compose --env-file .env.production -f docker-compose.prod.yml \
+#     --profile tools run --rm migrate
+#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+#
+# HTTPS con Caddy:
+#   docker compose --env-file .env.production -f docker-compose.prod.yml \
+#     --profile tls up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sirpefoffice-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?define POSTGRES_USER en .env.production}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env.production}"
+      POSTGRES_DB: "${POSTGRES_DB:?define POSTGRES_DB en .env.production}"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    # Sin "ports": la base solo es accesible desde la red interna de Compose.
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: sirpefoffice-api
+    restart: unless-stopped
+    # Permite que el contenedor alcance servicios del host (p. ej. SVA local).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env.production
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3101
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      CHROME_PATH: /usr/bin/chromium
+      EXPORT_DIR: /data/exports
+    volumes:
+      - exports:/data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "3101"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3101/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: "${VITE_API_URL:-/api}"
+        VITE_SVA_URL: "${VITE_SVA_URL:-}"
+        VITE_SVA_API_URL: "${VITE_SVA_API_URL:-}"
+    container_name: sirpefoffice-web
+    restart: unless-stopped
+    ports:
+      # Por defecto solo loopback: delante va Caddy (perfil tls) o el Nginx
+      # del host. Para probar por HTTP desde otra máquina usa WEB_BIND=0.0.0.0.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+
+  # Migraciones de Drizzle. Se ejecuta a demanda, nunca en `up`:
+  #   --profile tools run --rm migrate
+  migrate:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env.production
+    environment:
+      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+    command: ["npx", "drizzle-kit", "migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # HTTPS automático (Let's Encrypt). Opcional: perfil "tls".
+  caddy:
+    profiles: ["tls"]
+    image: caddy:2-alpine
+    container_name: sirpefoffice-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SIRPEF_DOMAIN: "${SIRPEF_DOMAIN:-localhost}"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  pgdata:
+  exports:
+  caddy_data:
+  caddy_config:
