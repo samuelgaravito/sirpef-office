@@ -2,19 +2,26 @@ name: sirpefoffice
 
 # SirpefOffice · stack Docker de producción
 #
-# Uso:
+# Base externa (recomendado): define DATABASE_URL en .env.production.
 #   docker compose --env-file .env.production -f docker-compose.prod.yml build
-#   docker compose --env-file .env.production -f docker-compose.prod.yml up -d db
 #   docker compose --env-file .env.production -f docker-compose.prod.yml \
 #     --profile tools run --rm migrate
 #   docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+#
+# Base local incluida (solo pruebas):
+#   docker compose --env-file .env.production -f docker-compose.prod.yml \
+#     --profile local-db up -d db
+#   (con DATABASE_URL apuntando a db:5432)
 #
 # HTTPS con Caddy:
 #   docker compose --env-file .env.production -f docker-compose.prod.yml \
 #     --profile tls up -d
 
 services:
+  # Base local opcional. En producción se usa la base externa configurada en
+  # DATABASE_URL; este servicio solo arranca con: --profile local-db
   db:
+    profiles: ["local-db"]
     image: postgres:16-alpine
     container_name: sirpefoffice-db
     restart: unless-stopped
@@ -47,14 +54,11 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 3101
-      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      DATABASE_URL: "${DATABASE_URL:?define DATABASE_URL en .env.production}"
       CHROME_PATH: /usr/bin/chromium
       EXPORT_DIR: /data/exports
     volumes:
       - exports:/data/exports
-    depends_on:
-      db:
-        condition: service_healthy
     expose:
       - "3101"
     healthcheck:
@@ -94,14 +98,13 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env.production
     environment:
-      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      DATABASE_URL: "${DATABASE_URL:?define DATABASE_URL en .env.production}"
     command: ["npx", "drizzle-kit", "migrate"]
-    depends_on:
-      db:
-        condition: service_healthy
 
   # HTTPS automático (Let's Encrypt). Opcional: perfil "tls".
   caddy:

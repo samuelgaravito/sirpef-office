@@ -5,19 +5,23 @@ La guía completa está en [`../README-PRODUCCION.md`](../README-PRODUCCION.md).
 ## Docker Compose (recomendado)
 
 ```bash
-cp .env.production.example .env.production   # completar secretos
+cp .env.production.example .env.production   # completar DATABASE_URL y secretos
 docker compose --env-file .env.production -f docker-compose.prod.yml build
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d db
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   --profile tools run --rm migrate
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+
+# Si la base está vacía, una sola vez:
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   run --rm api npm run db:seed
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 
 # HTTPS automático con Caddy
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   --profile tls up -d
 ```
+
+La base de datos es externa por defecto (`DATABASE_URL`). El servicio `db` del
+compose es opcional y solo se usa con `--profile local-db` para pruebas.
 
 Archivos del stack: `../backend/Dockerfile`, `../frontend/Dockerfile`,
 `../docker-compose.prod.yml`, `nginx/container.conf` y `Caddyfile`.

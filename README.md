@@ -141,19 +141,31 @@ no lo duplica. Si usas un PostgreSQL local en el puerto 5432, ajusta `DATABASE_U
 
 ### Alternativa: todo con Docker
 
-Con Docker no hace falta instalar Node, PostgreSQL ni Chrome en el host:
+Con Docker no hace falta instalar Node, PostgreSQL ni Chrome en el host.
+
+El stack usa una base **externa** por defecto. Configura `DATABASE_URL` en
+`.env.production` apuntando al PostgreSQL existente:
 
 ```bash
 cp .env.production.example .env.production
-# Edita secretos, dominio, SVA y puertos.
+# Edita DATABASE_URL, secretos, dominio, SVA y puertos.
 
 docker compose --env-file .env.production -f docker-compose.prod.yml build
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d db
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   --profile tools run --rm migrate
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+
+# Solo si la base está vacía:
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   run --rm api npm run db:seed
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d
+```
+
+Para usar la base local incluida (solo pruebas):
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  --profile local-db up -d db
+# y DATABASE_URL=postgres://...@db:5432/sirpefoffice
 ```
 
 Abre <http://localhost:8080> (o el `WEB_PORT` configurado). Para HTTPS en

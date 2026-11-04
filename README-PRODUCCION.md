@@ -67,14 +67,15 @@ No se despliegan:
 
 ## Despliegue con Docker Compose (recomendado)
 
-La API, la SPA y PostgreSQL corren en contenedores. Los datos persisten en
+La API y la SPA corren en contenedores. PostgreSQL puede ser el servidor
+existente (recomendado) o el contenedor local opcional. Los datos persisten en
 volúmenes y la actualización es un `docker compose up -d --build`.
 
 | Archivo | Uso |
 | --- | --- |
 | `backend/Dockerfile` | Imagen de la API: Node 22 + Chromium para los PDF. |
 | `frontend/Dockerfile` | Compila la SPA con Vite y la sirve con Nginx. |
-| `docker-compose.prod.yml` | Servicios `db`, `api`, `web`, `migrate` y `caddy`. |
+| `docker-compose.prod.yml` | Servicios `api`, `web`, `migrate`, `caddy` y `db` local opcional. |
 | `deploy/nginx/container.conf` | Nginx del contenedor `web`. |
 | `deploy/Caddyfile` | HTTPS automático con Caddy (perfil `tls`). |
 | `.env.production.example` | Plantilla del entorno del stack. |
@@ -84,16 +85,23 @@ volúmenes y la actualización es un `docker compose up -d --build`.
 ```bash
 cp .env.production.example .env.production
 chmod 600 .env.production
-# Edita POSTGRES_PASSWORD, JWT_*, SVA_*, SIRPEF_DOMAIN y el resto.
+# Edita DATABASE_URL (base existente), JWT_*, SVA_*, SIRPEF_DOMAIN y el resto.
 
 docker compose --env-file .env.production -f docker-compose.prod.yml build
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d db
 docker compose --env-file .env.production -f docker-compose.prod.yml \
   --profile tools run --rm migrate
-docker compose --env-file .env.production -f docker-compose.prod.yml \
-  run --rm api npm run db:seed
 docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 ```
+
+Si la base está vacía, ejecuta una vez el seed:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml \
+  run --rm api npm run db:seed
+```
+
+Para usar la base local incluida (solo pruebas), arranca el perfil `local-db` y
+apunta `DATABASE_URL` a `db:5432`. En producción no se arranca ese servicio.
 
 La web queda en `http://127.0.0.1:8080` (o el puerto indicado en `WEB_PORT`).
 Para probar sin proxy/TLS usa `WEB_BIND=0.0.0.0` y `COOKIE_SECURE=false`; en
