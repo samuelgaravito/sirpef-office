@@ -54,7 +54,7 @@ const envSchema = z.object({
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
 
   SEED_ADMIN_EMAIL: z.string().default('admin@sirpefoffice.local'),
-  SEED_ADMIN_PASSWORD: z.string().default('sirpefoffice'),
+  SEED_ADMIN_PASSWORD: z.string().default('admin'),
   SEED_ADMIN_NAME: z.string().default('Administrador'),
 
   /* ── SVA (registro único de identidad) ─────────────────────────────── */
