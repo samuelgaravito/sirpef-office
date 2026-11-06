@@ -45,3 +45,6 @@ deploy/env/*.production.env
 
 # Sistema SVA (repositorio independiente; mantener fuera de este monorepo)
 sva/
+
+# Proyecto de vídeo local (HyperFrames); no se versiona
+video/
