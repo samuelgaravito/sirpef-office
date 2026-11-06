@@ -19,36 +19,58 @@ const router = createRouter({
       name: 'home',
       component: () => import('@/views/HomeView.vue'),
       meta: { title: 'Inicio' },
-    },
-    {
-      path: '/inbox',
-      name: 'inbox',
-      component: () => import('@/views/InboxView.vue'),
-      meta: { title: 'Bandeja', menu: 'inbox' },
-    },
-    {
-      path: '/inbox/:id',
-      name: 'inbox-message',
-      component: () => import('@/views/InboxMessageView.vue'),
-      meta: { title: 'Mensaje', menu: 'inbox' },
-    },
-    {
-      path: '/documents',
-      name: 'documents',
-      component: () => import('@/views/DocumentsView.vue'),
-      meta: { title: 'Documentos', menu: 'documents' },
+      // Los módulos se abren como paneles sobre el panel de trabajo. Las
+      // URLs siguen siendo las mismas (enlaces directos y recarga funcionan).
+      children: [
+        {
+          path: 'inbox',
+          name: 'inbox',
+          component: () => import('@/views/InboxView.vue'),
+          meta: { title: 'Bandeja', menu: 'inbox', overlay: true },
+        },
+        {
+          path: 'inbox/:id',
+          name: 'inbox-message',
+          component: () => import('@/views/InboxMessageView.vue'),
+          meta: { title: 'Mensaje', menu: 'inbox', overlay: true },
+        },
+        {
+          path: 'documents',
+          name: 'documents',
+          component: () => import('@/views/DocumentsView.vue'),
+          meta: { title: 'Documentos', menu: 'documents', overlay: true },
+        },
+        {
+          path: 'templates',
+          name: 'templates',
+          component: () => import('@/views/TemplatesView.vue'),
+          meta: { title: 'Plantillas', menu: 'templates', overlay: true },
+        },
+        {
+          path: 'designs',
+          name: 'designs',
+          component: () => import('@/views/DesignsView.vue'),
+          meta: { title: 'Diseños', menu: 'designs', overlay: true },
+        },
+        {
+          path: 'settings',
+          name: 'settings',
+          component: () => import('@/views/SettingsView.vue'),
+          meta: { title: 'Ajustes', overlay: true },
+        },
+        {
+          path: 'settings/users',
+          name: 'settings-users',
+          component: () => import('@/views/UsersMenusView.vue'),
+          meta: { title: 'Usuarios y menús', adminOnly: true, overlay: true },
+        },
+      ],
     },
     {
       path: '/documents/:id',
       name: 'document',
       component: () => import('@/views/DocumentEditorView.vue'),
       meta: { title: 'Editor', fullscreen: true, menu: 'documents' },
-    },
-    {
-      path: '/templates',
-      name: 'templates',
-      component: () => import('@/views/TemplatesView.vue'),
-      meta: { title: 'Plantillas', menu: 'templates' },
     },
     {
       path: '/templates/new',
@@ -63,28 +85,10 @@ const router = createRouter({
       meta: { title: 'Plantilla', menu: 'templates' },
     },
     {
-      path: '/designs',
-      name: 'designs',
-      component: () => import('@/views/DesignsView.vue'),
-      meta: { title: 'Diseños', menu: 'designs' },
-    },
-    {
       path: '/designs/:id',
       name: 'design',
       component: () => import('@/views/DesignEditorView.vue'),
       meta: { title: 'Diseño', menu: 'designs' },
-    },
-    {
-      path: '/settings',
-      name: 'settings',
-      component: () => import('@/views/SettingsView.vue'),
-      meta: { title: 'Ajustes' },
-    },
-    {
-      path: '/settings/users',
-      name: 'settings-users',
-      component: () => import('@/views/UsersMenusView.vue'),
-      meta: { title: 'Usuarios y menús', adminOnly: true },
     },
     {
       path: '/:pathMatch(.*)*',
