@@ -10,7 +10,7 @@ import {
   Search,
 } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import AppShell from '@/components/layout/AppShell.vue';
@@ -24,12 +24,16 @@ import type { InboxMessageSummary, ListResponse } from '@/types';
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
+
+/** Punto de la ventana desde el que "nace" el panel del módulo. */
+const panelOrigin = ref<{ x: number; y: number } | null>(null);
 
 const pendingItems = ref<InboxMessageSummary[]>([]);
 const pendingLoading = ref(false);
@@ -46,6 +50,7 @@ const greeting = computed(() => {
 });
 
 const firstName = computed(() => auth.user?.name?.split(/\s+/)[0] ?? '');
+const overlayOpen = computed(() => route.meta.overlay === true);
 const drafts = computed(() => counts.value.drafts);
 const canSeeDocuments = computed(() => auth.canSeeMenu('documents'));
 const canSeeTemplates = computed(() => auth.canSeeMenu('templates'));
@@ -209,6 +214,14 @@ function openModule(name: string): void {
   void router.push({ name });
 }
 
+/** Recuerda de qué tile sale el panel para anclar la animación. */
+function rememberOrigin(event: PointerEvent): void {
+  const el = event.currentTarget as HTMLElement | null;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  panelOrigin.value = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
 function openMessage(id: string): void {
   void router.push({ name: 'inbox-message', params: { id } });
 }
@@ -228,7 +241,10 @@ onUnmounted(() => {
 
 <template>
   <AppShell>
-    <div class="mx-auto w-full max-w-[1280px] px-4 pb-16 pt-5 sm:px-6 sm:pt-7">
+    <div
+      class="cockpit mx-auto w-full max-w-[1280px] px-4 pb-16 pt-5 sm:px-6 sm:pt-7"
+      :class="{ 'cockpit-pushed': overlayOpen }"
+    >
       <!-- Hero -->
       <section
         class="hero relative overflow-hidden rounded-2xl border border-navy/20 px-5 py-7 text-white sm:px-8 sm:py-9"
@@ -314,6 +330,7 @@ onUnmounted(() => {
             type="button"
             class="tile group relative overflow-hidden rounded-card border border-hairline bg-surface p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-pop"
             :style="{ animationDelay: `${index * 45}ms` }"
+            @pointerdown="rememberOrigin"
             @click="openModule(tile.route)"
           >
             <span
@@ -366,21 +383,13 @@ onUnmounted(() => {
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">
       <Teleport to="body">
-        <Transition
-          enter-active-class="transition duration-160 ease-out"
-          enter-from-class="opacity-0"
-          enter-to-class="opacity-100"
-          leave-active-class="transition duration-140 ease-in"
-          leave-from-class="opacity-100"
-          leave-to-class="opacity-0"
+        <ModulePanel
+          v-if="Component"
+          :label="typeof childRoute.meta.title === 'string' ? childRoute.meta.title : 'Módulo'"
+          :origin="panelOrigin"
         >
-          <ModulePanel
-            v-if="Component"
-            :label="typeof childRoute.meta.title === 'string' ? childRoute.meta.title : 'Módulo'"
-          >
-            <component :is="Component" :key="childRoute.fullPath" />
-          </ModulePanel>
-        </Transition>
+          <component :is="Component" :key="childRoute.fullPath" />
+        </ModulePanel>
       </Teleport>
     </RouterView>
   </AppShell>
@@ -437,6 +446,24 @@ onUnmounted(() => {
 
 .tile {
   animation: tile-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.tile:active {
+  transform: scale(0.985);
+}
+
+/* El cockpit se hunde ligeramente cuando hay un panel abierto encima. */
+.cockpit {
+  transform-origin: top center;
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cockpit-pushed {
+  transform: scale(0.994);
 }
 
 @keyframes tile-in {
@@ -458,6 +485,12 @@ onUnmounted(() => {
 
   .hero-sweep {
     display: none;
+  }
+
+  .cockpit,
+  .cockpit-pushed {
+    transition: none;
+    transform: none;
   }
 }
 

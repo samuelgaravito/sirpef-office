@@ -39,6 +39,7 @@
     "@tiptap/static-renderer": "^3.32.0",
     "@tiptap/vue-3": "^3.32.0",
     "lucide-vue-next": "^0.545.0",
+    "motion": "^14.10.1",
     "pinia": "^4.1.0",
     "vue": "^3.5.44",
     "vue-router": "^5.4.0",

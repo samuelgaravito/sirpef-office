@@ -104,12 +104,22 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 font-semibold transition-colors select-none;
+    @apply inline-flex items-center justify-center gap-2 font-semibold select-none;
     border-radius: var(--radius-field);
     height: 38px;
     padding: 0 15px;
     font-size: 13px;
     white-space: nowrap;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease,
+      transform 100ms ease-out;
+  }
+
+  /* La pulsación se refleja al instante, no al soltar. */
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   .btn:disabled {
@@ -901,3 +911,36 @@
   }
 }
 
+/* ── Tipografía: tracking dependiente del tamaño (guía Apple) ─────────── */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.015em;
+  }
+}
+
+/* ── Materiales y contraste según preferencias del sistema ────────────── */
+@media (prefers-reduced-transparency: reduce) {
+  .app-header {
+    background: var(--color-surface) !important;
+    backdrop-filter: none !important;
+  }
+
+  .app-scrim,
+  .app-surface {
+    background: var(--color-surface) !important;
+    backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .app-header {
+    border-bottom-color: var(--color-ink) !important;
+  }
+
+  .card,
+  .tile {
+    border-color: var(--color-hairline-strong) !important;
+  }
+}

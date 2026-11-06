@@ -20,6 +20,7 @@ import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { logoutFromSva, redirectToSvaLogin } from '@/lib/sva';
 import { PANEL_MODE } from '@/lib/panel';
+import type { Point } from '@/lib/motion';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
@@ -32,6 +33,7 @@ const toast = useToast();
 const embedded = inject(PANEL_MODE, false);
 
 const paletteOpen = ref(false);
+const paletteOrigin = ref<Point | null>(null);
 const isMac = ref(false);
 
 const canSeeInbox = computed(() => auth.canSeeMenu('inbox'));
@@ -85,14 +87,27 @@ function onGlobalKeydown(event: KeyboardEvent): void {
 
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
-    paletteOpen.value = !paletteOpen.value;
+    if (paletteOpen.value) paletteOpen.value = false;
+    else openPalette();
     return;
   }
 
   if (event.key === '/' && !typing && !paletteOpen.value) {
     event.preventDefault();
-    paletteOpen.value = true;
+    openPalette();
   }
+}
+
+/** Abre la paleta anclada al botón que la invoca (o centrada con teclado). */
+function openPalette(event?: Event): void {
+  const el = event?.currentTarget as HTMLElement | null;
+  if (el) {
+    const rect = el.getBoundingClientRect();
+    paletteOrigin.value = { x: rect.left + rect.width / 2, y: rect.bottom - 4 };
+  } else {
+    paletteOrigin.value = null;
+  }
+  paletteOpen.value = true;
 }
 
 onMounted(() => {
@@ -141,7 +156,7 @@ async function signOut(): Promise<void> {
   <div v-else class="flex h-full min-h-0 flex-col bg-canvas">
     <!-- Barra superior -->
     <header
-      class="sticky top-0 z-30 shrink-0 border-b border-hairline bg-surface/85 backdrop-blur-md"
+      class="app-header sticky top-0 z-30 shrink-0 border-b border-hairline bg-surface/85 backdrop-blur-md"
     >
       <div class="mx-auto flex h-16 w-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">
         <!-- Marca -->
@@ -187,7 +202,7 @@ async function signOut(): Promise<void> {
         <button
           type="button"
           class="hidden h-9 items-center gap-2 rounded-field border border-hairline bg-surface-muted/70 pl-2.5 pr-2 text-[12.5px] text-ink-subtle transition-colors hover:border-hairline-strong hover:bg-surface sm:flex sm:w-56 lg:w-64"
-          @click="paletteOpen = true"
+          @click="openPalette"
         >
           <Search class="size-3.5 shrink-0" />
           <span class="flex-1 truncate text-left">Buscar o ir a…</span>
@@ -204,7 +219,7 @@ async function signOut(): Promise<void> {
           type="button"
           class="grid size-9 place-items-center rounded-field border border-hairline bg-surface text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink sm:hidden"
           aria-label="Buscar"
-          @click="paletteOpen = true"
+          @click="openPalette"
         >
           <Search class="size-4" />
         </button>
@@ -279,6 +294,6 @@ async function signOut(): Promise<void> {
       <slot />
     </main>
 
-    <CommandPalette :open="paletteOpen" @close="paletteOpen = false" />
+    <CommandPalette :open="paletteOpen" :origin="paletteOrigin" @close="paletteOpen = false" />
   </div>
 </template>
