@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-  ArrowRight,
   ArrowUpRight,
   FileText,
   Inbox,
@@ -10,23 +9,18 @@ import {
   Plus,
   Search,
 } from 'lucide-vue-next';
-import { computed, onMounted, ref, type Component } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRouter } from 'vue-router';
 
+import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
-import DocumentCard from '@/components/documents/DocumentCard.vue';
-import TemplatePreview from '@/components/templates/TemplatePreview.vue';
-import BaseModal from '@/components/ui/BaseModal.vue';
-import BaseSpinner from '@/components/ui/BaseSpinner.vue';
-import EmptyState from '@/components/ui/EmptyState.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { api } from '@/api/client';
-import { docTypeLabel } from '@/lib/labels';
 import { useAuthStore } from '@/stores/auth';
-import type { DocumentSummary, ListResponse, TemplateSummary } from '@/types';
+import type { InboxMessageSummary, ListResponse } from '@/types';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -34,13 +28,15 @@ const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
 
-const templates = ref<TemplateSummary[]>([]);
-const documents = ref<DocumentSummary[]>([]);
-const loading = ref(true);
-const deleting = ref<DocumentSummary | null>(null);
-const removing = ref(false);
-
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
+const shellLoading = ref(true);
+
+const pendingItems = ref<InboxMessageSummary[]>([]);
+const pendingLoading = ref(false);
+const pendingUpdatedAt = ref<Date | null>(null);
+
+const displayedDocuments = ref(0);
+let countFrame: number | undefined;
 
 const greeting = computed(() => {
   const hour = new Date().getHours();
@@ -50,7 +46,6 @@ const greeting = computed(() => {
 });
 
 const firstName = computed(() => auth.user?.name?.split(/\s+/)[0] ?? '');
-
 const drafts = computed(() => counts.value.drafts);
 const canSeeDocuments = computed(() => auth.canSeeMenu('documents'));
 const canSeeTemplates = computed(() => auth.canSeeMenu('templates'));
@@ -123,26 +118,58 @@ const tiles = computed<ModuleTile[]>(() => {
   return list;
 });
 
+function prefersReducedMotion(): boolean {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Animación de conteo para el subtítulo del hero. */
+function animateDocuments(target: number): void {
+  if (countFrame !== undefined) cancelAnimationFrame(countFrame);
+  if (prefersReducedMotion()) {
+    displayedDocuments.value = target;
+    return;
+  }
+
+  const from = displayedDocuments.value;
+  const start = performance.now();
+  const duration = 650;
+
+  const step = (now: number): void => {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    displayedDocuments.value = Math.round(from + (target - from) * eased);
+    if (progress < 1) countFrame = requestAnimationFrame(step);
+  };
+
+  countFrame = requestAnimationFrame(step);
+}
+
 async function totalOf(path: string, params: Record<string, unknown>): Promise<number> {
   const data = await api.get<ListResponse<unknown>>(path, { ...params, pageSize: 1 });
   return data.total ?? data.items.length;
 }
 
-async function load(): Promise<void> {
-  loading.value = true;
+async function loadPending(): Promise<void> {
+  if (!canSeeInbox.value) return;
+  pendingLoading.value = true;
   try {
-    const [templateData, documentData] = await Promise.all([
-      canSeeTemplates.value
-        ? api.get<ListResponse<TemplateSummary>>('/templates', { pageSize: 12, status: 'active' })
-        : Promise.resolve({ items: [] as TemplateSummary[] }),
-      canSeeDocuments.value
-        ? api.get<ListResponse<DocumentSummary>>('/documents', { pageSize: 8, sort: 'updated' })
-        : Promise.resolve({ items: [] as DocumentSummary[] }),
-    ]);
-    templates.value = templateData.items;
-    documents.value = documentData.items;
+    const data = await api.get<ListResponse<InboxMessageSummary>>('/inbox', {
+      scope: 'received',
+      pageSize: 3,
+    });
+    pendingItems.value = data.items;
+    pendingUpdatedAt.value = new Date();
+  } catch {
+    // El foco de actividad es accesorio: si falla no rompe el panel.
+  } finally {
+    pendingLoading.value = false;
+  }
+}
 
-    const [documentsTotal, draftsTotal, designsData] = await Promise.all([
+async function load(): Promise<void> {
+  shellLoading.value = true;
+  try {
+    const [documentsTotal, draftsTotal, designsData, templatesData] = await Promise.all([
       canSeeDocuments.value ? totalOf('/documents', {}) : Promise.resolve(0),
       canSeeDocuments.value ? totalOf('/documents', { status: 'draft' }) : Promise.resolve(0),
       canSeeDesigns.value
@@ -151,53 +178,52 @@ async function load(): Promise<void> {
             .then((data) => data.total ?? data.items.length)
             .catch(() => 0)
         : Promise.resolve(0),
+      canSeeTemplates.value
+        ? api
+            .get<ListResponse<{ id: string }>>('/templates', { status: 'active' })
+            .then((data) => data.total ?? data.items.length)
+            .catch(() => 0)
+        : Promise.resolve(0),
     ]);
 
     counts.value = {
       documents: documentsTotal,
       drafts: draftsTotal,
-      templates: canSeeTemplates.value ? templateData.items.length : 0,
+      templates: templatesData,
       designs: designsData,
     };
+    animateDocuments(documentsTotal);
 
-    if (canSeeInbox.value) void refreshInbox();
+    if (canSeeInbox.value) {
+      void refreshInbox();
+      void loadPending();
+    }
   } catch {
     toast.error('No se pudo cargar el panel de inicio');
   } finally {
-    loading.value = false;
+    shellLoading.value = false;
   }
-}
-
-async function confirmDelete(): Promise<void> {
-  if (!deleting.value || removing.value) return;
-  removing.value = true;
-  try {
-    await api.del(`/documents/${deleting.value.id}`);
-    documents.value = documents.value.filter((doc) => doc.id !== deleting.value?.id);
-    counts.value.documents = Math.max(0, counts.value.documents - 1);
-    toast.success('Documento eliminado');
-    deleting.value = null;
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo eliminar');
-  } finally {
-    removing.value = false;
-  }
-}
-
-function duplicate(document: DocumentSummary): void {
-  void document;
-  toast.info('Abre el documento y usa «Guardar como plantilla» para reutilizarlo.');
-}
-
-function openDocument(id: string): void {
-  void router.push({ name: 'document', params: { id } });
 }
 
 function openModule(name: string): void {
   void router.push({ name });
 }
 
+function openMessage(id: string): void {
+  void router.push({ name: 'inbox-message', params: { id } });
+}
+
+// Los contadores de la bandeja se refrescan por sondeo en `AppShell`; cuando
+// cambian, actualizamos también los chips del hero.
+watch(totalCount, () => {
+  if (canSeeInbox.value) void loadPending();
+});
+
 onMounted(load);
+
+onUnmounted(() => {
+  if (countFrame !== undefined) cancelAnimationFrame(countFrame);
+});
 </script>
 
 <template>
@@ -207,53 +233,64 @@ onMounted(load);
       <section
         class="hero relative overflow-hidden rounded-2xl border border-navy/20 px-5 py-7 text-white sm:px-8 sm:py-9"
       >
-        <div
-          class="pointer-events-none absolute -right-24 -top-28 size-72 rounded-full bg-mint/20 blur-3xl"
-        />
-        <div
-          class="pointer-events-none absolute -bottom-32 right-24 size-64 rounded-full bg-accent/30 blur-3xl"
-        />
+        <div class="orb orb-a pointer-events-none absolute -right-24 -top-28 size-72 rounded-full bg-mint/20 blur-3xl" />
+        <div class="orb orb-b pointer-events-none absolute -bottom-32 right-24 size-64 rounded-full bg-accent/30 blur-3xl" />
 
-        <div class="relative flex flex-wrap items-end justify-between gap-6">
-          <div class="min-w-0">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
-              Panel de trabajo
-            </p>
-            <h1 class="mt-2 text-[27px] font-semibold leading-tight tracking-tight sm:text-[32px]">
-              {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
-            </h1>
-            <p class="mt-1.5 max-w-lg text-[13.5px] leading-relaxed text-white/70">
-              <template v-if="canSeeDocuments">
-                {{ counts.documents }} documento{{ counts.documents === 1 ? '' : 's' }} en tu
-                espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
-              </template>
-              Accede a tus módulos desde aquí.
-            </p>
+        <div class="relative">
+          <div class="flex flex-wrap items-start justify-between gap-5">
+            <div class="min-w-0">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
+                Panel de trabajo
+              </p>
+              <h1 class="mt-2 text-[27px] font-semibold leading-tight tracking-tight sm:text-[32px]">
+                {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
+              </h1>
+              <p class="mt-1.5 max-w-lg text-[13.5px] leading-relaxed text-white/70">
+                <template v-if="canSeeDocuments">
+                  {{ displayedDocuments }} documento{{ displayedDocuments === 1 ? '' : 's' }} en tu
+                  espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
+                </template>
+                Accede a tus módulos desde aquí.
+              </p>
+            </div>
+
+            <div v-if="canSeeDocuments" class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                class="btn bg-white text-navy hover:bg-white/90"
+                :disabled="creating !== null"
+                @click="createDocument()"
+              >
+                <component
+                  :is="creating === 'blank' ? Loader2 : Plus"
+                  :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
+                />
+                {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+              </button>
+              <button
+                type="button"
+                class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
+                @click="openModule('documents')"
+              >
+                <Search class="size-4" />
+                Buscar
+              </button>
+            </div>
           </div>
 
-          <div v-if="canSeeDocuments" class="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              class="btn bg-white text-navy hover:bg-white/90"
-              :disabled="creating !== null"
-              @click="createDocument()"
-            >
-              <component
-                :is="creating === 'blank' ? Loader2 : Plus"
-                :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
-              />
-              {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
-            </button>
-            <button
-              type="button"
-              class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
-              @click="openModule('documents')"
-            >
-              <Search class="size-4" />
-              Buscar
-            </button>
-          </div>
+          <ActivityFocus
+            v-if="canSeeInbox"
+            :items="pendingItems"
+            :total="totalCount"
+            :pending="pendingCount"
+            :loading="pendingLoading"
+            :updated-at="pendingUpdatedAt"
+            @open="openMessage"
+            @open-inbox="openModule('inbox')"
+          />
         </div>
+
+        <span :key="totalCount" class="hero-sweep" aria-hidden="true" />
       </section>
 
       <!-- Accesos a módulos -->
@@ -316,7 +353,7 @@ onMounted(load);
         </div>
       </section>
 
-      <section v-else class="card mt-7 p-8 text-center">
+      <section v-else-if="!shellLoading" class="card mt-7 p-8 text-center">
         <FileText class="mx-auto size-8 text-ink-subtle" />
         <h2 class="mt-3 text-[15px] font-semibold">Tu menú está vacío</h2>
         <p class="mt-1 text-[13px] text-ink-muted">
@@ -324,153 +361,7 @@ onMounted(load);
           desde tu avatar.
         </p>
       </section>
-
-      <!-- Plantillas -->
-      <section v-if="canSeeTemplates" class="mt-9">
-        <div class="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <p class="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-subtle">
-              Empezar
-            </p>
-            <h2 class="mt-0.5 text-[16px] font-semibold tracking-tight">Plantillas listas para usar</h2>
-          </div>
-          <RouterLink
-            :to="{ name: 'templates' }"
-            class="flex shrink-0 items-center gap-1 text-[12.5px] font-semibold text-accent hover:underline"
-          >
-            Ver todas
-            <ArrowRight class="size-3.5" />
-          </RouterLink>
-        </div>
-
-        <div v-if="loading" class="grid place-items-center py-12">
-          <BaseSpinner label="Cargando…" />
-        </div>
-
-        <div v-else class="no-scrollbar -mx-1 flex gap-3 overflow-x-auto px-1 pb-2">
-          <button
-            v-if="canSeeDocuments"
-            type="button"
-            class="w-[150px] shrink-0 rounded-card border border-hairline bg-surface p-2 text-left transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-card disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
-            :disabled="creating !== null"
-            @click="createDocument()"
-          >
-            <div
-              class="grid h-[150px] place-items-center rounded-md border border-dashed border-hairline-strong bg-surface-muted/60"
-            >
-              <Loader2 v-if="creating === 'blank'" class="size-6 animate-spin text-accent" />
-              <Plus v-else class="size-6 text-ink-subtle" />
-            </div>
-            <p class="mt-2 truncate text-[12.5px] font-semibold">
-              {{ creating === 'blank' ? 'Creando…' : 'En blanco' }}
-            </p>
-            <p class="truncate text-[11px] text-ink-subtle">Sin plantilla</p>
-          </button>
-
-          <button
-            v-for="template in templates"
-            :key="template.id"
-            type="button"
-            class="w-[150px] shrink-0 rounded-card border border-hairline bg-surface p-2 text-left transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-card disabled:cursor-wait disabled:opacity-60 disabled:hover:translate-y-0"
-            :disabled="creating !== null"
-            @click="createDocument(template.id)"
-          >
-            <div class="relative flex justify-center overflow-hidden rounded-md">
-              <TemplatePreview
-                :template-id="template.id"
-                :design-id="template.designId"
-                :design-updated-at="template.designUpdatedAt"
-                :version="template.version"
-                :tokens="template.designTokens"
-                :scale="0.155"
-                :title="template.name"
-              />
-              <div
-                v-if="creating === template.id"
-                class="absolute inset-0 grid place-items-center rounded-md bg-surface/75"
-              >
-                <Loader2 class="size-5 animate-spin text-accent" />
-              </div>
-            </div>
-            <p class="mt-2 truncate text-[12.5px] font-semibold">{{ template.name }}</p>
-            <p class="truncate text-[11px] text-ink-subtle">
-              {{ creating === template.id ? 'Creando…' : docTypeLabel(template.docType) }}
-            </p>
-          </button>
-        </div>
-      </section>
-
-      <!-- Recientes -->
-      <section v-if="canSeeDocuments" class="mt-9">
-        <div class="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <p class="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-subtle">
-              Actividad
-            </p>
-            <h2 class="mt-0.5 text-[16px] font-semibold tracking-tight">Documentos recientes</h2>
-          </div>
-          <RouterLink
-            :to="{ name: 'documents' }"
-            class="flex shrink-0 items-center gap-1 text-[12.5px] font-semibold text-accent hover:underline"
-          >
-            Ver todos
-            <ArrowRight class="size-3.5" />
-          </RouterLink>
-        </div>
-
-        <div v-if="!loading && documents.length === 0">
-          <EmptyState
-            :icon="FileText"
-            title="Todavía no hay documentos"
-            description="Crea el primero a partir de una plantilla y aparecerá aquí."
-          >
-            <button
-              type="button"
-              class="btn btn-primary"
-              :disabled="creating !== null"
-              @click="createDocument()"
-            >
-              <component
-                :is="creating === 'blank' ? Loader2 : Plus"
-                :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
-              />
-              {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
-            </button>
-          </EmptyState>
-        </div>
-
-        <div v-else class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          <DocumentCard
-            v-for="document in documents"
-            :key="document.id"
-            :document="document"
-            show-owner
-            @open="openDocument"
-            @delete="deleting = $event"
-            @duplicate="duplicate"
-          />
-        </div>
-      </section>
     </div>
-
-    <BaseModal
-      :open="deleting !== null"
-      title="Eliminar documento"
-      :description="deleting ? `«${deleting.title}» se moverá a la papelera.` : undefined"
-      size="sm"
-      @close="deleting = null"
-    >
-      <p class="text-[13px] text-ink-muted">
-        El documento dejará de aparecer en tus listados. Esta acción se puede revertir desde
-        la base de datos, pero no desde la interfaz.
-      </p>
-      <template #footer>
-        <button type="button" class="btn btn-outline" @click="deleting = null">Cancelar</button>
-        <button type="button" class="btn btn-danger" :disabled="removing" @click="confirmDelete">
-          {{ removing ? 'Eliminando…' : 'Eliminar' }}
-        </button>
-      </template>
-    </BaseModal>
 
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">
@@ -502,6 +393,48 @@ onMounted(load);
     linear-gradient(135deg, #041e42 0%, #0a2a55 55%, #1b3a66 100%);
 }
 
+.orb {
+  animation: drift 18s ease-in-out infinite alternate;
+}
+
+.orb-b {
+  animation-duration: 24s;
+  animation-delay: -6s;
+}
+
+@keyframes drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(-14px, 12px, 0) scale(1.08);
+  }
+}
+
+/* Barrido que se reinicia cuando cambian los contadores de la bandeja. */
+.hero-sweep {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #06e3bd, #4e85c8, transparent);
+  animation: sweep 700ms ease-out both;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  40% {
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
 .tile {
   animation: tile-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -518,8 +451,13 @@ onMounted(load);
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .orb,
   .tile {
     animation: none;
+  }
+
+  .hero-sweep {
+    display: none;
   }
 }
 
