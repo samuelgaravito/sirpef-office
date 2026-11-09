@@ -2,46 +2,54 @@
 
 @theme {
   /* ── Superficies ─────────────────────────────────────────────── */
-  --color-canvas: #f4f6f9;
+  --color-canvas: #f7f9fc;
   --color-surface: #ffffff;
-  --color-surface-muted: #f8fafc;
-  --color-surface-hover: #f1f4f8;
+  --color-surface-muted: #f6f5f7;
+  --color-surface-hover: #ecebee;
 
   /* ── Tinta (jerarquía de texto) ──────────────────────────────── */
-  --color-ink: #111827;
-  --color-ink-muted: #5b6573;
-  --color-ink-subtle: #9aa4b2;
+  --color-ink: #041e42;
+  --color-ink-muted: #55606c;
+  --color-ink-subtle: #94969e;
   --color-ink-inverse: #ffffff;
 
-  /* ── Acento ──────────────────────────────────────────────────── */
-  --color-accent: #2563eb;
-  --color-accent-hover: #1d4ed8;
-  --color-accent-soft: #eaf0ff;
+  /* ── Acento (azul ownCloud) ──────────────────────────────────── */
+  --color-accent: #4e85c8;
+  --color-accent-hover: #3c6fb0;
+  --color-accent-soft: #e9f1fa;
   --color-accent-ink: #ffffff;
+  --color-navy: #041e42;
+  --color-navy-soft: #1b3a66;
+  --color-mint: #06e3bd;
 
   /* ── Líneas ──────────────────────────────────────────────────── */
-  --color-hairline: #e4e8ee;
-  --color-hairline-strong: #cfd6df;
+  --color-hairline: #e3e4e8;
+  --color-hairline-strong: #b5b6bb;
 
   /* ── Estado ──────────────────────────────────────────────────── */
-  --color-success: #15803d;
-  --color-success-soft: #e8f5ec;
+  --color-success: #028d05;
+  --color-success-soft: #e7f4e8;
   --color-warning: #b45309;
   --color-warning-soft: #fef4e6;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fdeeee;
+  --color-danger: #c81e00;
+  --color-danger-soft: #fdeceb;
 
   /* ── Tipografía ──────────────────────────────────────────────── */
   --font-sans:
-    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    'Source Sans Pro', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  /* Pila de los documentos: NO debe seguir al tema de la interfaz, o los
+     PDFs exportados cambiarían de tipografía. */
+  --font-document: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* ── Radios y sombras ────────────────────────────────────────── */
-  --radius-card: 14px;
-  --radius-field: 10px;
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
-  --shadow-pop: 0 8px 28px rgb(16 24 40 / 0.14), 0 2px 8px rgb(16 24 40 / 0.08);
+  --radius-card: 8px;
+  --radius-field: 5px;
+  --shadow-card: 0 1px 2px rgb(4 30 66 / 0.05), 0 2px 6px rgb(4 30 66 / 0.05);
+  --shadow-pop: 0 10px 34px rgb(4 30 66 / 0.16), 0 2px 10px rgb(4 30 66 / 0.08);
 }
 
 @layer base {
@@ -71,7 +79,7 @@
   }
 
   ::selection {
-    background: #c9dbff;
+    background: #cfe0f4;
   }
 
   /* Scrollbars discretas */
@@ -80,13 +88,13 @@
     height: 10px;
   }
   ::-webkit-scrollbar-thumb {
-    background: #c9d1dc;
+    background: #c8ccd4;
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #aeb9c7;
+    background: #aab0ba;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-track {
@@ -96,12 +104,22 @@
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-2 font-medium transition-colors select-none;
+    @apply inline-flex items-center justify-center gap-2 font-semibold select-none;
     border-radius: var(--radius-field);
-    height: 36px;
-    padding: 0 14px;
+    height: 38px;
+    padding: 0 15px;
     font-size: 13px;
     white-space: nowrap;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      color 160ms ease,
+      transform 100ms ease-out;
+  }
+
+  /* La pulsación se refleja al instante, no al soltar. */
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   .btn:disabled {
@@ -164,7 +182,7 @@
   .field:focus {
     outline: none;
     border-color: var(--color-accent);
-    box-shadow: 0 0 0 3px rgb(37 99 235 / 0.12);
+    box-shadow: 0 0 0 3px rgb(78 133 200 / 0.18);
   }
 
   textarea.field {
@@ -311,7 +329,7 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: rgb(37 99 235 / 0.12);
+    background: rgb(78 133 200 / 0.14);
     pointer-events: none;
   }
   .tiptap .column-resize-handle {
@@ -505,7 +523,7 @@
   }
 
   :is(.doc-sheet, .doc-paged-flow) .tiptap {
-    font-family: var(--sheet-font, var(--font-sans));
+    font-family: var(--sheet-font, var(--font-document));
     font-size: var(--sheet-size, 11pt);
     line-height: var(--sheet-leading, 1.55);
     color: inherit;
@@ -877,7 +895,7 @@
 
   .wp-chrome-band .tiptap {
     min-height: 0 !important;
-    font-family: var(--sheet-font, var(--font-sans));
+    font-family: var(--sheet-font, var(--font-document));
     font-size: calc(var(--sheet-size, 11pt) * 0.9);
     line-height: var(--sheet-leading, 1.55);
   }
@@ -893,3 +911,36 @@
   }
 }
 
+/* ── Tipografía: tracking dependiente del tamaño (guía Apple) ─────────── */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.015em;
+  }
+}
+
+/* ── Materiales y contraste según preferencias del sistema ────────────── */
+@media (prefers-reduced-transparency: reduce) {
+  .app-header {
+    background: var(--color-surface) !important;
+    backdrop-filter: none !important;
+  }
+
+  .app-scrim,
+  .app-surface {
+    background: var(--color-surface) !important;
+    backdrop-filter: none !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .app-header {
+    border-bottom-color: var(--color-ink) !important;
+  }
+
+  .card,
+  .tile {
+    border-color: var(--color-hairline-strong) !important;
+  }
+}
