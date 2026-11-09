@@ -4,6 +4,7 @@ import { animate } from 'motion';
 import { useRouter } from 'vue-router';
 
 import { PANEL_CLOSE, PANEL_MODE } from '@/lib/panel';
+import { lockScroll, unlockScroll } from '@/lib/scroll-lock';
 import {
   enterSurface,
   prefersReducedMotion,
@@ -176,7 +177,7 @@ function onBackdropPointer(event: PointerEvent): void {
 onMounted(() => {
   previousActive = document.activeElement;
   window.addEventListener('keydown', onKeydown);
-  document.body.style.overflow = 'hidden';
+  lockScroll();
 
   const el = panel.value;
   const scrim = backdrop.value;
@@ -202,7 +203,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
-  document.body.style.overflow = '';
+  unlockScroll();
   if (previousActive instanceof HTMLElement) previousActive.focus();
 });
 </script>
