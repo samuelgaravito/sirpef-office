@@ -3,6 +3,10 @@ import { createApp } from 'vue';
 
 import App from './App.vue';
 import router from './router/index';
+import '@fontsource/source-sans-pro/latin-400.css';
+import '@fontsource/source-sans-pro/latin-400-italic.css';
+import '@fontsource/source-sans-pro/latin-600.css';
+import '@fontsource/source-sans-pro/latin-700.css';
 import '@fontsource/georama/latin-400.css';
 import '@fontsource/georama/latin-400-italic.css';
 import '@fontsource/georama/latin-500.css';

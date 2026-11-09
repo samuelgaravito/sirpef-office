@@ -117,25 +117,30 @@ async function submit(): Promise<void> {
 <template>
   <div class="grid min-h-full lg:grid-cols-[1.05fr_1fr]">
     <!-- Panel de marca -->
-    <section class="relative hidden flex-col justify-between overflow-hidden bg-[#0e1726] p-12 text-white lg:flex">
+    <section class="login-brand relative hidden flex-col justify-between overflow-hidden p-12 text-white lg:flex">
       <div
         class="pointer-events-none absolute -right-24 -top-24 size-[420px] rounded-full opacity-40 blur-3xl"
-        style="background: radial-gradient(circle, #2563eb 0%, transparent 70%)"
+        style="background: radial-gradient(circle, #4e85c8 0%, transparent 70%)"
       />
       <div
         class="pointer-events-none absolute -bottom-32 -left-20 size-[380px] rounded-full opacity-25 blur-3xl"
-        style="background: radial-gradient(circle, #0ea5a4 0%, transparent 70%)"
+        style="background: radial-gradient(circle, #06e3bd 0%, transparent 70%)"
       />
 
       <div class="relative">
         <div class="flex items-center gap-2.5">
-          <span class="grid size-8 place-items-center rounded-lg bg-accent text-sm font-black">W</span>
+          <span
+            class="relative grid size-8 place-items-center rounded-lg bg-white/10 text-[13px] font-bold ring-1 ring-white/15"
+          >
+            S
+            <span class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full bg-mint ring-2 ring-[#041e42]" />
+          </span>
           <span class="text-[17px] font-semibold tracking-tight">SirpefOffice</span>
         </div>
 
         <h1 class="mt-16 max-w-md text-[38px] font-semibold leading-[1.15] tracking-tight">
           Documentos institucionales,<br />
-          <span class="text-[#8fb4ff]">sin pelear con el formato.</span>
+          <span class="text-[#9dc3f0]">sin pelear con el formato.</span>
         </h1>
         <p class="mt-4 max-w-md text-[14.5px] leading-relaxed text-white/65">
           Memorándums, notas de entrega, informes y actas con plantillas reutilizables,
@@ -145,7 +150,7 @@ async function submit(): Promise<void> {
         <ul class="mt-10 space-y-3.5">
           <li v-for="feature in features" :key="feature.text" class="flex items-center gap-3 text-[13.5px] text-white/80">
             <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-white/10">
-              <component :is="feature.icon" class="size-3.5 text-[#8fb4ff]" />
+              <component :is="feature.icon" class="size-3.5 text-[#9dc3f0]" />
             </span>
             {{ feature.text }}
           </li>
@@ -162,7 +167,10 @@ async function submit(): Promise<void> {
     <section class="flex items-center justify-center bg-canvas px-5 py-12">
       <div class="w-full max-w-[380px]">
         <div class="mb-8 flex items-center gap-2.5 lg:hidden">
-          <span class="grid size-8 place-items-center rounded-lg bg-accent text-sm font-black text-white">W</span>
+          <span class="relative grid size-8 place-items-center rounded-lg bg-navy text-[13px] font-bold text-white">
+            S
+            <span class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-mint ring-2 ring-canvas" />
+          </span>
           <span class="text-[16px] font-semibold">SirpefOffice</span>
         </div>
 
@@ -284,3 +292,11 @@ async function submit(): Promise<void> {
     </section>
   </div>
 </template>
+
+<style scoped>
+.login-brand {
+  background:
+    radial-gradient(120% 160% at 100% 0%, rgb(78 133 200 / 0.42) 0%, transparent 55%),
+    linear-gradient(135deg, #041e42 0%, #0a2a55 55%, #1b3a66 100%);
+}
+</style>
