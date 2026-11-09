@@ -2,6 +2,8 @@
 import { X } from 'lucide-vue-next';
 import { onBeforeUnmount, onMounted, watch } from 'vue';
 
+import { lockScroll, unlockScroll } from '@/lib/scroll-lock';
+
 const props = withDefaults(
   defineProps<{
     open: boolean;
@@ -24,20 +26,28 @@ const widths = {
 } as const;
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && props.open) emit('close');
+  if (event.key !== 'Escape' || !props.open) return;
+  // Solo cierra el modal superior: evita que el panel que lo contiene también
+  // se cierre al propagarse el evento hasta su listener de `window`.
+  event.stopPropagation();
+  emit('close');
 }
 
-watch(
-  () => props.open,
-  (open) => {
-    document.body.style.overflow = open ? 'hidden' : '';
-  },
-);
+let scrollLocked = false;
+
+function setScrollLocked(locked: boolean): void {
+  if (locked === scrollLocked) return;
+  scrollLocked = locked;
+  if (locked) lockScroll();
+  else unlockScroll();
+}
+
+watch(() => props.open, setScrollLocked, { immediate: true });
 
 onMounted(() => document.addEventListener('keydown', onKeydown));
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown);
-  document.body.style.overflow = '';
+  setScrollLocked(false);
 });
 </script>
 
@@ -51,9 +61,10 @@ onBeforeUnmount(() => {
       leave-from-class="opacity-100"
       leave-to-class="opacity-0"
     >
+      <!-- Capas: ModulePanel 120 < BaseModal 130 < CommandPalette 140 < ToastHost 150 -->
       <div
         v-if="open"
-        class="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-[#0b1220]/45 p-4 sm:items-center sm:p-6"
+        class="fixed inset-0 z-[130] flex items-start justify-center overflow-y-auto bg-[#0b1220]/45 p-4 sm:items-center sm:p-6"
         role="dialog"
         aria-modal="true"
         @mousedown.self="closeOnBackdrop && emit('close')"
