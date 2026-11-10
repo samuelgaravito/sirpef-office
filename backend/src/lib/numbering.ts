@@ -11,11 +11,18 @@ import {
   NUMBERING_PREFIX_PATTERN,
   type NumberingSeriesConfig,
   type NumberingSeriesState,
+  type VariableValues,
 } from '@sirpefoffice/shared';
 
-import { db } from '../db/index.js';
-import { documentCounters, numberingSeries, templates } from '../db/schema.js';
+import { db, type Database } from '../db/index.js';
+import { documentCounters, documents, numberingSeries, templates } from '../db/schema.js';
 import { badRequest, notFound } from './errors.js';
+
+/**
+ * Ejecutor de consultas: la conexión normal o una transacción. Permite que la
+ * reserva del número y la actualización del documento ocurran juntas.
+ */
+export type DbExecutor = Pick<Database, 'insert' | 'update' | 'select'>;
 
 export type NumberingSeriesRow = typeof numberingSeries.$inferSelect;
 
@@ -77,10 +84,15 @@ export async function ensureNumberingSeries(
       createdBy: input.createdBy ?? null,
       updatedBy: input.createdBy ?? null,
     })
+    // Otra petición simultánea pudo crearla: se reutiliza la existente.
+    .onConflictDoNothing({ target: numberingSeries.prefix })
     .returning();
 
-  if (!created) throw new Error('No se pudo crear la serie de numeración');
-  return created;
+  if (created) return created;
+
+  const raced = await getNumberingSeries(prefix);
+  if (!raced) throw new Error('No se pudo crear la serie de numeración');
+  return raced;
 }
 
 /** Último número emitido en el período vigente (0 si aún no hay). */
@@ -232,28 +244,87 @@ export async function updateNumberingSeries(
   return (await getNumberingState(prefix)) ?? toState(updated, 0, 0);
 }
 
+/** Número reservado de una serie, con sus componentes desglosados. */
+export interface ReservedNumber {
+  prefix: string;
+  year: number;
+  value: number;
+  /** Número formateado, p. ej. `MEM-2026-0007`. */
+  number: string;
+}
+
 /**
  * Reserva el siguiente número de forma atómica. El UPSERT con RETURNING
  * garantiza que dos peticiones simultáneas nunca obtengan el mismo número.
+ *
+ * `exec` permite operar dentro de una transacción (`tx`) para que la reserva
+ * y la actualización del documento sean atómicas entre sí.
  */
-export async function reserveDocumentNumber(series: NumberingSeriesRow): Promise<string> {
+export async function reserveDocumentNumber(
+  series: NumberingSeriesRow,
+  exec: DbExecutor = db,
+): Promise<ReservedNumber> {
   const year = numberingPeriodYear(series.includeYear);
 
-  const [row] = await db
+  const [row] = await exec
     .insert(documentCounters)
     .values({ scope: series.prefix, year, counter: series.startValue })
     .onConflictDoUpdate({
       target: [documentCounters.scope, documentCounters.year],
-      set: { counter: sql`${documentCounters.counter} + 1` },
+      // `GREATEST` evita que subir el número inicial retroceda la secuencia.
+      set: {
+        counter: sql`GREATEST(${documentCounters.counter}, ${series.startValue - 1}) + 1`,
+      },
     })
     .returning({ counter: documentCounters.counter });
 
   const value = row?.counter ?? series.startValue;
-  return formatDocumentNumber({
+  return {
     prefix: series.prefix,
-    value,
     year,
-    padding: series.padding,
-    includeYear: series.includeYear,
-  });
+    value,
+    number: formatDocumentNumber({
+      prefix: series.prefix,
+      value,
+      year,
+      padding: series.padding,
+      includeYear: series.includeYear,
+    }),
+  };
+}
+
+/**
+ * Asigna el número a un documento que se está oficializando. Debe llamarse
+ * dentro de una transacción y con la fila del documento bloqueada
+ * (`SELECT … FOR UPDATE`), para que dos aprobaciones simultáneas no gasten
+ * dos números.
+ *
+ * Es idempotente: si el documento ya tiene número, no toca el contador.
+ */
+export async function assignDocumentNumber(
+  exec: DbExecutor,
+  document: { id: string; docNumber: string | null; data: VariableValues },
+  series: NumberingSeriesRow,
+): Promise<string> {
+  if (document.docNumber) return document.docNumber;
+
+  const reserved = await reserveDocumentNumber(series, exec);
+
+  const nextData: VariableValues = { ...(document.data ?? {}) };
+  // Compatibilidad: las plantillas antiguas usan {{numero}} como campo manual.
+  if (!nextData.numero) nextData.numero = reserved.number;
+
+  await exec
+    .update(documents)
+    .set({
+      docNumber: reserved.number,
+      numberingPrefix: reserved.prefix,
+      numberingYear: reserved.year,
+      numberingValue: reserved.value,
+      data: nextData,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(documents.id, document.id), isNull(documents.docNumber)));
+
+  return reserved.number;
 }

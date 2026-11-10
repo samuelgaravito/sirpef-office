@@ -97,6 +97,27 @@ async function main(): Promise<void> {
     createdIds.push(documentId);
     const version = created.body.document.version;
 
+    /* Un borrador no se exporta ni se cambia de estado sin el jefe. */
+    const memberDraftExport = await call(`/documents/${documentId}/export/pdf`, memberToken);
+    assert(memberDraftExport.status === 403, 'El asistente no puede exportar su propio borrador');
+    const memberDraftHtml = await call(`/documents/${documentId}/html`, memberToken);
+    assert(memberDraftHtml.status === 403, 'El asistente no puede descargar el HTML de su borrador');
+    const memberDraftPreview = await call(`/documents/${documentId}/html?preview=1`, memberToken);
+    assert(
+      memberDraftPreview.status === 200,
+      'El asistente sí puede ver la vista previa de su borrador',
+    );
+    const memberStatusChange = await call(
+      `/documents/${documentId}`,
+      memberToken,
+      'PATCH',
+      { status: 'final' },
+    );
+    assert(
+      memberStatusChange.status === 403,
+      'El asistente no puede cambiar el estado del documento',
+    );
+
     const submitted = await call<{ id: string; status: string }>('/inbox', memberToken, 'POST', {
       documentId,
       recipientIds: [admin.id],
@@ -163,6 +184,21 @@ async function main(): Promise<void> {
 
     const memberExport = await call(`/documents/${documentId}/export/pdf`, memberToken);
     assert(memberExport.status === 403, 'El asistente no puede exportar un memo sellado');
+    const memberFullHtml = await call(`/documents/${documentId}/html`, memberToken);
+    assert(
+      memberFullHtml.status === 403,
+      'El asistente no puede descargar el HTML completo del memo sellado',
+    );
+    const memberPreviewHtml = await call(`/documents/${documentId}/html?preview=1`, memberToken);
+    assert(
+      memberPreviewHtml.status === 200,
+      'El asistente puede previsualizar el memo dentro de la app',
+    );
+    const memberEmbedHtml = await call(`/documents/${documentId}/html?embed=1`, memberToken);
+    assert(
+      memberEmbedHtml.status === 200,
+      'La miniatura del memo sellado sigue disponible para el asistente',
+    );
     const adminExport = await call(`/documents/${documentId}/export/pdf`, adminToken);
     assert(adminExport.status === 200, 'El administrador sí puede exportar un memo sellado');
     const adminExportDocx = await call(`/documents/${documentId}/export/docx`, adminToken);
@@ -369,6 +405,33 @@ async function main(): Promise<void> {
     );
     assert(rejectedDetail.body.document.status === 'draft', 'El documento rechazado vuelve a borrador');
     assert(rejectedDetail.body.document.lockedAt === null, 'El documento rechazado sigue desbloqueado');
+
+    const rejectionContext = await call<{
+      document: {
+        lastRejection?: {
+          reason: string | null;
+          allowSenderEdit: boolean;
+          recipientIds: string[];
+          subject: string;
+        } | null;
+      };
+    }>(`/documents/${documentId2}`, memberToken);
+    assert(
+      rejectionContext.body.document.lastRejection?.reason === 'Falta la firma del jefe.',
+      'El editor conoce el motivo del rechazo',
+    );
+    assert(
+      rejectionContext.body.document.lastRejection?.allowSenderEdit === true,
+      'El reenvío mantiene habilitada la corrección',
+    );
+    assert(
+      rejectionContext.body.document.lastRejection?.recipientIds.length === 1,
+      'El reenvío precarga los destinatarios del envío rechazado',
+    );
+    assert(
+      rejectionContext.body.document.lastRejection?.subject === 'Prueba de rechazo',
+      'El reenvío precarga el asunto del envío rechazado',
+    );
 
     const rejectedMessage = await call<{ allowSenderEdit: boolean }>(
       `/inbox/${submitted2.body.id}`,

@@ -19,6 +19,7 @@ import { useRoute, useRouter } from 'vue-router';
 import DesignBandImages from '@/components/designs/DesignBandImages.vue';
 import DesignPreview from '@/components/designs/DesignPreview.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
+import BaseSwitch from '@/components/ui/BaseSwitch.vue';
 import { api } from '@/api/client';
 import { useToast } from '@/composables/useToast';
 import { useAuthStore } from '@/stores/auth';
@@ -31,7 +32,7 @@ import {
   PAGE_SIZES_CM,
 } from '@sirpefoffice/shared';
 import type { DesignTokens } from '@sirpefoffice/shared';
-import type { DesignRecord } from '@/types';
+import type { DesignDetailResponse, DesignRecord } from '@/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -46,12 +47,15 @@ const saving = ref(false);
 const name = ref('Nuevo diseño');
 const description = ref('');
 const isShared = ref(false);
-const isActive = ref(true);
 const ownerId = ref<string | null>(null);
 const version = ref(1);
+/** Interruptor «en uso»: solo uno por cuenta. */
+const isCurrent = ref(false);
 const canChangeStatus = computed(
   () => !isNew.value && ownerId.value !== null && ownerId.value === auth.user?.id,
 );
+/** Solo el propietario puede encender o apagar el diseño en uso. */
+const canChangeCampaign = computed(() => canChangeStatus.value);
 const tokens = reactive<DesignTokens>(structuredClone(DEFAULT_DESIGN_TOKENS));
 
 const panelOpen = ref(true);
@@ -207,13 +211,13 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     if (!isNew.value) {
-      const data = await api.get<{ design: DesignRecord }>(`/designs/${designId.value}`);
+      const data = await api.get<DesignDetailResponse>(`/designs/${designId.value}`);
       name.value = data.design.name;
       description.value = data.design.description;
       isShared.value = data.design.isShared;
-      isActive.value = data.design.isActive;
       ownerId.value = data.design.ownerId;
       version.value = data.design.version;
+      isCurrent.value = Boolean(data.design.isCurrent);
       Object.assign(tokens, structuredClone(data.design.tokens));
     }
     ensureBandDefaults();
@@ -243,18 +247,23 @@ function readLogo(event: Event): void {
   reader.readAsDataURL(file);
 }
 
-async function setActive(next: boolean): Promise<void> {
-  if (!designId.value || !canChangeStatus.value) return;
+/** Interruptor «en uso»: al encenderlo se apaga el que lo estuviera. */
+async function setCampaign(next: boolean): Promise<void> {
+  if (!designId.value || !canChangeCampaign.value) return;
+  const previous = isCurrent.value;
+  isCurrent.value = next;
   try {
-    const data = await api.patch<{ design: { isActive: boolean } }>(
-      `/designs/${designId.value}/status`,
-      { isActive: next },
+    await api.post<{ design: { isCurrent: boolean } }>(`/designs/${designId.value}/activate`, {
+      isCurrent: next,
+    });
+    toast.success(
+      next
+        ? `«${name.value}» está en uso: todas las plantillas se dibujan con él`
+        : `«${name.value}» ya no está en uso`,
     );
-    isActive.value = data.design.isActive;
-    toast.success(data.design.isActive ? 'Diseño activado' : 'Diseño desactivado');
   } catch (error) {
-    isActive.value = !next;
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
+    isCurrent.value = previous;
+    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el diseño en uso');
   }
 }
 
@@ -339,6 +348,31 @@ onBeforeUnmount(() => {
         class="min-h-0 w-full shrink-0 overflow-y-auto border-b border-hairline bg-surface px-5 py-6 sm:px-7 lg:w-[400px] lg:border-b-0 lg:border-r"
       >
         <div class="mx-auto max-w-[560px] space-y-6 pb-12">
+          <section
+            class="rounded-xl border p-3.5"
+            :class="isCurrent ? 'border-accent bg-accent-soft/40' : 'border-hairline bg-surface-muted/60'"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-[13px] font-semibold text-ink">Diseño en uso</p>
+                <p class="mt-1 text-[11.5px] leading-snug text-ink-muted">
+                  {{
+                    isCurrent
+                      ? 'Es el diseño con el que se dibujan todas tus plantillas. Los documentos ya creados conservan el diseño con el que se hicieron.'
+                      : 'Enciéndelo para que todas tus plantillas se dibujen con este diseño (solo uno puede estar en uso).'
+                  }}
+                </p>
+              </div>
+              <BaseSwitch
+                v-if="canChangeCampaign"
+                :model-value="isCurrent"
+                :disabled="saving"
+                label="Poner el diseño en uso"
+                @update:model-value="setCampaign"
+              />
+            </div>
+          </section>
+
           <section>
             <h2 class="mb-3 text-[13px] font-semibold text-ink">Identidad</h2>
             <div class="grid gap-3 sm:grid-cols-2">
@@ -608,27 +642,7 @@ onBeforeUnmount(() => {
             <input v-model="isShared" type="checkbox" class="mt-0.5 accent-[var(--color-accent)]" />
             <span>
               <span class="block text-[12.5px] font-medium">Compartir con el equipo</span>
-              <span class="block text-[11px] text-ink-subtle">Cualquier usuario podrá aplicar este diseño a sus plantillas.</span>
-            </span>
-          </label>
-
-          <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-hairline p-3">
-            <input
-              v-model="isActive"
-              type="checkbox"
-              class="mt-0.5 accent-[var(--color-accent)]"
-              :disabled="!canChangeStatus"
-              @change="setActive(isActive)"
-            />
-            <span>
-              <span class="block text-[12.5px] font-medium">Diseño activo</span>
-              <span class="block text-[11px] text-ink-subtle">
-                {{ isNew
-                  ? 'El diseño se creará activo.'
-                  : canChangeStatus
-                    ? 'Los diseños inactivos no aparecen al elegir diseño en plantillas nuevas.'
-                    : 'Solo el propietario puede cambiar el estado de este diseño.' }}
-              </span>
+              <span class="block text-[11px] text-ink-subtle">Cualquier usuario podrá duplicar este diseño para usarlo en sus plantillas.</span>
             </span>
           </label>
         </div>

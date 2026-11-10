@@ -12,12 +12,14 @@ import {
   normalizeNumberingPrefix,
   withDocumentNumber,
 } from '@sirpefoffice/shared';
-import type { DocType, JSONContent } from '@sirpefoffice/shared';
+import type { DesignTokens, DocType, JSONContent } from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import { designs, templateVersions, templates } from '../../db/schema.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { logActivity } from '../../lib/activity.js';
+import { previewDocumentNumber } from '../../lib/counter.js';
+import { getActiveDesigns, resolveTemplateDesign } from '../../lib/active-design.js';
 import { forbidden, notFound } from '../../lib/errors.js';
 import {
   ensureNumberingSeries,
@@ -268,15 +270,16 @@ async function previewHtml(options: {
   body: JSONContent;
   schema: Parameters<typeof sampleValues>[0];
   template: { header: typeof templates.$inferSelect.header; footer: typeof templates.$inferSelect.footer };
-  design: typeof designs.$inferSelect | null;
+  /** Tokens del diseño efectivo (base o variante activada). */
+  tokens: DesignTokens;
   /** Número de ejemplo para la variable de sistema del documento. */
   documentNumber?: string | null;
   embed?: boolean;
 }): Promise<string> {
   const renderOptions = {
     content: options.body,
-    design: options.design?.tokens ?? DEFAULT_DESIGN_TOKENS,
-    chrome: resolveChrome({ template: options.template, design: options.design?.tokens ?? null }),
+    design: options.tokens,
+    chrome: resolveChrome({ template: options.template, design: options.tokens }),
     values: withDocumentNumber(sampleValues(options.schema), options.documentNumber),
     title: options.title,
     includeLetterhead: true,
@@ -343,11 +346,23 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .from(templates)
       .where(and(...where));
 
+    // Diseño en uso de cada cuenta: es el que dibujan sus plantillas.
+    const activeDesigns = await getActiveDesigns(items.map((item) => item.ownerId));
+
     return {
-      items: items.map((item) => ({
-        ...item,
-        designTokens: designTokensForList(item.designTokens),
-      })),
+      items: items.map((item) => {
+        const active = activeDesigns.get(item.ownerId) ?? null;
+        const tokens = active?.tokens ?? item.designTokens ?? DEFAULT_DESIGN_TOKENS;
+        return {
+          ...item,
+          designTokens: designTokensForList(tokens),
+          /** Diseño realmente aplicado (el que está en uso). */
+          effectiveDesignId: active?.id ?? item.designId,
+          effectiveDesignName: active?.name ?? item.designName,
+          /** Fecha del diseño aplicado: invalida la caché de la vista previa. */
+          effectiveDesignUpdatedAt: active?.updatedAt ?? item.designUpdatedAt,
+        };
+      }),
       total: countRows[0]?.count ?? 0,
       page: query.page,
       pageSize: query.pageSize,
@@ -368,17 +383,18 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw notFound('Plantilla no encontrada');
     if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
 
-    let design: typeof designs.$inferSelect | null = null;
+    let tokens: DesignTokens = DEFAULT_DESIGN_TOKENS;
     if (query.designId === 'none') {
-      design = null;
+      tokens = DEFAULT_DESIGN_TOKENS;
     } else if (query.designId) {
-      design = await visibleDesign(user.sub, query.designId);
+      const design = await visibleDesign(user.sub, query.designId);
       // Si el diseño original de una plantilla compartida ya no es visible,
       // se muestra la plantilla igualmente con los valores predeterminados.
       if (!design && query.designId !== row.designId) throw notFound('Diseño no encontrado');
+      if (design) tokens = design.tokens;
     } else {
-      // Si el diseño original ya no es visible, se previsualiza sin diseño.
-      design = await visibleDesign(user.sub, row.designId);
+      // La plantilla se dibuja con el diseño en uso de su propietario.
+      tokens = (await resolveTemplateDesign(row.ownerId, row.designId)).tokens;
     }
 
     const html = await previewHtml({
@@ -386,7 +402,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       body: row.body,
       schema: row.schema,
       template: row,
-      design,
+      tokens,
       documentNumber: await templateSampleNumber(row),
       embed: query.embed === '1',
     });
@@ -399,10 +415,14 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const user = await authenticate(request);
     const body = draftPreviewSchema.parse(request.body);
 
-    let design: typeof designs.$inferSelect | null = null;
+    let tokens: DesignTokens = DEFAULT_DESIGN_TOKENS;
     if (body.designId) {
-      design = await visibleDesign(user.sub, body.designId);
+      const design = await visibleDesign(user.sub, body.designId);
       if (!design) throw notFound('Diseño no encontrado');
+      tokens = design.tokens;
+    } else {
+      // El borrador se dibuja con el diseño en uso de quien lo edita.
+      tokens = (await resolveTemplateDesign(user.sub, null)).tokens;
     }
 
     const html = await previewHtml({
@@ -413,7 +433,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: body.header ?? null,
         footer: body.footer ?? null,
       },
-      design,
+      tokens,
       documentNumber: draftSampleNumber(body.numbering),
       embed: body.embed,
     });
@@ -434,21 +454,20 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw notFound('Plantilla no encontrada');
     if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
 
-    const design = row.designId
-      ? (
-          await db
-            .select()
-            .from(designs)
-            .where(and(eq(designs.id, row.designId), isNull(designs.deletedAt)))
-            .limit(1)
-        )[0]
-      : undefined;
+    // El diseño efectivo es el que está en uso en la cuenta de la plantilla.
+    const resolved = await resolveTemplateDesign(row.ownerId, row.designId);
 
     return {
       template: row,
-      design: design ?? null,
-      chrome: resolveChrome({ template: row, design: design?.tokens }),
-      inheritedChrome: resolveChrome({ template: null, design: design?.tokens }),
+      /** Diseño que se aplica ahora (el que está en uso). */
+      design: resolved.design ?? null,
+      effectiveDesignId: resolved.design?.id ?? null,
+      effectiveDesignName: resolved.design?.name ?? null,
+      chrome: resolveChrome({ template: row, design: resolved.tokens }),
+      inheritedChrome: resolveChrome({ template: null, design: resolved.tokens }),
+      // Número que tendría un documento creado con esta plantilla. Es solo una
+      // lectura: no reserva el correlativo.
+      numberingPreview: await previewDocumentNumber({ docType: row.docType, template: row }),
     };
   });
 
@@ -562,15 +581,9 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         numberingPrefix: row.numberingPrefix,
       },
     });
-    const design = row.designId
-      ? (
-          await db
-            .select()
-            .from(designs)
-            .where(and(eq(designs.id, row.designId), isNull(designs.deletedAt)))
-            .limit(1)
-        )[0]
-      : undefined;
+    // La instantánea guarda los tokens del diseño efectivo (el que está en
+    // uso en el momento de la edición).
+    const resolved = await resolveTemplateDesign(row.ownerId, row.designId);
 
     const [updated] = await db
       .update(templates)
@@ -607,7 +620,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: updated.header,
         footer: updated.footer,
         aiInstructions: updated.aiInstructions,
-        tokens: design?.tokens ?? null,
+        tokens: resolved.tokens,
       },
       note: body.note ?? 'Edición manual',
       createdBy: user.sub,

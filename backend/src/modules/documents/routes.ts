@@ -8,11 +8,18 @@ import {
   DOCUMENT_STATUSES,
   resolveChrome,
 } from '@sirpefoffice/shared';
-import type { DesignTokens, VariableDef, VariableValues } from '@sirpefoffice/shared';
+import type {
+  DesignTokens,
+  DocumentRejection,
+  NumberingPreview,
+  VariableDef,
+  VariableValues,
+} from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import {
   designs,
+  documentMessageRecipients,
   documentMessages,
   documentShares,
   documentVersions,
@@ -28,8 +35,10 @@ import {
 } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
-import { documentNumberFor } from '../../lib/counter.js';
+import { numberDocumentInTx, numberingPreviewsFor, previewDocumentNumber } from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, locked, notFound } from '../../lib/errors.js';
+import { resolveTemplateDesign } from '../../lib/active-design.js';
+import { sameJson } from '../../lib/json.js';
 import {
   chromeOverrideSchema,
   docTypeSchema,
@@ -45,6 +54,11 @@ const createSchema = z.object({
   designId: z.uuid().nullable().optional(),
   docType: docTypeSchema.optional(),
   data: z.record(z.string(), z.unknown()).optional(),
+  // Contenido inicial: permite materializar un borrador del editor en un solo
+  // viaje, sin crear una fila vacía y sobrescribirla después.
+  content: jsonContentSchema.optional(),
+  header: chromeOverrideSchema.optional(),
+  footer: chromeOverrideSchema.optional(),
 });
 
 const contentSchema = z.object({
@@ -79,6 +93,17 @@ const shareSchema = z.object({
   userId: z.uuid(),
   permission: z.enum(['editor', 'viewer']),
 });
+
+/**
+ * Estados que convierten al documento en un registro oficial y, por tanto,
+ * disparan la asignación del correlativo.
+ */
+const OFFICIAL_STATUSES: ReadonlyArray<(typeof DOCUMENT_STATUSES)[number]> = [
+  'sent',
+  'approved',
+  'final',
+  'archived',
+];
 
 /* ─────────────────────── Guardado de versiones ─────────────────────── */
 
@@ -174,6 +199,7 @@ export function toSummary(
   designTokens: DesignTokens | null = null,
   designUpdatedAt: Date | null = null,
   templateSchema: VariableDef[] = [],
+  numberingPreview: NumberingPreview | null = null,
 ) {
   return {
     id: row.id,
@@ -187,6 +213,12 @@ export function toSummary(
     docType: row.docType,
     status: row.status,
     docNumber: row.docNumber,
+    /**
+     * Número que le tocaría si se oficializara ahora. Solo se calcula para
+     * borradores y es orientativo: no reserva el correlativo.
+     */
+    pendingDocNumber: row.docNumber ? null : (numberingPreview?.number ?? null),
+    numberingPreview: row.docNumber ? null : numberingPreview,
     version: row.version,
     ownerId: row.ownerId,
     ownerName,
@@ -277,6 +309,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         designTokens: designs.tokens,
         designUpdatedAt: designs.updatedAt,
         templateSchema: templates.schema,
+        templateNumberingEnabled: templates.numberingEnabled,
+        templateNumberingPrefix: templates.numberingPrefix,
       })
       .from(documents)
       .innerJoin(users, eq(users.id, documents.ownerId))
@@ -293,7 +327,22 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     const countRows = await db.select({ count: sql<number>`count(*)::int` }).from(documents).where(where);
 
-    const items = rows.map((row) =>
+    // Los números previstos se calculan en lote (una consulta de series y otra
+    // de contadores) para no hacer N+1 con el listado.
+    const previews = await numberingPreviewsFor(
+      rows.map((row) => ({
+        docType: row.doc.docType,
+        template:
+          row.templateNumberingEnabled !== null
+            ? {
+                numberingEnabled: row.templateNumberingEnabled,
+                numberingPrefix: row.templateNumberingPrefix,
+              }
+            : null,
+      })),
+    );
+
+    const items = rows.map((row, index) =>
       toSummary(
         row.doc,
         row.ownerName,
@@ -301,6 +350,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         row.designTokens ?? null,
         row.designUpdatedAt ?? null,
         (row.templateSchema ?? []) as VariableDef[],
+        previews[index] ?? null,
       ),
     );
 
@@ -342,6 +392,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
               schema: templates.schema,
               header: templates.header,
               footer: templates.footer,
+              numberingEnabled: templates.numberingEnabled,
+              numberingPrefix: templates.numberingPrefix,
             })
             .from(templates)
             .where(and(eq(templates.id, document.templateId), isNull(templates.deletedAt)))
@@ -390,6 +442,78 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .orderBy(desc(documentMessages.createdAt))
       .limit(1);
 
+    const numberingPreview = document.docNumber
+      ? null
+      : await previewDocumentNumber({
+          docType: document.docType,
+          template: template
+            ? {
+                numberingEnabled: template.numberingEnabled,
+                numberingPrefix: template.numberingPrefix,
+              }
+            : null,
+        });
+
+    // Si la solicitud más reciente fue rechazada, el remitente necesita el
+    // motivo y los datos del envío para poder corregir y reenviar.
+    const [lastMessage] = await db
+      .select({
+        id: documentMessages.id,
+        senderId: documentMessages.senderId,
+        status: documentMessages.status,
+        subject: documentMessages.subject,
+        body: documentMessages.body,
+        documentVersion: documentMessages.documentVersion,
+        rejectedReason: documentMessages.rejectedReason,
+        allowSenderEdit: documentMessages.allowSenderEdit,
+        approvedById: documentMessages.approvedById,
+        approvedAt: documentMessages.approvedAt,
+      })
+      .from(documentMessages)
+      .where(eq(documentMessages.documentId, id))
+      .orderBy(desc(documentMessages.createdAt))
+      .limit(1);
+
+    let lastRejection: DocumentRejection | null = null;
+    if (
+      lastMessage &&
+      lastMessage.status === 'rejected' &&
+      lastMessage.senderId === user.sub
+    ) {
+      let rejectedByName: string | null = null;
+      if (lastMessage.approvedById) {
+        const [rejecter] = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, lastMessage.approvedById))
+          .limit(1);
+        rejectedByName = rejecter?.name ?? null;
+      }
+
+      const recipientRows = await db
+        .select({ userId: documentMessageRecipients.userId })
+        .from(documentMessageRecipients)
+        .innerJoin(users, eq(users.id, documentMessageRecipients.userId))
+        .where(
+          and(
+            eq(documentMessageRecipients.messageId, lastMessage.id),
+            eq(users.isActive, true),
+          ),
+        );
+
+      lastRejection = {
+        messageId: lastMessage.id,
+        reason: lastMessage.rejectedReason,
+        rejectedAt: lastMessage.approvedAt?.toISOString() ?? null,
+        rejectedByName,
+        allowSenderEdit: lastMessage.allowSenderEdit,
+        subject: lastMessage.subject,
+        body: lastMessage.body,
+        recipientIds: recipientRows.map((row) => row.userId),
+        documentVersion: lastMessage.documentVersion,
+      };
+    }
+
     return {
       canExport: await canExportDocument(user.sub, user.role, document),
       document: {
@@ -400,12 +524,14 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
           design?.tokens ?? null,
           design?.updatedAt ?? null,
           (template?.schema ?? []) as VariableDef[],
+          numberingPreview,
         ),
         content: document.content,
         data: document.data,
         header: document.header,
         footer: document.footer,
         pendingMessage: pendingMessage ?? null,
+        lastRejection,
       },
       design: design ?? null,
       templateSchema: template?.schema ?? [],
@@ -422,7 +548,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     const body = createSchema.parse(request.body);
 
     let docType = body.docType ?? 'blank';
-    let content: typeof documents.$inferInsert.content = {
+    let content: typeof documents.$inferInsert.content = body.content ?? {
       type: 'doc',
       content: [{ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Documento sin título' }] }, { type: 'paragraph' }],
     };
@@ -430,7 +556,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     let data: VariableValues = body.data ?? {};
     let title = body.title ?? 'Documento sin título';
     let description = body.description ?? '';
-    let selectedTemplate: typeof templates.$inferSelect | null = null;
+    /** El diseño lo aporta la plantilla: no hay que validarlo como propio. */
+    let designFromTemplate = false;
 
     if (body.templateId) {
       const [template] = await db
@@ -442,16 +569,28 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       if (template.ownerId !== user.sub && !template.isShared) throw notFound('Plantilla no encontrada');
       if (!template.isActive) throw badRequest('La plantilla está inactiva y no se puede usar para crear documentos');
 
-      selectedTemplate = template;
-      content = template.body;
+      content = body.content ?? template.body;
       docType = template.docType;
       designId = body.designId === undefined ? (template.designId ?? null) : body.designId;
       data = { ...defaultData(template.schema), ...(body.data ?? {}) };
       title = body.title ?? template.name;
       description = body.description ?? template.description.slice(0, 500);
+
+      // El documento guarda el diseño concreto con el que nace: el que está en
+      // uso en ese momento. Así, un cambio de diseño posterior no altera el
+      // aspecto de los documentos ya emitidos.
+      if (body.designId === undefined) {
+        const resolved = await resolveTemplateDesign(template.ownerId, template.designId);
+        if (resolved.design) {
+          designId = resolved.design.id;
+          // El diseño viene de la plantilla (puede ser de otro propietario):
+          // no se vuelve a validar la pertenencia.
+          designFromTemplate = true;
+        }
+      }
     }
 
-    if (designId) {
+    if (designId && !designFromTemplate) {
       const [design] = await db
         .select()
         .from(designs)
@@ -460,11 +599,11 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       if (!design || (design.ownerId !== user.sub && !design.isShared)) designId = null;
     }
 
-    const docNumber = await documentNumberFor({ docType, template: selectedTemplate });
-    // Compatibilidad: las plantillas antiguas usan {{numero}} como campo manual.
-    // Al crear el documento se precarga con el correlativo automático.
-    if (docNumber && !data.numero) data.numero = docNumber;
-
+    /**
+     * El número correlativo NO se reserva al crear: un borrador no debe
+     * consumir la secuencia. Se asigna cuando el documento se oficializa
+     * (aprobar/enviar o pasar a un estado final).
+     */
     const [created] = await db
       .insert(documents)
       .values({
@@ -476,7 +615,9 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         docType,
         content,
         data,
-        docNumber,
+        header: body.header ?? null,
+        footer: body.footer ?? null,
+        docNumber: null,
       })
       .returning();
 
@@ -495,7 +636,6 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     await logActivity(user.sub, 'document', created.id, 'created', {
       docType,
-      docNumber,
       templateId: body.templateId ?? null,
     });
 
@@ -516,15 +656,40 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     const { document, permission } = await assertDocument(user.sub, id, 'editor');
     assertDocumentMutable(document);
 
+    const next = {
+      content: body.content,
+      header: body.header === undefined ? document.header : body.header,
+      footer: body.footer === undefined ? document.footer : body.footer,
+      data: body.data ?? document.data,
+      title: body.title ?? document.title,
+      description: body.description ?? document.description,
+    };
+
+    /**
+     * Abrir un documento no debe escribir nada. Si el cliente envía el mismo
+     * contenido (por ejemplo, el autoguardado al cargar), no se incrementa la
+     * versión, no cambia `updated_at` y no se crea una entrada en el historial.
+     */
+    const unchanged =
+      sameJson(next.content, document.content) &&
+      sameJson(next.header, document.header) &&
+      sameJson(next.footer, document.footer) &&
+      sameJson(next.data, document.data) &&
+      next.title === document.title &&
+      next.description === document.description;
+
+    if (unchanged) {
+      return {
+        version: document.version,
+        updatedAt: document.updatedAt.toISOString(),
+        permission,
+      };
+    }
+
     const [updated] = await db
       .update(documents)
       .set({
-        content: body.content,
-        header: body.header === undefined ? document.header : body.header,
-        footer: body.footer === undefined ? document.footer : body.footer,
-        data: body.data ?? document.data,
-        title: body.title ?? document.title,
-        description: body.description ?? document.description,
+        ...next,
         version: document.version + 1,
         updatedAt: new Date(),
       })
@@ -594,18 +759,52 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    const [updated] = await db
-      .update(documents)
-      .set({
-        title: body.title ?? document.title,
-        description: body.description ?? document.description,
-        status: body.status ?? document.status,
-        designId: body.designId === undefined ? document.designId : body.designId,
-        data: body.data ?? document.data,
-        updatedAt: new Date(),
-      })
-      .where(eq(documents.id, id))
-      .returning();
+    let updated: typeof documents.$inferSelect | undefined;
+    const becomesOfficial =
+      body.status !== undefined &&
+      OFFICIAL_STATUSES.includes(body.status) &&
+      !document.docNumber;
+
+    if (becomesOfficial) {
+      // El cambio de estado y la asignación del número deben ser atómicos.
+      updated = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .update(documents)
+          .set({
+            title: body.title ?? document.title,
+            description: body.description ?? document.description,
+            status: body.status ?? document.status,
+            designId: body.designId === undefined ? document.designId : body.designId,
+            data: body.data ?? document.data,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, id))
+          .returning();
+        if (!row) return undefined;
+
+        await numberDocumentInTx(tx, row.id);
+
+        const [numbered] = await tx
+          .select()
+          .from(documents)
+          .where(eq(documents.id, id))
+          .limit(1);
+        return numbered ?? row;
+      });
+    } else {
+      [updated] = await db
+        .update(documents)
+        .set({
+          title: body.title ?? document.title,
+          description: body.description ?? document.description,
+          status: body.status ?? document.status,
+          designId: body.designId === undefined ? document.designId : body.designId,
+          data: body.data ?? document.data,
+          updatedAt: new Date(),
+        })
+        .where(eq(documents.id, id))
+        .returning();
+    }
 
     if (!updated) throw new Error('No se pudo actualizar el documento');
 

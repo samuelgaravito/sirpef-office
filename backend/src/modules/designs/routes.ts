@@ -8,6 +8,7 @@ import { db } from '../../db/index.js';
 import { designs } from '../../db/schema.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
+import { setActiveDesign } from '../../lib/active-design.js';
 import { forbidden, notFound } from '../../lib/errors.js';
 import { designTokensSchema } from '../../lib/validators.js';
 
@@ -31,9 +32,13 @@ const updateSchema = z.object({
   expectedVersion: z.number().int().positive().optional(),
 });
 
+/** El interruptor «en uso» del diseño. */
+const activateSchema = z.object({
+  isCurrent: z.boolean(),
+});
+
 const listQuery = z.object({
   q: z.string().max(200).optional(),
-  status: z.enum(['all', 'active', 'inactive']).default('all'),
   scope: z.enum(['all', 'mine', 'shared']).default('all'),
   /** `true` lista solo los diseños en la papelera del usuario. */
   trashed: z.enum(['true', 'false']).optional(),
@@ -55,7 +60,6 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
     const where = query.trashed === 'true'
       ? [eq(designs.ownerId, user.sub), isNotNull(designs.deletedAt)]
       : [visibility, isNull(designs.deletedAt)];
-    if (query.status !== 'all') where.push(eq(designs.isActive, query.status === 'active'));
     if (query.q) where.push(ilike(designs.name, `%${query.q}%`));
 
     const items = await db
@@ -67,6 +71,8 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
         version: designs.version,
         isShared: designs.isShared,
         isActive: designs.isActive,
+        /** Interruptor «en uso»: solo uno por cuenta. */
+        isCurrent: designs.isCurrent,
         ownerId: designs.ownerId,
         isMine: sql<boolean>`${designs.ownerId} = ${user.sub}`,
         updatedAt: designs.updatedAt,
@@ -117,33 +123,6 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(201).send({ design: created });
   });
 
-  /** Activa o desactiva un diseño sin incrementar su versión. */
-  app.patch('/:id/status', async (request) => {
-    const user = await authenticate(request);
-    const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const body = z.object({ isActive: z.boolean() }).parse(request.body);
-
-    const [row] = await db
-      .select()
-      .from(designs)
-      .where(and(eq(designs.id, id), isNull(designs.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Diseño no encontrado');
-    if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede cambiar el estado de este diseño');
-
-    const [updated] = await db
-      .update(designs)
-      .set({ isActive: body.isActive, updatedAt: new Date() })
-      .where(eq(designs.id, id))
-      .returning();
-
-    if (!updated) throw new Error('No se pudo actualizar el diseño');
-    await logActivity(user.sub, 'design', id, body.isActive ? 'activated' : 'deactivated', {
-      name: updated.name,
-    });
-    return { design: updated };
-  });
-
   /** Actualiza un diseño propio. */
   app.patch('/:id', async (request) => {
     const user = await authenticate(request);
@@ -180,6 +159,35 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
 
     if (!updated) throw new Error('No se pudo actualizar el diseño');
     await logActivity(user.sub, 'design', id, 'updated', { version: updated.version });
+    return { design: updated };
+  });
+
+  /**
+   * Interruptor «en uso».
+   *
+   * Enciende un diseño y apaga el que lo estuviera: solo puede haber uno en
+   * uso por cuenta y es el que dibujan todas las plantillas. Los documentos ya
+   * creados no cambian.
+   */
+  app.post('/:id/activate', async (request) => {
+    const user = await authenticate(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const body = activateSchema.parse(request.body ?? {});
+
+    const [row] = await db
+      .select()
+      .from(designs)
+      .where(and(eq(designs.id, id), isNull(designs.deletedAt)))
+      .limit(1);
+    if (!row) throw notFound('Diseño no encontrado');
+    if (row.ownerId !== user.sub) {
+      throw forbidden('Solo el propietario puede cambiar el diseño en uso');
+    }
+
+    const updated = await setActiveDesign(row, body.isCurrent);
+    await logActivity(user.sub, 'design', id, body.isCurrent ? 'activated_as_current' : 'deactivated_as_current', {
+      name: updated.name,
+    });
     return { design: updated };
   });
 

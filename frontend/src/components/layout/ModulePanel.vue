@@ -211,12 +211,12 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="backdrop"
-    class="fixed inset-0 z-[120] flex items-stretch justify-center bg-navy/45 backdrop-blur-[3px] sm:items-center sm:p-6"
+    class="fixed inset-0 z-[120] flex items-stretch justify-center bg-navy/45 backdrop-blur-[3px] sm:items-center sm:p-4"
     @pointerdown.self="onBackdropPointer"
   >
     <div
       ref="panel"
-      class="relative flex h-full w-full max-w-[1180px] flex-col overflow-hidden border border-hairline bg-canvas shadow-[0_30px_80px_rgb(4_30_66/0.35)] outline-none sm:h-[min(88vh,900px)] sm:rounded-xl"
+      class="relative flex h-full w-full max-w-[1360px] flex-col overflow-hidden border border-hairline bg-canvas shadow-[0_30px_80px_rgb(4_30_66/0.35)] outline-none sm:h-[min(96vh,1100px)] sm:rounded-xl"
       role="dialog"
       aria-modal="true"
       :aria-label="label || title"

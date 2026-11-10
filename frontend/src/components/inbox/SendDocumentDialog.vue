@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { FileText, Loader2, Search, Send, Users, X } from 'lucide-vue-next';
+import { FileText, Hash, Loader2, Search, Send, TriangleAlert, Users, X } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
+
+import { NUMBERING_MESSAGES, type NumberingPreview } from '@sirpefoffice/shared';
 
 import { api } from '@/api/client';
 import BaseModal from '@/components/ui/BaseModal.vue';
@@ -18,11 +20,26 @@ const props = withDefaults(
     expectedVersion: number;
     mode?: 'send' | 'approve';
     messageId?: string | null;
+    /** Versión que tenía el documento cuando se envió a aprobación. */
+    sentVersion?: number | null;
     initialSubject?: string;
     initialBody?: string;
     initialRecipientIds?: string[];
+    /** Número ya asignado al documento, si lo tiene. */
+    docNumber?: string | null;
+    /** Número previsto mientras el documento es borrador. */
+    numbering?: NumberingPreview | null;
   }>(),
-  { mode: 'send', messageId: null, initialSubject: '', initialBody: '', initialRecipientIds: () => [] },
+  {
+    mode: 'send',
+    messageId: null,
+    sentVersion: null,
+    initialSubject: '',
+    initialBody: '',
+    initialRecipientIds: () => [],
+    docNumber: null,
+    numbering: null,
+  },
 );
 
 const emit = defineEmits<{
@@ -42,12 +59,22 @@ const subject = ref('');
 const body = ref('');
 const allowSenderExport = ref(false);
 const submitting = ref(false);
+const editing = ref(false);
 
 const isApprove = computed(() => props.mode === 'approve');
+const pendingNumber = computed(() =>
+  props.docNumber ? null : (props.numbering?.number ?? null),
+);
+const versionChanged = computed(
+  () =>
+    isApprove.value &&
+    props.sentVersion !== null &&
+    props.sentVersion !== props.expectedVersion,
+);
 const title = computed(() => (isApprove.value ? 'Aprobar y enviar' : 'Enviar documento'));
 const description = computed(() =>
   isApprove.value
-    ? 'Revisa el asunto, el mensaje y los destinatarios antes de sellar el documento.'
+    ? 'Confirma el envío y los destinatarios. Al aprobar, el documento quedará bloqueado como solo lectura.'
     : auth.isAdmin
       ? 'El documento se enviará y quedará bloqueado como solo lectura.'
       : 'El jefe recibirá la solicitud y, cuando la apruebe, se enviará a los destinatarios.',
@@ -68,6 +95,8 @@ const selectedUsers = computed(() =>
     .map((id) => users.value.find((user) => user.id === id))
     .filter((user): user is UserListItem => Boolean(user)),
 );
+
+const recipientNames = computed(() => selectedUsers.value.map((user) => user.name).join(', '));
 
 const canSubmit = computed(
   () =>
@@ -99,6 +128,7 @@ watch(
     selected.value = [...props.initialRecipientIds];
     allowSenderExport.value = false;
     search.value = '';
+    editing.value = false;
     void loadUsers();
   },
 );
@@ -126,21 +156,40 @@ async function submit(): Promise<void> {
     };
 
     if (isApprove.value && props.messageId) {
-      await api.post(`/inbox/${props.messageId}/approve`, payload);
-      toast.success(
-        allowSenderExport.value
-          ? 'Documento aprobado y enviado. El asistente también podrá exportarlo'
-          : 'Documento aprobado y enviado. Solo el administrador podrá exportarlo',
-      );
+      const response = await api.post<{
+        ok: boolean;
+        id: string;
+        status: string;
+        docNumber: string | null;
+      }>(`/inbox/${props.messageId}/approve`, payload);
+
+      const assigned = response.docNumber;
+      const previous = pendingNumber.value;
+      let message: string;
+      if (assigned && previous && assigned !== previous) {
+        message = NUMBERING_MESSAGES.changedFrom(assigned, previous);
+      } else if (assigned) {
+        message = NUMBERING_MESSAGES.approvedAs(assigned);
+      } else {
+        message = 'Documento aprobado y enviado';
+      }
+      message += allowSenderExport.value
+        ? '. El asistente también podrá exportarlo'
+        : '. Solo el administrador podrá exportarlo';
+      toast.success(message);
+
       await refreshInbox();
       emit('sent', { id: props.messageId, status: 'sent' });
     } else {
-      const response = await api.post<{ id: string; status: 'sent' | 'pending_approval' }>(
-        '/inbox',
-        { ...payload, documentId: props.documentId },
-      );
+      const response = await api.post<{
+        id: string;
+        status: 'sent' | 'pending_approval';
+        docNumber: string | null;
+      }>('/inbox', { ...payload, documentId: props.documentId });
       if (response.status === 'pending_approval') {
         toast.success('Enviado a aprobación del jefe');
+      } else if (response.docNumber) {
+        toast.success(NUMBERING_MESSAGES.approvedAs(response.docNumber));
       } else {
         toast.success('Documento enviado');
       }
@@ -163,14 +212,91 @@ async function submit(): Promise<void> {
         <span class="grid size-9 shrink-0 place-items-center rounded-lg bg-accent-soft text-accent">
           <FileText class="size-4" />
         </span>
-        <div class="min-w-0">
+        <div class="min-w-0 flex-1">
           <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Documento adjunto</p>
           <p class="truncate text-[13px] font-medium text-ink">{{ documentTitle }}</p>
+          <p class="mt-0.5 text-[11px] text-ink-subtle">Versión a sellar: v{{ expectedVersion }}</p>
         </div>
       </div>
 
+      <!-- Número que tendrá el documento al oficializarse -->
+      <div
+        v-if="pendingNumber"
+        class="flex items-start gap-2.5 rounded-xl border border-dashed border-accent/40 bg-accent-soft/40 px-3 py-2.5"
+      >
+        <Hash class="mt-0.5 size-4 shrink-0 text-accent" />
+        <div class="min-w-0">
+          <p class="text-[12.5px] leading-snug text-ink">
+            Al aprobarse, este documento quedará numerado como
+            <strong class="font-semibold text-accent">{{ pendingNumber }}</strong>.
+          </p>
+          <p class="mt-0.5 text-[11px] text-ink-subtle">{{ NUMBERING_MESSAGES.pendingWarning }}</p>
+        </div>
+      </div>
+      <div
+        v-else-if="docNumber"
+        class="flex items-center gap-2.5 rounded-xl border border-hairline bg-surface-muted/60 px-3 py-2.5"
+      >
+        <Hash class="size-4 shrink-0 text-accent" />
+        <p class="text-[12.5px] text-ink">
+          Número del documento:
+          <strong class="font-semibold">{{ docNumber }}</strong>
+        </p>
+      </div>
+
+      <div
+        v-if="versionChanged"
+        class="flex items-start gap-2 rounded-xl border border-danger/25 bg-danger-soft/60 px-3 py-2.5 text-[12px] leading-snug text-danger"
+      >
+        <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+        <span>
+          El documento cambió desde el envío: se envió la v{{ sentVersion }} y ahora está en la
+          v{{ expectedVersion }}. Revisa el contenido en el mensaje antes de aprobar.
+        </span>
+      </div>
+
+      <!-- Resumen para el jefe: primero lo esencial, editar solo si hace falta -->
+      <div v-if="isApprove && !editing" class="rounded-xl border border-hairline bg-surface-muted/50 px-3.5 py-3">
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Resumen del envío</p>
+          <button
+            type="button"
+            class="text-[12px] font-medium text-accent hover:underline"
+            @click="editing = true"
+          >
+            Ajustar antes de enviar
+          </button>
+        </div>
+        <dl class="mt-2.5 space-y-2 text-[12.5px]">
+          <div class="flex gap-2">
+            <dt class="w-[86px] shrink-0 text-ink-subtle">Destinatarios</dt>
+            <dd :class="['min-w-0 flex-1', recipientNames ? 'text-ink' : 'font-medium text-danger']">
+              {{ recipientNames || 'Sin destinatarios' }}
+            </dd>
+          </div>
+          <div class="flex gap-2">
+            <dt class="w-[86px] shrink-0 text-ink-subtle">Asunto</dt>
+            <dd class="min-w-0 flex-1 font-medium text-ink">{{ subject || '—' }}</dd>
+          </div>
+          <div v-if="body.trim()" class="flex gap-2">
+            <dt class="w-[86px] shrink-0 text-ink-subtle">Mensaje</dt>
+            <dd class="line-clamp-3 min-w-0 flex-1 whitespace-pre-wrap text-ink-muted">{{ body }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <div v-if="isApprove && editing" class="flex justify-end">
+        <button
+          type="button"
+          class="text-[12px] font-medium text-accent hover:underline"
+          @click="editing = false"
+        >
+          Volver al resumen
+        </button>
+      </div>
+
       <!-- Destinatarios -->
-      <div>
+      <div v-if="!isApprove || editing">
         <div class="mb-1.5 flex items-center justify-between">
           <label class="label mb-0">Destinatarios</label>
           <span class="text-[11px] text-ink-subtle">{{ selected.length }} seleccionado{{ selected.length === 1 ? '' : 's' }}</span>
@@ -237,17 +363,17 @@ async function submit(): Promise<void> {
           class="mt-0.5 size-4 shrink-0 accent-accent"
         />
         <span>
-          <span class="block font-medium text-ink">Permitir que el asistente imprima o exporte el memo</span>
+          <span class="block font-medium text-ink">Permitir que el asistente imprima o exporte el documento</span>
           Si lo desactivas, solo el administrador podrá exportarlo en PDF, Word o HTML.
         </span>
       </label>
 
-      <div>
+      <div v-if="!isApprove || editing">
         <label class="label" for="inbox-subject">Asunto</label>
         <input id="inbox-subject" v-model="subject" class="field" maxlength="240" placeholder="Asunto del envío" />
       </div>
 
-      <div>
+      <div v-if="!isApprove || editing">
         <label class="label" for="inbox-body">Mensaje</label>
         <textarea
           id="inbox-body"

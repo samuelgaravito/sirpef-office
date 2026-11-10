@@ -17,27 +17,21 @@ const emit = defineEmits<{
 
 const toast = useToast();
 const designs = ref<DesignRecord[]>([]);
-const selectedDesignId = ref<string | null>(null);
 const loading = ref(false);
 
-const selectedDesign = computed(
-  () => designs.value.find((design) => design.id === selectedDesignId.value) ?? null,
-);
+/** Diseño en uso: es el con el que se dibujarán las plantillas. */
+const activeDesign = computed(() => designs.value.find((design) => design.isCurrent) ?? null);
 
-const previewTokens = computed(() => selectedDesign.value?.tokens ?? DEFAULT_DESIGN_TOKENS);
+const previewTokens = computed(() => activeDesign.value?.tokens ?? DEFAULT_DESIGN_TOKENS);
 
 watch(
   () => props.open,
   async (open) => {
     if (!open) return;
-    selectedDesignId.value = null;
     designs.value = [];
     loading.value = true;
     try {
-      const data = await api.get<ListResponse<DesignRecord>>('/designs', {
-        pageSize: 100,
-        status: 'active',
-      });
+      const data = await api.get<ListResponse<DesignRecord>>('/designs');
       designs.value = data.items;
     } catch {
       toast.error('No se pudieron cargar los diseños');
@@ -49,7 +43,7 @@ watch(
 );
 
 function confirm(): void {
-  emit('select', selectedDesignId.value);
+  emit('select', activeDesign.value?.id ?? null);
 }
 </script>
 
@@ -57,7 +51,7 @@ function confirm(): void {
   <BaseModal
     :open="open"
     title="Nueva plantilla"
-    description="Elige el diseño con el que empezarás a trabajar. Podrás cambiarlo después desde el editor."
+    description="Las plantillas usan siempre el diseño que esté en uso. Podrás cambiarlo en Diseños."
     size="2xl"
     @close="emit('close')"
   >
@@ -67,61 +61,20 @@ function confirm(): void {
 
     <div v-else class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div class="min-w-0">
-        <div class="grid max-h-[58vh] grid-cols-2 gap-3 overflow-y-auto pr-1">
-          <button
-            type="button"
-            :class="[
-              'relative flex flex-col rounded-xl border bg-surface p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-card',
-              selectedDesignId === null
-                ? 'border-accent ring-2 ring-accent/15'
-                : 'border-hairline hover:border-accent/40',
-            ]"
-            @click="selectedDesignId = null"
-          >
-            <div class="flex justify-center overflow-hidden rounded-md bg-[#eef1f5] p-1.5">
-              <DesignPreview :tokens="DEFAULT_DESIGN_TOKENS" :scale="0.2" />
-            </div>
-            <p class="mt-2 truncate text-[12.5px] font-medium">Sin diseño</p>
-            <p class="truncate text-[11px] text-ink-subtle">Hoja con valores predeterminados</p>
-            <span
-              v-if="selectedDesignId === null"
-              class="absolute right-2 top-2 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent"
-            >
-              Seleccionado
-            </span>
-          </button>
-
-          <button
-            v-for="design in designs"
-            :key="design.id"
-            type="button"
-            :class="[
-              'relative flex flex-col rounded-xl border bg-surface p-2 text-left transition-all hover:-translate-y-0.5 hover:shadow-card',
-              selectedDesignId === design.id
-                ? 'border-accent ring-2 ring-accent/15'
-                : 'border-hairline hover:border-accent/40',
-            ]"
-            @click="selectedDesignId = design.id"
-          >
-            <div class="flex justify-center overflow-hidden rounded-md bg-[#eef1f5] p-1.5">
-              <DesignPreview :tokens="design.tokens" :scale="0.2" />
-            </div>
-            <p class="mt-2 truncate text-[12.5px] font-medium">{{ design.name }}</p>
-            <p class="truncate text-[11px] text-ink-subtle">
-              {{ design.tokens.pageFormat }} · {{ design.tokens.fontFamily.split(',')[0] }}
-            </p>
-            <span
-              v-if="selectedDesignId === design.id"
-              class="absolute right-2 top-2 rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-medium text-accent"
-            >
-              Seleccionado
-            </span>
-          </button>
+        <div class="rounded-xl border border-hairline bg-surface p-4">
+          <p class="text-[12.5px] font-medium">Diseño en uso</p>
+          <p class="mt-1 text-[12px] leading-snug text-ink-muted">
+            <template v-if="activeDesign">
+              La plantilla se abrirá con <strong class="text-ink">{{ activeDesign.name }}</strong>. Todas
+              tus plantillas se dibujan con este diseño; puedes encender otro en <strong>Diseños</strong>
+              cuando quieras cambiar el aspecto.
+            </template>
+            <template v-else>
+              No hay ningún diseño en uso. Enciéndelo en <strong>Diseños</strong> para que tus
+              plantillas tengan identidad visual.
+            </template>
+          </p>
         </div>
-
-        <p v-if="designs.length === 0" class="mt-3 text-[12px] text-ink-muted">
-          No hay diseños guardados. Puedes crear la plantilla sin diseño y elegir uno más tarde.
-        </p>
       </div>
 
       <aside class="min-w-0">
@@ -132,7 +85,7 @@ function confirm(): void {
           <DesignPreview :tokens="previewTokens" :scale="0.34" />
         </div>
         <p class="mt-2 text-[11px] leading-snug text-ink-muted">
-          {{ selectedDesign?.name ?? 'Sin diseño' }}. La plantilla se abrirá con este diseño cargado.
+          {{ activeDesign?.name ?? 'Sin diseño en uso' }}.
         </p>
       </aside>
     </div>

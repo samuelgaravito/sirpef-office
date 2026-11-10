@@ -21,6 +21,23 @@ const isLocked = computed(
   () => Boolean(props.document.lockedAt) || props.document.status === 'sent',
 );
 
+/** Número del documento o, si es borrador, el previsto. */
+const numberLabel = computed(() => {
+  if (props.document.docNumber) return props.document.docNumber;
+  if (props.document.numberingPreview) {
+    return `${props.document.numberingPreview.number} · previsto`;
+  }
+  return docTypeLabel(props.document.docType);
+});
+
+const numberTitle = computed(() => {
+  if (props.document.docNumber) return props.document.docNumber;
+  if (props.document.numberingPreview) {
+    return 'Número previsto: se asigna al aprobar y enviar. Puede cambiar si otro documento se aprueba antes.';
+  }
+  return '';
+});
+
 function openDocument(): void {
   if (!props.trashed) emit('open', props.document.id);
 }
@@ -52,7 +69,7 @@ function openDocument(): void {
           {{ document.description || document.autoDescription }}
         </p>
         <p class="mt-0.5 flex items-center gap-1 truncate text-[11.5px] text-ink-subtle">
-          <span class="truncate">{{ document.docNumber ?? docTypeLabel(document.docType) }}</span>
+          <span class="truncate" :title="numberTitle">{{ numberLabel }}</span>
           <span aria-hidden="true">·</span>
           <span class="shrink-0">
             {{ trashed ? `Eliminado ${relativeTime(document.deletedAt ?? document.updatedAt)}` : relativeTime(document.updatedAt) }}

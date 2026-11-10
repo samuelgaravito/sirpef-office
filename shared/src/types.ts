@@ -6,6 +6,8 @@
  * columna JSONB de PostgreSQL.
  */
 
+import type { NumberingPreview } from './numbering.js';
+
 /** Nodo JSON genérico de un documento TipTap / ProseMirror. */
 export interface JSONContent {
   type?: string;
@@ -242,6 +244,13 @@ export interface DocumentSummary {
   docType: DocType;
   status: DocumentStatus;
   docNumber: string | null;
+  /**
+   * Número que le tocaría al documento si se oficializara ahora. Solo se
+   * calcula para borradores y es orientativo: no reserva el correlativo.
+   */
+  pendingDocNumber?: string | null;
+  /** Igual que `pendingDocNumber`, con los datos de la serie. */
+  numberingPreview?: NumberingPreview | null;
   version: number;
   ownerId: string;
   ownerName: string;
@@ -309,6 +318,21 @@ export interface PendingMessageSummary {
   senderName: string;
 }
 
+/** Último rechazo visible para el remitente: motivo y datos para reenviar. */
+export interface DocumentRejection {
+  messageId: string;
+  reason: string | null;
+  rejectedAt: string | null;
+  rejectedByName: string | null;
+  /** Si el remitente puede corregir y reenviar el documento. */
+  allowSenderEdit: boolean;
+  /** Datos del envío rechazado para precargar el reenvío. */
+  subject: string;
+  body: string;
+  recipientIds: string[];
+  documentVersion: number;
+}
+
 export interface InboxMessageDetail extends InboxMessageSummary {
   recipients: InboxRecipient[];
   approvedByName: string | null;
@@ -343,6 +367,8 @@ export interface DocumentDetail extends DocumentSummary {
   chrome: ResolvedChrome;
   /** Envío pendiente de aprobación, si el documento está en revisión. */
   pendingMessage?: PendingMessageSummary | null;
+  /** Rechazo más reciente, visible solo para el remitente. */
+  lastRejection?: DocumentRejection | null;
 }
 
 /* ──────────────────────────── Autenticación ──────────────────────────── */
