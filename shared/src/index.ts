@@ -5,5 +5,6 @@ export * from './defaults.js';
 export * from './chrome.js';
 export * from './editor-extensions.js';
 export * from './page-break.js';
+export * from './document-spacing.js';
 export * from './pagination.js';
 export * from './fonts.js';

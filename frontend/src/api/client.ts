@@ -8,6 +8,34 @@ export function setAccessToken(token: string | null): void {
   accessToken = token;
 }
 
+/**
+ * Renueva la sesión con la cookie de refresco cuando el access token caduca.
+ *
+ * Lo inyecta el store de autenticación: así el cliente HTTP no depende de
+ * Pinia y la renovación se hace una sola vez aunque lleguen varias peticiones
+ * con el token vencido al mismo tiempo.
+ */
+let refreshHandler: (() => Promise<string | null>) | null = null;
+
+export function setRefreshHandler(handler: (() => Promise<string | null>) | null): void {
+  refreshHandler = handler;
+}
+
+/** Promesa de renovación en curso, para no disparar varias a la vez. */
+let refreshInFlight: Promise<string | null> | null = null;
+
+async function renewSession(): Promise<string | null> {
+  if (!refreshHandler) return null;
+  if (!refreshInFlight) {
+    refreshInFlight = refreshHandler()
+      .catch(() => null)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -26,6 +54,8 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined>;
   signal?: AbortSignal;
   raw?: boolean;
+  /** Impide el reintento tras un 401 (evita bucles en la propia renovación). */
+  noRetry?: boolean;
 }
 
 function buildUrl(path: string, query?: RequestOptions['query']): string {
@@ -51,6 +81,16 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     signal: options.signal,
   });
 
+  // El access token caduca mientras el usuario aprende. En vez de echarlo
+  // al login, se renueva la sesión con la cookie de refresco y se repite la
+  // petición: el trabajo en curso no se pierde.
+  if (response.status === 401 && !options.noRetry) {
+    const renewed = await renewSession();
+    if (renewed) {
+      return request<T>(path, { ...options, noRetry: true });
+    }
+  }
+
   if (response.status === 204) return undefined as T;
 
   const contentType = response.headers.get('content-type') ?? '';
@@ -71,6 +111,8 @@ export const api = {
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  /** Petición sin reintento automático (para la propia renovación de sesión). */
+  raw: <T>(path: string, options: RequestOptions = {}) => request<T>(path, options),
 };
 
 /** Descarga un archivo exportado respetando el nombre que envía el servidor. */
@@ -78,7 +120,19 @@ export async function downloadFile(path: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-  const response = await fetch(BASE + path, { headers, credentials: 'include' });
+  let response = await fetch(BASE + path, { headers, credentials: 'include' });
+
+  // La exportación genera el archivo en el servidor: si el token caducó a
+  // media descarga, se renueva la sesión y se reintenta.
+  if (response.status === 401) {
+    const renewed = await renewSession();
+    if (renewed) {
+      const renewedHeaders: Record<string, string> = {};
+      if (accessToken) renewedHeaders.Authorization = `Bearer ${accessToken}`;
+      response = await fetch(BASE + path, { headers: renewedHeaders, credentials: 'include' });
+    }
+  }
+
   if (!response.ok) {
     let message = 'No se pudo generar el archivo';
     try {

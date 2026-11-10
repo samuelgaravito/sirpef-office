@@ -14,6 +14,7 @@ import {
   clampChromeWidth,
   editorExtensions,
   PAGE_SIZES_CM,
+  withEmptyParagraphHeights,
 } from '@sirpefoffice/shared';
 import { renderToHTMLString } from '@tiptap/static-renderer';
 
@@ -415,11 +416,13 @@ function designCss(design: DesignTokens, forPdf = false, embed = false): string 
   .doc-body h1,
   .doc-body h2,
   .doc-body h3,
-  .doc-body h4 { color: var(--doc-primary); line-height: 1.25; font-weight: 700; }
-  .doc-body h1 { font-size: calc(var(--doc-size) * 1.9 * var(--scale)); margin: 1em 0 .4em; }
-  .doc-body h2 { font-size: calc(var(--doc-size) * 1.45 * var(--scale)); margin: 1em 0 .35em; }
-  .doc-body h3 { font-size: calc(var(--doc-size) * 1.2 * var(--scale)); margin: .9em 0 .3em; }
-  .doc-body h4 { font-size: calc(var(--doc-size) * 1.05 * var(--scale)); margin: .8em 0 .25em; }
+  .doc-body h4 { color: var(--doc-primary); }
+  /* Los tamaños, pesos e interlineados replican los del editor para que el
+     alto de cada bloque coincida bloque a bloque entre la pantalla y el PDF. */
+  .doc-body h1 { font-size: calc(var(--doc-size) * 1.9 * var(--scale)); font-weight: 700; line-height: 1.2; margin: 1em 0 .4em; }
+  .doc-body h2 { font-size: calc(var(--doc-size) * 1.45 * var(--scale)); font-weight: 700; line-height: 1.25; margin: 1em 0 .35em; }
+  .doc-body h3 { font-size: calc(var(--doc-size) * 1.2 * var(--scale)); font-weight: 600; margin: .9em 0 .3em; }
+  .doc-body h4 { font-size: calc(var(--doc-size) * 1.05 * var(--scale)); font-weight: 600; margin: .8em 0 .25em; }
   .doc-body p { margin: 0; }
 
   a { color: var(--doc-primary); text-decoration: underline; }
@@ -435,13 +438,13 @@ function designCss(design: DesignTokens, forPdf = false, embed = false): string 
   .doc-body li { margin: .15em 0; }
   .doc-body li > p { margin: 0; }
 
-  .doc-body blockquote { margin: .7em 0; padding: .4em 0 .4em 1em; border-left: 3px solid var(--doc-primary); opacity: .9; }
+  .doc-body blockquote { margin: .7em 0; padding-left: 1em; border-left: 3px solid var(--doc-primary); }
 
   .doc-body hr { border: 0; border-top: 1px solid var(--doc-th-border); margin: 1.2em 0; }
 
   .doc-body pre { background: #f6f8fa; border: 1px solid var(--doc-th-border); border-radius: 8px; padding: 12px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; overflow-x: auto; }
 
-  .doc-body table { border-collapse: collapse; width: 100%; margin: .8em 0; font-size: .96em; background: var(--sd-table-bg, transparent); table-layout: fixed; }
+  .doc-body table { border-collapse: collapse; width: 100%; margin: .8em 0; background: var(--sd-table-bg, transparent); table-layout: fixed; }
   .doc-body th,
   .doc-body td { border: var(--sd-table-border, 1px solid var(--doc-th-border)); padding: var(--sd-table-padding, 7px 9px); vertical-align: top; background: var(--sd-cell-bg, transparent); }
   .doc-body th { background: var(--sd-cell-bg, var(--doc-th-bg)); font-weight: 600; text-align: left; }
@@ -708,12 +711,17 @@ export function renderContentHtml(options: RenderOptions): string {
   );
 }
 
-/** El renderizador de TipTap no aplica estilos inline; quitamos scripts por seguridad. */
+/**
+ * El renderizador de TipTap no aplica estilos inline; quitamos scripts por
+ * seguridad y restituyimos la altura de los párrafos vacíos.
+ */
 function sanitizeRendered(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '');
+  return withEmptyParagraphHeights(
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/\son\w+="[^"]*"/gi, '')
+      .replace(/\son\w+='[^']*'/gi, ''),
+  );
 }
 
 /** Documento HTML completo y autónomo (para exportar o previsualizar). */

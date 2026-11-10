@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 
 import type { AuthResponse, MenuKey, PublicUser } from '@sirpefoffice/shared';
 
-import { api, setAccessToken } from '@/api/client';
+import { api, setAccessToken, setRefreshHandler } from '@/api/client';
 
 const STORAGE_KEY = 'sirpefoffice.token';
 
@@ -105,13 +105,28 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  /** Intenta renovar la sesión con la cookie de refresco. */
+  /**
+   * Intenta renovar la sesión con la cookie de refresco.
+   *
+   * Se invoca automáticamente cuando una petición vuelve con 401, para que un
+   * access token caducado no eche al usuario al login y se pierdan los datos
+   * en edición.
+   */
   async function refresh(): Promise<boolean> {
     try {
-      const data = await api.post<AuthResponse>('/auth/refresh');
+      // `noRetry` evita que esta misma llamada intente renovarse a sí misma.
+      const data = await api.raw<AuthResponse>('/auth/refresh', {
+        method: 'POST',
+        noRetry: true,
+      });
       applySession(data);
       return true;
     } catch {
+      // La cookie de refresco ya no sirve: la sesión terminó de verdad.
+      user.value = null;
+      token.value = null;
+      localStorage.removeItem(STORAGE_KEY);
+      setAccessToken(null);
       return false;
     }
   }
@@ -126,6 +141,14 @@ export const useAuthStore = defineStore('auth', () => {
       setAccessToken(null);
     }
   }
+
+  // El cliente HTTP usa este handler cuando una petición vuelve con 401:
+  // renueva la sesión con la cookie de refresco y reintenta la petición, de
+  // modo que un access token caducado no interrumpe el trabajo en curso.
+  setRefreshHandler(async () => {
+    const renewed = await refresh();
+    return renewed ? token.value : null;
+  });
 
   return {
     user,
