@@ -10,12 +10,21 @@ const props = withDefaults(
   defineProps<{
     templateId?: string;
     /**
-     * `undefined` usa el diseño de la plantilla.
+     * `undefined` usa el diseño en uso.
      * `null` fuerza la vista sin diseño.
      */
     designId?: string | null;
     /** Cambia cuando se edita el diseño; invalida la caché de preview. */
     designUpdatedAt?: string | null;
+    /**
+     * Diseño realmente aplicado (el que está en uso). Cambia al encender o
+     * apagar otro diseño: invalida la caché de la vista previa.
+     */
+    effectiveDesignId?: string | null;
+    /**
+     * Fecha del diseño aplicado; invalida la caché de preview.
+     */
+    effectiveDesignUpdatedAt?: string | null;
     version?: number;
     tokens?: DesignTokens | null;
     scale?: number;
@@ -67,6 +76,8 @@ const cacheKey = computed(() =>
     props.templateId ?? '',
     props.designId === null ? 'none' : (props.designId ?? 'default'),
     props.designUpdatedAt ?? '',
+    props.effectiveDesignId ?? '',
+    props.effectiveDesignUpdatedAt ?? '',
     props.version ?? 0,
   ].join(':'),
 );
@@ -94,8 +105,9 @@ async function load(): Promise<void> {
   loading.value = true;
   failed.value = false;
   try {
+    // Sin `designId` el servidor aplica el diseño en uso de la cuenta.
     const result = await api.get<string>(`/templates/${props.templateId}/preview`, {
-      designId: props.designId === null ? 'none' : props.designId,
+      designId: props.designId === null ? 'none' : undefined,
       embed: 1,
     });
     if (current !== requestId) return;
@@ -136,7 +148,14 @@ watch(
 );
 
 watch(
-  [() => props.templateId, () => props.designId, () => props.designUpdatedAt, () => props.version],
+  [
+    () => props.templateId,
+    () => props.designId,
+    () => props.designUpdatedAt,
+    () => props.effectiveDesignId,
+    () => props.effectiveDesignUpdatedAt,
+    () => props.version,
+  ],
   () => {
     html.value = props.html ?? '';
     failed.value = false;

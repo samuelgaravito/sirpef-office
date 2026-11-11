@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '../db/index.js';
 import {
@@ -29,18 +29,23 @@ export function assertDocumentMutable(doc: DocumentRow): void {
 
 /**
  * Determina si el usuario puede exportar el documento.
- * Los documentos abiertos puede exportarlos cualquier usuario con acceso.
- * Los sellados quedan reservados al administrador que aprobó/rechazó el envío,
- * a los administradores destinatarios y, si se autorizó al aprobar, al remitente.
+ *
+ * - El **administrador** puede exportar los documentos a los que tenga acceso:
+ *   los abiertos sin restricción y los sellados si es el que aprobó/rechazó
+ *   el envío o si es destinatario.
+ * - El **asistente** solo puede exportar si el administrador lo autorizó
+ *   explícitamente al aprobar el envío (`allow_sender_export`). Un borrador
+ *   nunca está autorizado: para obtener una copia el jefe tiene que aprobar
+ *   el envío y marcar «el asistente también podrá exportarlo».
  */
 export async function canExportDocument(
   userId: string,
   role: UserRole,
   doc: Pick<DocumentRow, 'id' | 'lockedAt' | 'status'>,
 ): Promise<boolean> {
-  if (!isDocumentLocked(doc)) return true;
-
   if (role === 'admin') {
+    if (!isDocumentLocked(doc)) return true;
+
     const [approver] = await db
       .select({ id: documentMessages.id })
       .from(documentMessages)
@@ -68,24 +73,21 @@ export async function canExportDocument(
     if (recipient) return true;
   }
 
-  const [latestSent] = await db
-    .select({
-      senderId: documentMessages.senderId,
-      allowSenderExport: documentMessages.allowSenderExport,
-    })
+  // Autorización explícita del administrador sobre el envío del documento.
+  const [authorized] = await db
+    .select({ id: documentMessages.id })
     .from(documentMessages)
     .where(
       and(
         eq(documentMessages.documentId, doc.id),
         eq(documentMessages.status, 'sent'),
+        eq(documentMessages.senderId, userId),
+        eq(documentMessages.allowSenderExport, true),
       ),
     )
-    .orderBy(desc(documentMessages.sentAt), desc(documentMessages.createdAt))
     .limit(1);
 
-  return Boolean(
-    latestSent && latestSent.senderId === userId && latestSent.allowSenderExport,
-  );
+  return Boolean(authorized);
 }
 
 /**

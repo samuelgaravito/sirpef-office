@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, MoreVertical, Palette, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Trash2 } from 'lucide-vue-next';
+import { Copy, MoreVertical, Palette, Pencil, Plus, RotateCcw, Search, Trash2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -9,6 +9,7 @@ import DesignPreview from '@/components/designs/DesignPreview.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
+import BaseSwitch from '@/components/ui/BaseSwitch.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import { useToast } from '@/composables/useToast';
 import { api } from '@/api/client';
@@ -21,10 +22,11 @@ const toast = useToast();
 const designs = ref<DesignRecord[]>([]);
 const loading = ref(true);
 const search = ref('');
-const status = ref<'all' | 'active' | 'inactive'>('all');
 const deleting = ref<DesignRecord | null>(null);
 const removing = ref(false);
 const view = ref<'active' | 'trash'>('active');
+/** Interruptor «en uso»: solo uno por cuenta. */
+const switching = ref<string | null>(null);
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase();
@@ -32,11 +34,15 @@ const filtered = computed(() => {
   return designs.value.filter((design) => design.name.toLowerCase().includes(term));
 });
 
+/** Diseño que está en uso ahora mismo (de esta cuenta). */
+const activeDesign = computed(
+  () => designs.value.find((design) => design.isCurrent) ?? null,
+);
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
     const data = await api.get<ListResponse<DesignRecord>>('/designs', {
-      status: view.value === 'active' ? status.value : undefined,
       trashed: view.value === 'trash' ? 'true' : undefined,
     });
     designs.value = data.items;
@@ -54,6 +60,45 @@ async function clone(design: DesignRecord): Promise<void> {
     await router.push({ name: 'design', params: { id: data.design.id } });
   } catch (error) {
     toast.error(error instanceof Error ? error.message : 'No se pudo duplicar');
+  }
+}
+
+/**
+ * Interruptor «en uso».
+ *
+ * Al encender un diseño se apaga el que lo estuviera: solo puede haber uno y
+ * es el con el que se dibujan todas las plantillas. Los documentos ya
+ * creados conservan el diseño con el que nacieron.
+ *
+ * El cambio se aplica en local (sin recargar la lista) para que el
+ * interruptor se deslice y las tarjetas no cambien de sitio; si el servidor
+ * responde con error, se revierte.
+ */
+async function toggleCurrent(design: DesignRecord, next: boolean): Promise<void> {
+  if (switching.value) return;
+  switching.value = design.id;
+
+  const previous = designs.value;
+  designs.value = designs.value.map((item) => {
+    if (item.id === design.id) return { ...item, isCurrent: next };
+    // Al encender un diseño, el resto se apaga.
+    return next ? { ...item, isCurrent: false } : item;
+  });
+
+  try {
+    await api.post<{ design: { isCurrent: boolean } }>(`/designs/${design.id}/activate`, {
+      isCurrent: next,
+    });
+    toast.success(
+      next
+        ? `«${design.name}» está en uso: todas las plantillas se dibujan con él`
+        : `«${design.name}» ya no está en uso`,
+    );
+  } catch (error) {
+    designs.value = previous;
+    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el diseño en uso');
+  } finally {
+    switching.value = null;
   }
 }
 
@@ -87,26 +132,7 @@ async function restore(design: DesignRecord): Promise<void> {
   }
 }
 
-async function toggleActive(design: DesignRecord): Promise<void> {
-  const next = !design.isActive;
-  try {
-    const data = await api.patch<{ design: { isActive: boolean } }>(
-      `/designs/${design.id}/status`,
-      { isActive: next },
-    );
-    designs.value = designs.value.map((item) =>
-      item.id === design.id ? { ...item, isActive: data.design.isActive } : item,
-    );
-    toast.success(data.design.isActive ? 'Diseño activado' : 'Diseño desactivado');
-    if (status.value !== 'all' && (status.value === 'active') !== data.design.isActive) {
-      await load();
-    }
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
-  }
-}
-
-watch([view, status], () => void load());
+watch([view], () => void load());
 
 onMounted(load);
 </script>
@@ -128,11 +154,6 @@ onMounted(load);
           <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
           <input v-model="search" class="field pl-9" placeholder="Buscar diseño…" />
         </div>
-        <select v-if="view === 'active'" v-model="status" class="field w-auto min-w-[135px]">
-          <option value="all">Todos</option>
-          <option value="active">Activos</option>
-          <option value="inactive">Inactivos</option>
-        </select>
         <button
           type="button"
           :class="['btn btn-sm', view === 'trash' ? 'btn-primary' : 'btn-outline']"
@@ -142,6 +163,14 @@ onMounted(load);
           {{ view === 'trash' ? 'Volver' : 'Papelera' }}
         </button>
       </div>
+
+      <p
+        v-if="view === 'active' && activeDesign"
+        class="mb-4 rounded-lg border border-accent/30 bg-accent-soft/40 px-3 py-2 text-[12.5px] text-accent"
+      >
+        <strong>{{ activeDesign.name }}</strong> está en uso: todas las plantillas se dibujan con él.
+        Los documentos ya creados conservan el diseño con el que se hicieron.
+      </p>
 
       <div v-if="loading" class="grid place-items-center py-20">
         <BaseSpinner label="Cargando diseños…" />
@@ -183,14 +212,6 @@ onMounted(load);
               <p class="truncate text-[13px] font-medium">{{ design.name }}</p>
               <p class="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] text-ink-subtle">
                 <span class="truncate">{{ design.tokens.fontFamily.split(',')[0] }} · {{ design.tokens.pageFormat }}</span>
-                <span
-                  :class="[
-                    'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-                    design.isActive ? 'bg-success-soft text-success' : 'bg-warning-soft text-warning',
-                  ]"
-                >
-                  {{ design.isActive ? 'Activo' : 'Inactivo' }}
-                </span>
               </p>
               <div class="mt-2 flex items-center gap-1">
                 <span
@@ -225,15 +246,6 @@ onMounted(load);
                     <Copy class="size-4" />
                     Duplicar
                   </button>
-                  <button
-                    v-if="design.isMine"
-                    type="button"
-                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-                    @click="toggleActive(design)"
-                  >
-                    <component :is="design.isActive ? PowerOff : Power" class="size-4" />
-                    {{ design.isActive ? 'Desactivar' : 'Activar' }}
-                  </button>
                   <button v-if="design.isMine" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-danger hover:bg-danger-soft" @click="deleting = design">
                     <Trash2 class="size-4" />
                     Eliminar
@@ -250,6 +262,20 @@ onMounted(load);
                 </button>
               </template>
             </BaseDropdown>
+          </div>
+
+          <!-- Interruptor «en uso»: solo uno por cuenta. -->
+          <div
+            v-if="view === 'active' && design.isMine"
+            class="flex items-center justify-between gap-2 border-t border-hairline px-3 py-2"
+          >
+            <span class="text-[12px] font-medium text-ink-muted">En uso</span>
+            <BaseSwitch
+              :model-value="design.isCurrent"
+              :disabled="switching !== null"
+              :label="`Poner «${design.name}» en uso`"
+              @update:model-value="(value) => toggleCurrent(design, value)"
+            />
           </div>
         </article>
       </div>

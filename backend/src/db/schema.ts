@@ -133,11 +133,23 @@ export const designs = pgTable(
     isShared: boolean('is_shared').notNull().default(false),
     /** Un diseño inactivo se oculta de los selectores de nuevas plantillas. */
     isActive: boolean('is_active').notNull().default(true),
+    /**
+     * Diseño en uso de la cuenta: es el que dibujan todas las plantillas.
+     *
+     * Solo puede haber uno por cuenta (índice único parcial): al encender un
+     * diseño se apagan los demás. Los documentos no lo siguen: guardan el
+     * diseño concreto con el que se crearon.
+     */
+    isCurrent: boolean('is_current').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
-  (t) => [index('designs_owner_idx').on(t.ownerId)],
+  (t) => [
+    index('designs_owner_idx').on(t.ownerId),
+    // Un único diseño en uso por cuenta.
+    uniqueIndex('designs_current_unique_idx').on(t.ownerId).where(sql`${t.isCurrent}`),
+  ],
 );
 
 /**
@@ -237,6 +249,14 @@ export const documents = pgTable(
     status: documentStatusEnum('status').notNull().default('draft'),
     /** Número correlativo del documento, p. ej. MEM-2026-0001. */
     docNumber: text('doc_number'),
+    /**
+     * Identidad de la serie de numeración con la que se emitió el documento.
+     * Se guarda desglosada para poder recalcular `document_counters` sin
+     * parsear el texto formateado. `null` mientras el documento es borrador.
+     */
+    numberingPrefix: text('numbering_prefix'),
+    numberingYear: integer('numbering_year'),
+    numberingValue: integer('numbering_value'),
     /** Contenido TipTap actual. */
     content: jsonb('content').$type<JSONContent>().notNull(),
     /** Sobrescritura de cabecera; null = hereda de plantilla/diseño. */

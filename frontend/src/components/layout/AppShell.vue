@@ -62,10 +62,10 @@ function notifyLatestResult(): void {
   if (!result) return;
   if (result.status === 'sent') {
     toast.success(
-      `Tu memorándum «${result.subject}» fue aprobado por ${result.approverName}`,
+      `Tu documento «${result.subject}» fue aprobado por ${result.approverName}`,
     );
   } else {
-    toast.error(`Tu memorándum «${result.subject}» fue rechazado`);
+    toast.error(`Tu documento «${result.subject}» fue rechazado`);
   }
 }
 

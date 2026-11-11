@@ -80,6 +80,23 @@ async function seed(): Promise<void> {
     }
   }
 
+  /* ── Diseño en uso ──────────────────────────────────────────────────── */
+  // Solo puede haber uno por cuenta: si la cuenta aún no tiene ninguno, se
+  // enciende el primero (el que usan la mayoría de plantillas).
+  const [current] = await db
+    .select({ id: designs.id })
+    .from(designs)
+    .where(sql`${designs.ownerId} = ${admin.id} and ${designs.isCurrent} = true`)
+    .limit(1);
+
+  if (!current && designIds.length > 0) {
+    await db
+      .update(designs)
+      .set({ isCurrent: true })
+      .where(eq(designs.id, designIds[0]!));
+    console.log('  ✓ Diseño en uso: el primero de los diseños');
+  }
+
   /* ── Plantillas ─────────────────────────────────────────────────────── */
   for (const template of seedTemplates) {
     const [existing] = await db

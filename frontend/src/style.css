@@ -213,6 +213,13 @@
     color: var(--color-ink-muted);
   }
 
+  /* Número previsto: aún no asignado, se confirma al aprobar. */
+  .chip-pending {
+    border: 1px dashed color-mix(in srgb, var(--color-accent) 55%, transparent);
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+    color: var(--color-accent);
+  }
+
   /* ── Editor TipTap ───────────────────────────────────────────── */
   .tiptap {
     outline: none;

@@ -237,6 +237,8 @@ onMounted(load);
               :template-id="template.id"
               :design-id="template.designId"
               :design-updated-at="template.designUpdatedAt"
+              :effective-design-id="template.effectiveDesignId"
+              :effective-design-updated-at="template.effectiveDesignUpdatedAt"
               :version="template.version"
               :tokens="template.designTokens"
               :scale="0.28"
@@ -262,6 +264,13 @@ onMounted(load);
                   >
                     {{ template.isActive ? 'Activa' : 'Inactiva' }}
                   </span>
+                </p>
+                <p
+                  v-if="template.effectiveDesignName"
+                  class="mt-1 truncate text-[11px] text-ink-subtle"
+                  :title="`Dibuja con «${template.effectiveDesignName}», el diseño en uso`"
+                >
+                  Dibuja con {{ template.effectiveDesignName }}
                 </p>
               </button>
 
