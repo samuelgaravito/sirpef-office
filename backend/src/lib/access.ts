@@ -6,7 +6,10 @@ import {
   documentMessages,
   documentShares,
   documents,
+  templateShares,
+  templates,
   type DocumentRow,
+  type TemplateRow,
 } from '../db/schema.js';
 import { forbidden, locked, notFound } from './errors.js';
 
@@ -130,4 +133,55 @@ export async function assertDocument(
     );
   }
   return access;
+}
+
+/**
+ * Devuelve la plantilla y el permiso efectivo del usuario.
+ *
+ * El permiso sale de la compartición explícita (`template_shares`): un
+ * **editor** puede mejorar la plantilla directamente y un **lector** solo
+ * usarla. Una plantilla marcada como compartida (`isShared`) es visible para
+ * todo el mundo, pero eso no concede edición: solo el propietario (o un
+ * administrador) puede cambiarla.
+ *
+ * Si no tiene acceso se responde 404 para no filtrar la existencia de
+ * plantillas ajenas.
+ *
+ * El administrador conserva el poder que ya tenía sobre las plantillas
+ * compartidas (verlas aunque estén inactivas y editarlas), también cuando la
+ * compartición es explícita.
+ */
+export async function getTemplateAccess(
+  userId: string,
+  templateId: string,
+  role: UserRole = 'member',
+): Promise<{ template: TemplateRow; permission: Permission }> {
+  const [template] = await db
+    .select()
+    .from(templates)
+    .where(eq(templates.id, templateId))
+    .limit(1);
+
+  if (!template || template.deletedAt) throw notFound('Plantilla no encontrada');
+
+  if (template.ownerId === userId) return { template, permission: 'owner' };
+
+  const [share] = await db
+    .select()
+    .from(templateShares)
+    .where(and(eq(templateShares.templateId, templateId), eq(templateShares.userId, userId)))
+    .limit(1);
+
+  // La compartición explícita manda: un lector invitado ve la plantilla aunque
+  // el propietario la tenga inactiva, y un editor puede mejorarla.
+  if (share) {
+    return { template, permission: role === 'admin' ? 'editor' : share.permission };
+  }
+
+  if (template.isShared && (template.isActive || role === 'admin')) {
+    // Compartida para todo el mundo: se puede usar, pero no editarla.
+    return { template, permission: role === 'admin' ? 'editor' : 'viewer' };
+  }
+
+  throw notFound('Plantilla no encontrada');
 }

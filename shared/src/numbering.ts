@@ -19,9 +19,20 @@ export const DOC_TYPE_PREFIX: Record<DocType, string> = {
 /** Tipos que, por convención, no llevan número correlativo. */
 export const DOC_TYPES_WITHOUT_NUMBER: readonly DocType[] = ['resume', 'blank'];
 
-export const NUMBERING_PREFIX_PATTERN = /^[A-Z0-9]{2,10}$/;
+/**
+ * Prefijo de una serie: de 1 a 20 letras o números en mayúsculas.
+ *
+ * El prefijo identifica la serie y es único por plantilla: dos plantillas no
+ * pueden numerar con el mismo prefijo porque sus números se repetirían.
+ */
+export const NUMBERING_PREFIX_PATTERN = /^[A-Z0-9]{1,20}$/;
+export const NUMBERING_MIN_PREFIX_LENGTH = 1;
+export const NUMBERING_MAX_PREFIX_LENGTH = 20;
 export const NUMBERING_MAX_START = 999_999;
 export const NUMBERING_MAX_PADDING = 8;
+
+/** Longitud del código corto que recibe la plantilla sin prefijo propio. */
+export const NUMBERING_AUTO_PREFIX_LENGTH = 4;
 
 /** Clave reservada de la variable que muestra el número del documento. */
 export const DOCUMENT_NUMBER_VARIABLE = 'numero_documento';
@@ -69,7 +80,7 @@ export interface NumberingSeriesConfig {
  * orientativo: no reserva el correlativo.
  */
 export interface NumberingPreview {
-  /** Número formateado, p. ej. `MEM-2026-0008`. */
+  /** Número formateado, p. ej. `MEM-0008-2026`. */
   number: string;
   /** Prefijo de la serie (`''` = serie sin prefijo). */
   prefix: string;
@@ -90,8 +101,8 @@ export const NUMBERING_MESSAGES = {
   pendingChip: 'se asigna al aprobar',
   pendingTitle: 'Número previsto',
   pendingHint: 'El número que tendrá el documento cuando se apruebe y envíe.',
-  pendingWarning: 'Puede cambiar si otro documento se aprueba antes.',
-  pendingWarningShort: 'puede cambiar si otro memo se aprueba antes',
+  pendingWarning: 'Puede cambiar si otro documento de esta plantilla se aprueba antes.',
+  pendingWarningShort: 'puede cambiar si otro documento de esta plantilla se aprueba antes',
   disabled: 'Sin numeración',
   variableLabel: 'Número de documento',
   variablePendingTitle: 'Número previsto: se confirmará al aprobar',
@@ -121,8 +132,12 @@ export interface NumberingSeriesState extends NumberingSeriesConfig {
   nextValue: number;
   /** Número formateado que verá el próximo documento. */
   nextNumber: string;
-  /** Plantillas que comparten esta serie. */
-  templateCount: number;
+  /** Alguna plantilla viva usa esta serie. */
+  taken: boolean;
+  /** Plantilla que usa esta serie, si el usuario puede verla. */
+  templateId: string | null;
+  /** Nombre de esa plantilla, si el usuario puede verla. */
+  templateName: string | null;
 }
 
 /** Normaliza el prefijo: mayúsculas, sin espacios y sin guiones. */
@@ -133,12 +148,27 @@ export function normalizeNumberingPrefix(value: string): string {
     .replace(/[\s-]+/g, '');
 }
 
+/**
+ * Código corto que recibe una plantilla sin prefijo propio.
+ *
+ * Se deriva del identificador de la plantilla, así que es estable aunque se
+ * renombre la plantilla y es único porque el UUID lo es. El servidor alarga el
+ * código si encuentra uno ya ocupado.
+ */
+export function autoNumberingPrefix(templateId: string, length = NUMBERING_AUTO_PREFIX_LENGTH): string {
+  return templateId.replace(/-/g, '').toUpperCase().slice(0, length);
+}
+
 /** Año que usa el contador; 0 cuando la serie es continua y no muestra año. */
 export function numberingPeriodYear(includeYear: boolean, now = new Date()): number {
   return includeYear ? now.getFullYear() : 0;
 }
 
-/** Formatea el número correlativo, p. ej. `MEM-2026-0007`. */
+/**
+ * Formatea el número correlativo, p. ej. `MEM-0007-2026`.
+ *
+ * El orden es prefijo, correlativo y año. Sin año queda `MEM-0007`.
+ */
 export function formatDocumentNumber(options: {
   prefix: string;
   value: number;
@@ -147,7 +177,7 @@ export function formatDocumentNumber(options: {
   includeYear: boolean;
 }): string {
   const padded = String(Math.max(0, Math.trunc(options.value))).padStart(options.padding, '0');
-  const core = options.includeYear ? `${options.year}-${padded}` : padded;
+  const core = options.includeYear ? `${padded}-${options.year}` : padded;
   return options.prefix ? `${options.prefix}-${core}` : core;
 }
 

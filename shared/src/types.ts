@@ -468,7 +468,15 @@ export interface Paginated<T> {
 }
 
 export interface ApiError {
+  /** Código estable del error (p. ej. `VALIDATION_ERROR`, `CONFLICT`). */
   error: string;
+  /** Explicación en lenguaje llano de qué ha pasado. */
   message: string;
+  /** Detalle estructurado: campos fallidos, versiones en conflicto, etc. */
   details?: unknown;
+  /**
+   * Referencia corta para rastrear un fallo del servidor en los logs.
+   * Solo la envían los errores 5xx, donde el detalle técnico no se expone.
+   */
+  reference?: string;
 }

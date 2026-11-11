@@ -23,7 +23,7 @@ import {
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
-import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
+import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
 import { saveVersion, toSummary } from '../documents/routes.js';
 
 /* ───────────────────────────── Esquemas ───────────────────────────── */
@@ -581,7 +581,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         })
         .returning();
 
-      if (!message) throw new Error('No se pudo crear el mensaje');
+      if (!message) throw internal('MESSAGE_CREATE_FAILED', 'No se pudo crear el mensaje');
 
       messageId = message.id;
 

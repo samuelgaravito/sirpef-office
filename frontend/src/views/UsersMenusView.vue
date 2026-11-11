@@ -61,7 +61,7 @@ async function load(): Promise<void> {
     assignments.value = data.items;
     for (const user of data.items) drafts[user.id] = [...user.menus];
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudieron cargar los usuarios');
+    toast.failure(error, 'No se pudieron cargar los usuarios');
   } finally {
     loading.value = false;
   }
@@ -84,7 +84,7 @@ async function save(user: UserMenuAssignment): Promise<void> {
 
     toast.success(`Menús actualizados para ${user.name}`);
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudieron guardar los menús');
+    toast.failure(error, 'No se pudieron guardar los menús');
   } finally {
     saving[user.id] = false;
   }

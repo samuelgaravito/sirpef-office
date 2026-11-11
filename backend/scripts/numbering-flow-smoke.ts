@@ -7,12 +7,14 @@
  * 3. oficializar el documento asigna el número;
  * 4. dos documentos oficializados seguidos reciben números consecutivos;
  * 5. dos oficializaciones simultáneas no repiten número;
- * 6. guardar el mismo contenido no incrementa la versión.
+ * 6. un documento en la papelera no bloquea la oficialización de otro y
+ *    restaurarlo nunca falla por su número;
+ * 7. guardar el mismo contenido no incrementa la versión.
  *
  * Requiere la API en marcha y un administrador activo.
  * Uso: npm run smoke:numbering
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 
 import { DOC_TYPE_PREFIX } from '@sirpefoffice/shared';
 
@@ -106,6 +108,7 @@ async function main(): Promise<void> {
   });
 
   const createdIds: string[] = [];
+  const createdTemplateIds: string[] = [];
   const scope = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
   const [series] = await db
     .select()
@@ -252,7 +255,47 @@ async function main(): Promise<void> {
       'Dos oficializaciones simultáneas obtienen números distintos',
     );
 
-    /* 6. Guardar el mismo contenido no incrementa la versión. */
+    /* 6. Un documento en la papelera no bloquea la oficialización de otro. */
+    const trashed = await createDraft();
+    await call(`/documents/${trashed.id}`, token, 'PATCH', { status: 'final' });
+    const trashedDetail = await call<DocumentPayload>(`/documents/${trashed.id}`, token);
+    const trashedNumber = trashedDetail.body.document.docNumber;
+    assert(Boolean(trashedNumber), 'El documento que se papelera tiene número');
+
+    const removed = await call(`/documents/${trashed.id}`, token, 'DELETE');
+    assert(removed.status === 200, 'El documento numerado se borra lógicamente');
+
+    // El contador queda desfasado a propósito: es lo que ocurre tras una
+    // reconciliación o un ajuste manual de la serie.
+    await db
+      .update(documentCounters)
+      .set({ counter: counterBefore?.counter ?? 0 })
+      .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)));
+
+    const afterTrash = await createDraft();
+    const officialized = await call(`/documents/${afterTrash.id}`, token, 'PATCH', {
+      status: 'final',
+    });
+    assert(
+      officialized.status === 200,
+      'La papelera no bloquea la oficialización de otro documento',
+    );
+
+    const live = await db
+      .select({ docNumber: documents.docNumber })
+      .from(documents)
+      .where(and(isNull(documents.deletedAt), isNotNull(documents.docNumber)));
+    const liveNumbers = live.map((row) => row.docNumber);
+    assert(
+      new Set(liveNumbers).size === liveNumbers.length,
+      'Ningún documento vivo comparte número con otro',
+    );
+
+    /* 7. Restaurar un documento de la papelera nunca falla por su número. */
+    const restored = await call<{ ok: boolean }>(`/documents/${trashed.id}/restore`, token, 'POST');
+    assert(restored.status === 200, 'Restaurar un documento de la papelera responde 200');
+
+    /* 8. Guardar el mismo contenido no incrementa la versión. */
     const beforeSave = await call<DocumentPayload>(`/documents/${draft.id}`, token);
     const detailForSave = await call<
       DocumentPayload & {
@@ -271,10 +314,128 @@ async function main(): Promise<void> {
       same.status === 200 && same.body.version === beforeSave.body.document.version,
       'Guardar el mismo contenido no cambia la versión',
     );
+
+    /* 9. Cada plantilla lleva su propia enumeración. */
+    const own = await call<{ template: { id: string; numberingPrefix: string | null } }>(
+      '/templates',
+      token,
+      'POST',
+      {
+        name: `Numeración propia ${Date.now()}`,
+        docType: template.docType,
+        body: { type: 'doc', content: [{ type: 'paragraph' }] },
+        schema: [],
+        numbering: { enabled: true, prefix: '', startValue: 1, padding: 4, includeYear: true },
+      },
+    );
+    assert(own.status === 201, 'Se crea una plantilla con numeración automática');
+    createdTemplateIds.push(own.body.template.id);
+    const ownPrefix = own.body.template.numberingPrefix;
+    assert(Boolean(ownPrefix), 'La plantilla sin prefijo recibe un código automático');
+    assert(ownPrefix !== scope, 'La plantilla nueva no repite el prefijo de otra');
+
+    const ownDraft = await call<DocumentPayload>('/documents', token, 'POST', {
+      templateId: own.body.template.id,
+      content: { type: 'doc', content: [{ type: 'paragraph' }] },
+    });
+    assert(ownDraft.status === 201, 'Se crea un borrador con la plantilla nueva');
+    createdIds.push(ownDraft.body.document.id);
+
+    await call(`/documents/${ownDraft.body.document.id}`, token, 'PATCH', { status: 'final' });
+    const ownNumbered = await call<DocumentPayload>(
+      `/documents/${ownDraft.body.document.id}`,
+      token,
+    );
+    assert(
+      numericSuffix(ownNumbered.body.document.docNumber) === 1,
+      'La plantilla nueva empieza su enumeración en 1, sin intercalarse con la otra',
+    );
+    assert(
+      (ownNumbered.body.document.docNumber ?? '').startsWith(`${ownPrefix}-`),
+      'El número lleva el prefijo de su plantilla',
+    );
+
+    /* 10. El código automático es estable al volver a guardar. */
+    const ownDetail = await call<{
+      template: { id: string; version: number; numberingPrefix: string | null };
+    }>(`/templates/${own.body.template.id}`, token);
+    const ownAgain = await call<{
+      template: { numberingPrefix: string | null; numberingPrefixAuto: boolean };
+    }>(
+      `/templates/${own.body.template.id}`,
+      token,
+      'PATCH',
+      {
+        name: `Numeración propia ${Date.now()}`,
+        docType: template.docType,
+        body: { type: 'doc', content: [{ type: 'paragraph' }] },
+        schema: [],
+        expectedVersion: ownDetail.body.template.version,
+        numbering: { enabled: true, prefix: '', startValue: 1, padding: 4, includeYear: true },
+      },
+    );
+    assert(
+      ownAgain.body.template.numberingPrefix === ownPrefix,
+      'El código automático no cambia al volver a guardar la plantilla',
+    );
+
+    /* 11. Restaurar una plantilla cuyo prefijo fue ocupado recibe otro. */
+    const removedTemplate = await call<{ ok: boolean }>(
+      `/templates/${own.body.template.id}`,
+      token,
+      'DELETE',
+    );
+    assert(removedTemplate.status === 200, 'Se elimina la plantilla con numeración propia');
+
+    const thief = await call<{ template: { id: string } }>('/templates', token, 'POST', {
+      name: `Prefijo tomado ${Date.now()}`,
+      docType: template.docType,
+      body: { type: 'doc', content: [{ type: 'paragraph' }] },
+      schema: [],
+      numbering: { enabled: true, prefix: ownPrefix, startValue: 1, padding: 4, includeYear: true },
+    });
+    assert(thief.status === 201, 'Otra plantilla ocupa el prefijo liberado');
+    createdTemplateIds.push(thief.body.template.id);
+
+    const restoreTemplate = await call<{ ok: boolean }>(
+      `/templates/${own.body.template.id}/restore`,
+      token,
+      'POST',
+    );
+    assert(
+      restoreTemplate.status === 200,
+      'La plantilla se restaura aunque su prefijo esté ocupado',
+    );
+
+    const ownRestored = await call<{ template: { numberingPrefix: string | null } }>(
+      `/templates/${own.body.template.id}`,
+      token,
+    );
+    assert(
+      ownRestored.body.template.numberingPrefix !== ownPrefix,
+      'La plantilla restaurada recibe un prefijo propio en lugar de compartir serie',
+    );
+
+    /* 12. Dos plantillas no pueden compartir prefijo. */
+    const duplicated = await call<{ error?: string }>('/templates', token, 'POST', {
+      name: `Prefijo duplicado ${Date.now()}`,
+      docType: template.docType,
+      body: { type: 'doc', content: [{ type: 'paragraph' }] },
+      schema: [],
+      numbering: { enabled: true, prefix: scope, startValue: 1, padding: 4, includeYear: true },
+    });
+    assert(
+      duplicated.status === 409,
+      'Guardar un prefijo que ya usa otra plantilla se rechaza',
+    );
   } finally {
-    // Limpieza: se borran los documentos de prueba y se restaura el contador.
+    // Limpieza: se borran los documentos y las plantillas de prueba y se
+    // restaura el contador.
     for (const id of createdIds) {
       await db.delete(documents).where(eq(documents.id, id));
+    }
+    for (const id of createdTemplateIds) {
+      await db.delete(templates).where(eq(templates.id, id));
     }
 
     if (counterBefore) {
@@ -298,11 +459,26 @@ function sameCorrelative(a: string | null, b: string | null | undefined): boolea
   return numericSuffix(a) === numericSuffix(b);
 }
 
-/** Último bloque numérico del correlativo (el valor emitido). */
+/**
+ * Correlativo de un número emitido.
+ *
+ * El formato es `PREFIX-CORRELATIVO-AÑO` (`MEM-0007-2026`), así que el
+ * correlativo es el bloque central. Los números antiguos
+ * (`PREFIX-AÑO-CORRELATIVO`) se reconocen porque el último bloque tiene
+ * cuatro dígitos y el año es plausible.
+ */
 function numericSuffix(value: string | null | undefined): number {
   if (!value) return NaN;
-  const match = /(\d+)$/.exec(value);
-  return match ? Number(match[1]) : NaN;
+  const blocks = value.split('-');
+  if (blocks.length < 2) return NaN;
+
+  const last = Number(blocks[blocks.length - 1]);
+  const previous = Number(blocks[blocks.length - 2]);
+
+  // Formato actual: el correlativo precede al año.
+  if (blocks.length >= 3 && last >= 1900 && last <= 2999) return previous;
+  // Formato sin año o formato antiguo: el correlativo es el último bloque.
+  return last;
 }
 
 main().catch((error) => {

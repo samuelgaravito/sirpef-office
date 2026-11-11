@@ -153,8 +153,13 @@ export const designs = pgTable(
 );
 
 /**
- * Series de numeración correlativa. La clave es el prefijo (MEM, OFI…), de
- * modo que varias plantillas que lo compartan sumen la misma secuencia.
+ * Series de numeración correlativa. La clave es el prefijo (MEM, OFI…).
+ *
+ * Cada serie pertenece como mucho a una plantilla viva: dos plantillas que
+ * numeraran con el mismo prefijo repetirían números, así que el prefijo es
+ * único entre las plantillas activas (índice
+ * `templates_numbering_prefix_unique_idx`). Una serie liberada conserva su
+ * contador, de modo que el correlativo nunca se reutiliza.
  */
 export const numberingSeries = pgTable('numbering_series', {
   prefix: text('prefix').primaryKey(),
@@ -183,6 +188,11 @@ export const templates = pgTable(
     numberingPrefix: text('numbering_prefix').references(() => numberingSeries.prefix, {
       onDelete: 'set null',
     }),
+    /**
+     * El prefijo lo asignó el servidor (plantilla sin prefijo propio). Si el
+     * usuario lo edita, pasa a ser manual.
+     */
+    numberingPrefixAuto: boolean('numbering_prefix_auto').notNull().default(false),
     name: text('name').notNull(),
     docType: docTypeEnum('doc_type').notNull().default('blank'),
     description: text('description').notNull().default(''),
@@ -204,7 +214,18 @@ export const templates = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
   },
-  (t) => [index('templates_owner_idx').on(t.ownerId), index('templates_design_idx').on(t.designId)],
+  (t) => [
+    index('templates_owner_idx').on(t.ownerId),
+    index('templates_design_idx').on(t.designId),
+    /**
+     * Cada plantilla viva lleva su propia serie: dos plantillas con el mismo
+     * prefijo compartirían contador y sus números se intercalaría. El índice
+     * es parcial para que una plantilla en la papelera no bloquee su prefijo.
+     */
+    uniqueIndex('templates_numbering_prefix_unique_idx')
+      .on(t.numberingPrefix)
+      .where(sql`${t.numberingPrefix} is not null and ${t.deletedAt} is null`),
+  ],
 );
 
 export const templateVersions = pgTable(
@@ -233,6 +254,29 @@ export const templateVersions = pgTable(
   (t) => [uniqueIndex('template_versions_unique_idx').on(t.templateId, t.version)],
 );
 
+/**
+ * Acceso por persona a una plantilla.
+ *
+ * Una plantilla puede compartirse con usuarios concretos como **editor**
+ * (pueden mejorarla directamente) o **lector** (solo pueden usarla). El
+ * permiso es independiente de `templates.isShared`, que abre la plantilla a
+ * todo el mundo pero sin permiso de edición.
+ */
+export const templateShares = pgTable(
+  'template_shares',
+  {
+    templateId: uuid('template_id')
+      .notNull()
+      .references(() => templates.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    permission: sharePermissionEnum('permission').notNull().default('viewer'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.templateId, t.userId] }), index('template_shares_user_idx').on(t.userId)],
+);
+
 export const documents = pgTable(
   'documents',
   {
@@ -247,7 +291,7 @@ export const documents = pgTable(
     description: text('description').notNull().default(''),
     docType: docTypeEnum('doc_type').notNull().default('blank'),
     status: documentStatusEnum('status').notNull().default('draft'),
-    /** Número correlativo del documento, p. ej. MEM-2026-0001. */
+    /** Número correlativo del documento, p. ej. MEM-0001-2026. */
     docNumber: text('doc_number'),
     /**
      * Identidad de la serie de numeración con la que se emitió el documento.
@@ -279,7 +323,12 @@ export const documents = pgTable(
     index('documents_updated_idx').on(t.updatedAt),
     index('documents_template_idx').on(t.templateId),
     index('documents_design_idx').on(t.designId),
-    uniqueIndex('documents_doc_number_idx').on(t.docNumber),
+    // Un número solo lo reserva el documento que lo tiene **vivo**. Un
+    // documento en la papelera conserva su número para la auditoría, pero no
+    // bloquea a quien lo necesite: el índice es parcial por `deleted_at`.
+    uniqueIndex('documents_doc_number_idx')
+      .on(t.docNumber)
+      .where(sql`${t.deletedAt} IS NULL`),
     // Búsqueda full-text dentro del contenido del documento
     index('documents_content_gin_idx').using('gin', sql`to_tsvector('simple', ${t.content}::text)`),
   ],
@@ -449,6 +498,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   documents: many(documents),
   designs: many(designs),
   templates: many(templates),
+  templateShares: many(templateShares),
 }));
 
 export const documentsRelations = relations(documents, ({ one, many }) => ({
@@ -479,6 +529,15 @@ export const templatesRelations = relations(templates, ({ one, many }) => ({
     references: [numberingSeries.prefix],
   }),
   versions: many(templateVersions),
+  shares: many(templateShares),
+}));
+
+export const templateSharesRelations = relations(templateShares, ({ one }) => ({
+  template: one(templates, {
+    fields: [templateShares.templateId],
+    references: [templates.id],
+  }),
+  user: one(users, { fields: [templateShares.userId], references: [users.id] }),
 }));
 
 export const numberingSeriesRelations = relations(numberingSeries, ({ many }) => ({
@@ -525,6 +584,7 @@ export type UserRow = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type DesignRow = typeof designs.$inferSelect;
 export type TemplateRow = typeof templates.$inferSelect;
+export type TemplateShareRow = typeof templateShares.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
 export type NewDocument = typeof documents.$inferInsert;
 export type DocumentVersionRow = typeof documentVersions.$inferSelect;

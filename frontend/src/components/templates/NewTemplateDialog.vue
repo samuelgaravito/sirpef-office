@@ -33,8 +33,8 @@ watch(
     try {
       const data = await api.get<ListResponse<DesignRecord>>('/designs');
       designs.value = data.items;
-    } catch {
-      toast.error('No se pudieron cargar los diseños');
+    } catch (error) {
+      toast.failure(error, 'No se pudieron cargar los diseños');
     } finally {
       loading.value = false;
     }

@@ -31,6 +31,7 @@ import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { errorMessage as explainError } from '@/lib/error-message';
 import {
   formatDateTime,
   type InboxStatusContext,
@@ -153,7 +154,7 @@ async function load(): Promise<void> {
 
     if (auth.isAdmin) await loadPendingQueue();
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'No se pudo cargar el mensaje';
+    errorMessage.value = explainError(error, 'No se pudo cargar el mensaje');
   } finally {
     loading.value = false;
   }
@@ -206,7 +207,7 @@ async function exportDocument(format: 'pdf' | 'docx' | 'html'): Promise<void> {
     await downloadFile(`/documents/${message.value.document.id}/export/${format}`);
     toast.success(`Archivo ${format.toUpperCase()} descargado`);
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo exportar el documento');
+    toast.failure(error, 'No se pudo exportar el documento');
   }
 }
 
@@ -219,7 +220,7 @@ async function cancelSend(): Promise<void> {
     toast.success('Solicitud de envío cancelada');
     await load();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cancelar el envío');
+    toast.failure(error, 'No se pudo cancelar el envío');
   } finally {
     cancelling.value = false;
   }
@@ -598,7 +599,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   <dd class="min-w-0">
                     <span
                       class="chip"
-                      title="Se asigna al aprobar y enviar. Puede cambiar si otro documento se aprueba antes."
+                      title="Se asigna al aprobar y enviar. Puede cambiar si otro documento de esta plantilla se aprueba antes."
                     >
                       Se asignará {{ message.document.numberingPreview.number }}
                     </span>

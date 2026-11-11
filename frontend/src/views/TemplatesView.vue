@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, LayoutTemplate, Loader2, MoreVertical, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Trash2, Wand2 } from 'lucide-vue-next';
+import { Copy, LayoutTemplate, Loader2, MoreVertical, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Share2, Trash2, Wand2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -7,6 +7,7 @@ import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import NewTemplateDialog from '@/components/templates/NewTemplateDialog.vue';
 import TemplatePreview from '@/components/templates/TemplatePreview.vue';
+import TemplateShareDialog from '@/components/templates/TemplateShareDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
@@ -16,7 +17,7 @@ import { useToast } from '@/composables/useToast';
 import { api } from '@/api/client';
 import { docTypeLabel, relativeTime } from '@/lib/labels';
 import { useAuthStore } from '@/stores/auth';
-import type { ListResponse, TemplateSummary } from '@/types';
+import type { ListResponse, ShareRecord, TemplateSummary } from '@/types';
 
 const router = useRouter();
 const toast = useToast();
@@ -33,12 +34,38 @@ const deleting = ref<TemplateSummary | null>(null);
 const removing = ref(false);
 const newTemplateOpen = ref(false);
 const view = ref<'active' | 'trash'>('active');
+/** Plantilla cuyos accesos se están gestionando. */
+const sharing = ref<TemplateSummary | null>(null);
+const shares = ref<ShareRecord[]>([]);
 
 const filtered = computed(() =>
   templateId.value
     ? templates.value.filter((template) => template.id === templateId.value)
     : templates.value,
 );
+
+/** ¿Puede este usuario editar la plantilla? (propietario, editor o admin) */
+function canEditTemplate(template: TemplateSummary): boolean {
+  if (template.permission) return template.permission !== 'viewer';
+  return Boolean(template.isMine) || auth.isAdmin;
+}
+
+/** La plantilla es del usuario: puede gestionar quién la mejora. */
+function ownsTemplate(template: TemplateSummary): boolean {
+  if (template.permission) return template.permission === 'owner';
+  return Boolean(template.isMine);
+}
+
+/**
+ * ¿Puede activar o desactivar la plantilla?
+ *
+ * El propietario sí; el administrador también, como antes, pero solo sobre
+ * plantillas compartidas (las privadas de otro usuario ni se listan).
+ */
+function canToggleActive(template: TemplateSummary): boolean {
+  if (ownsTemplate(template)) return true;
+  return auth.isAdmin && template.isShared;
+}
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -50,8 +77,8 @@ async function load(): Promise<void> {
       trashed: view.value === 'trash' ? 'true' : undefined,
     });
     templates.value = data.items;
-  } catch {
-    toast.error('No se pudieron cargar las plantillas');
+  } catch (error) {
+    toast.failure(error, 'No se pudieron cargar las plantillas');
   } finally {
     loading.value = false;
   }
@@ -90,7 +117,7 @@ async function clone(template: TemplateSummary): Promise<void> {
     toast.success('Plantilla duplicada');
     await router.push({ name: 'template', params: { id: data.template.id } });
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo duplicar');
+    toast.failure(error, 'No se pudo duplicar');
   }
 }
 
@@ -103,7 +130,7 @@ async function confirmDelete(): Promise<void> {
     toast.success('Plantilla eliminada');
     deleting.value = null;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo eliminar');
+    toast.failure(error, 'No se pudo eliminar');
   } finally {
     removing.value = false;
   }
@@ -115,7 +142,7 @@ async function restore(template: TemplateSummary): Promise<void> {
     toast.success('Plantilla restaurada');
     await load();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo restaurar');
+    toast.failure(error, 'No se pudo restaurar');
   }
 }
 
@@ -134,7 +161,29 @@ async function toggleActive(template: TemplateSummary): Promise<void> {
       await load();
     }
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
+    toast.failure(error, 'No se pudo cambiar el estado');
+  }
+}
+
+/** Abre el diálogo de compartición de una plantilla propia. */
+async function openShare(template: TemplateSummary): Promise<void> {
+  sharing.value = template;
+  shares.value = [];
+  try {
+    const data = await api.get<ListResponse<ShareRecord>>(`/templates/${template.id}/shares`);
+    shares.value = data.items;
+  } catch (error) {
+    toast.failure(error, 'No se pudieron cargar los accesos');
+  }
+}
+
+async function reloadShares(): Promise<void> {
+  if (!sharing.value) return;
+  try {
+    const data = await api.get<ListResponse<ShareRecord>>(`/templates/${sharing.value.id}/shares`);
+    shares.value = data.items;
+  } catch {
+    /* la lista mostrada sigue siendo válida */
   }
 }
 
@@ -264,6 +313,13 @@ onMounted(load);
                   >
                     {{ template.isActive ? 'Activa' : 'Inactiva' }}
                   </span>
+                  <span
+                    v-if="canEditTemplate(template) && !ownsTemplate(template)"
+                    class="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent"
+                    title="Puedes mejorar esta plantilla"
+                  >
+                    Editable
+                  </span>
                 </p>
                 <p
                   v-if="template.effectiveDesignName"
@@ -298,10 +354,19 @@ onMounted(load);
                     </button>
                     <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="openTemplate(template.id)">
                       <Pencil class="size-4" />
-                      {{ template.isMine || auth.isAdmin ? 'Editar' : 'Ver' }}
+                      {{ canEditTemplate(template) ? 'Editar' : 'Ver' }}
                     </button>
                     <button
-                      v-if="template.isMine || auth.isAdmin"
+                      v-if="ownsTemplate(template)"
+                      type="button"
+                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+                      @click="openShare(template)"
+                    >
+                      <Share2 class="size-4" />
+                      Compartir
+                    </button>
+                    <button
+                      v-if="canToggleActive(template)"
                       type="button"
                       class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
                       @click="toggleActive(template)"
@@ -360,6 +425,15 @@ onMounted(load);
       :open="newTemplateOpen"
       @close="newTemplateOpen = false"
       @select="startNewTemplate"
+    />
+
+    <TemplateShareDialog
+      v-if="sharing"
+      :open="sharing !== null"
+      :template-id="sharing.id"
+      :shares="shares"
+      @close="sharing = null"
+      @changed="reloadShares"
     />
 
     <BaseModal

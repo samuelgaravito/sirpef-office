@@ -1,4 +1,17 @@
-import { and, asc, desc, eq, gte, ilike, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  isNotNull,
+  isNull,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -24,6 +37,7 @@ import {
   documentShares,
   documentVersions,
   documents,
+  templateShares,
   templates,
   users,
 } from '../../db/schema.js';
@@ -36,7 +50,7 @@ import {
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { numberDocumentInTx, numberingPreviewsFor, previewDocumentNumber } from '../../lib/counter.js';
-import { badRequest, conflict, forbidden, locked, notFound } from '../../lib/errors.js';
+import { badRequest, conflict, forbidden, internal, locked, notFound } from '../../lib/errors.js';
 import { resolveTemplateDesign } from '../../lib/active-design.js';
 import { sameJson } from '../../lib/json.js';
 import {
@@ -566,7 +580,21 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         .where(and(eq(templates.id, body.templateId), isNull(templates.deletedAt)))
         .limit(1);
       if (!template) throw notFound('Plantilla no encontrada');
-      if (template.ownerId !== user.sub && !template.isShared) throw notFound('Plantilla no encontrada');
+      // Se puede usar una plantilla propia, una compartida con todo el mundo o
+      // una compartida con esta persona por nombre.
+      if (template.ownerId !== user.sub && !template.isShared) {
+        const [share] = await db
+          .select({ templateId: templateShares.templateId })
+          .from(templateShares)
+          .where(
+            and(
+              eq(templateShares.templateId, template.id),
+              eq(templateShares.userId, user.sub),
+            ),
+          )
+          .limit(1);
+        if (!share) throw notFound('Plantilla no encontrada');
+      }
       if (!template.isActive) throw badRequest('La plantilla está inactiva y no se puede usar para crear documentos');
 
       content = body.content ?? template.body;
@@ -621,7 +649,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning();
 
-    if (!created) throw new Error('No se pudo crear el documento');
+    if (!created) throw internal('DOCUMENT_CREATE_FAILED', 'No se pudo crear el documento');
 
     await db.insert(documentVersions).values({
       documentId: created.id,
@@ -806,7 +834,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         .returning();
     }
 
-    if (!updated) throw new Error('No se pudo actualizar el documento');
+    if (!updated) throw internal('DOCUMENT_UPDATE_FAILED', 'No se pudo actualizar el documento');
 
     return {
       document: toSummary(updated, user.name, updated.ownerId === user.sub ? 'owner' : 'editor'),
@@ -840,13 +868,58 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede restaurar este documento');
     if (row.lockedAt || row.status === 'sent') throw locked();
 
+    /**
+     * Restaurar nunca falla por un número. Como el correlativo solo lo
+     * reservan los documentos vivos, un documento que sale de la papelera
+     * puede encontrarse con que su número ya lo ocupa otro. En ese caso se
+     * le libera el número: vuelve a ser un borrador y recibirá uno nuevo la
+     * próxima vez que se oficialice.
+     */
+    let releasedDocNumber: string | null = null;
+
+    if (row.docNumber) {
+      const [occupied] = await db
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          and(
+            eq(documents.docNumber, row.docNumber),
+            isNull(documents.deletedAt),
+            ne(documents.id, id),
+          ),
+        )
+        .limit(1);
+
+      if (occupied) {
+        releasedDocNumber = row.docNumber;
+        // La variable heredada `numero` seguía al correlativo asignado.
+        const nextData: VariableValues = { ...(row.data ?? {}) };
+        delete nextData.numero;
+
+        await db
+          .update(documents)
+          .set({
+            docNumber: null,
+            numberingPrefix: null,
+            numberingYear: null,
+            numberingValue: null,
+            data: nextData,
+            updatedAt: new Date(),
+          })
+          .where(eq(documents.id, id));
+      }
+    }
+
     await db
       .update(documents)
       .set({ deletedAt: null, updatedAt: new Date() })
       .where(eq(documents.id, id));
 
-    await logActivity(user.sub, 'document', id, 'restored', { title: row.title });
-    return { ok: true };
+    await logActivity(user.sub, 'document', id, 'restored', {
+      title: row.title,
+      ...(releasedDocNumber ? { releasedDocNumber } : {}),
+    });
+    return { ok: true, releasedDocNumber };
   });
 
   /** Historial de versiones. */
@@ -931,7 +1004,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(documents.id, params.id))
       .returning();
 
-    if (!updated) throw new Error('No se pudo restaurar la versión');
+    if (!updated) throw internal('VERSION_RESTORE_FAILED', 'No se pudo restaurar la versión');
 
     await saveVersion(params.id, user.sub, 'restore', `Restaurada la versión ${params.version}`);
     await logActivity(user.sub, 'document', params.id, 'restored', { version: params.version });

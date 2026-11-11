@@ -164,7 +164,7 @@ document_counters (scope = prefix, year) → secuencia emitida al oficializar
 | `document_message_recipients` | `message_id`, `user_id`, `read_at`, `archived_at` | Destinatarios y estado de lectura. `archived_at` se conserva por compatibilidad y ya no se usa en la bandeja. |
 | `comments` | `document_id`, `author_id`, `body`, `anchor`, `resolved_at` | Reservada para la UI de comentarios. |
 | `activities` | `actor_id`, `entity_type`, `entity_id`, `action`, `metadata` | Auditoría funcional. |
-| `numbering_series` | `prefix` PK, `start_value`, `padding`, `include_year` | Serie identificada por el prefijo; `''` es la serie sin prefijo (`2026-0001`). Varias plantillas pueden compartirla. |
+| `numbering_series` | `prefix` PK, `start_value`, `padding`, `include_year` | Serie identificada por el prefijo. El prefijo es **único entre las plantillas vivas** (índice parcial `templates_numbering_prefix_unique_idx`), así que cada plantilla tiene su propia serie y su propio contador. Las plantillas sin numeración no ocupan serie. |
 | `document_counters` | `scope` (= prefijo), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
 
@@ -212,6 +212,14 @@ document_counters (scope = prefix, year) → secuencia emitida al oficializar
 
 ### Numeración
 
+- **Cada plantilla lleva su propia serie.** El prefijo es único entre las
+  plantillas vivas (`templates_numbering_prefix_unique_idx`), de modo que dos
+  plantillas nunca comparten contador y sus números no se intercalan. Una
+  plantilla sin prefijo recibe un código corto único derivado de su
+  identificador (`A3F9`, `7B5C…`); si el prefijo ya lo usa otra plantilla, el
+  guardado se rechaza con un `409`.
+- El formato del número es `PREFIX-CORRELATIVO-AÑO` (`MEM-0008-2026`); sin
+  año de reinicio, `MEM-0008`. El prefijo admite de 1 a 20 letras o números.
 - El número se asigna la primera vez que el documento alcanza un estado oficial
   (`sent`, `approved`, `final`, `archived`), nunca al crear el borrador.
 - `documents.numbering_prefix/year/value` guardan la identidad de la serie con la
@@ -222,11 +230,11 @@ document_counters (scope = prefix, year) → secuencia emitida al oficializar
   includeYear, year }`); no modifica `document_counters`. Se calcula en lote para el
   listado (`numberingPreviewsFor`) y también lo devuelve `GET /api/templates/:id`
   para el modo «documento nuevo».
-- La interfaz lo explica en el editor (`MEM-2026-0008 · se asigna al aprobar`), en
+- La interfaz lo explica en el editor (`MEM-0008-2026 · se asigna al aprobar`), en
   la tarjeta del listado (`· previsto`), en el panel de variables, en el diálogo de
   envío y en la bandeja. Dentro del documento, `{{numero_documento}}` se sustituye
   visualmente por el número (decoración de ProseMirror, sin tocar el contenido); en
-  la vista previa y el PDF de un borrador aparece como `MEM-2026-0008 (previsto)`.
+  la vista previa y el PDF de un borrador aparece como `MEM-0008-2026 (previsto)`.
 - Al aprobar, `POST /api/inbox/:id/approve` y el envío directo devuelven `docNumber`
   para que el cliente confirme el número real (y avise si difiere del previsto).
 - Herramientas de mantenimiento: `npm run db:migrate:numbering` (migración de datos
@@ -886,6 +894,28 @@ Errores uniformes:
   "details": { "currentVersion": 7, "updatedAt": "2026-10-22T15:02:11.000Z" } }
 ```
 
+El handler global (`backend/src/lib/errors.ts`) traduce cada origen de fallo a
+un mensaje que el usuario pueda entender. Nunca se devuelve un «error interno
+del servidor» genérico: si el fallo no se puede explicar, se devuelve un 500
+con una **referencia corta** (`reference`) que permite rastrearlo en el log
+del servidor sin filtrar detalles técnicos.
+
+| Origen | HTTP | Código | Mensaje para el usuario |
+| --- | --- | --- | --- |
+| Validación (Zod) | 400 | `VALIDATION_ERROR` | Nombra los campos: «Datos inválidos: correo (Correo inválido).» |
+| Datos repetidos | 409 | `EMAIL_TAKEN`, `DOC_NUMBER_CONFLICT`, `SEND_ALREADY_PENDING`… | «Ya existe una cuenta con ese correo.» |
+| Referencia borrada | 409 | `REFERENCED_RECORD_MISSING` | «La operación apunta a un registro que ya no existe.» |
+| Body > 25 MB | 413 | `PAYLOAD_TOO_LARGE` | «El contenido enviado supera el límite de 25 MB.» |
+| Content-Type inválido | 415 | `UNSUPPORTED_MEDIA_TYPE` | «La petición debe enviarse con contenido JSON.» |
+| Demasiadas peticiones | 429 | `RATE_LIMITED` | «Has hecho demasiadas peticiones seguidas. Espera 60 segundos.» |
+| Base de datos caída | 503 | `DATABASE_UNAVAILABLE` | «No se pudo conectar con la base de datos.» |
+| Servicio externo caído | 503 | `SERVICE_UNREACHABLE`, `AI_UNREACHABLE`, `CHROME_MISSING` | Explica qué servicio falla y qué hacer. |
+| Error inesperado | 500 | `INTERNAL_ERROR` | «Ocurrió un fallo al procesar la solicitud… (ref. `a1b2c3d4`).» |
+
+Los mensajes de validación de Zod se traducen al español mediante un mapa
+global (`backend/src/lib/validation.ts`); los que cada esquema define
+explícitamente tienen prioridad sobre ese mapa.
+
 ---
 
 ## 10. Seguridad
@@ -914,6 +944,7 @@ diarios de PostgreSQL, rotación de claves, límite de tamaño de subida a nivel
 | Tipos | `cd backend && npm run typecheck` + `cd frontend && npm run typecheck` | Backend (`tsc`) y frontend (`vue-tsc`). |
 | Build | `cd backend && npm run build` + `cd frontend && npm run build` | `tsc` del backend y bundle de Vite del frontend. |
 | Humo UI | `cd backend && node scripts/ui-smoke.mjs` | Login, inicio, previews reales de documentos, documentos, plantillas, editor de plantilla, diseños, hoja de Diseño con bandas editables, inserción de tabla y unión de celdas, ajustes, creación de documento, autoguardado, historial, datos, vista previa y buscar/reemplazar. Falla si hay errores de consola. |
+| Humo de errores | `cd backend && npm run smoke:errors` + `npm run smoke:errors:db` | Que cada origen de fallo (validación, duplicados, clave foránea, uuid inválido, error desconocido) devuelva el estado y el mensaje correctos, en español y sin filtrar detalles internos. |
 | Imágenes A+B | `cd backend && node scripts/image-smoke.mjs` | Inserción, arrastre, redimensionado, flotado, alineación, persistencia y exportación PDF/DOCX con imagen. |
 | Cabecera/pie | `cd backend && node scripts/chrome-smoke.mjs` | Pie visible y anclado en modo lectura, herencia documento → plantilla → diseño, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño de una plantilla y exportación. |
 | Exportación | `pdftotext` / `pdfimages` / `unzip` | Verifica datos interpolados, bandas, numeración real, imágenes embebidas y campos `PAGE`/`NUMPAGES` en DOCX. |
