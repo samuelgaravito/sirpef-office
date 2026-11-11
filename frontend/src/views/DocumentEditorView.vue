@@ -28,7 +28,7 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
@@ -78,6 +78,7 @@ import {
   relativeTime,
 } from '@/lib/labels';
 import { normalizeRouteId } from '@/lib/routes';
+import { isBlankContent, readEditorContent } from '@/lib/editor-content';
 import { VARIABLE_HIGHLIGHT_REFRESH, VariableHighlight } from '@/lib/variable-highlight';
 import { useAuthStore } from '@/stores/auth';
 import type {
@@ -148,6 +149,12 @@ function defaultData(schemaDef: VariableDef[]): VariableValues {
 /* ─────────────────── Borrador local del documento nuevo ─────────────────── */
 
 interface LocalDraft {
+  /**
+   * Versión del formato del borrador. Los borradores anteriores a la v2 se
+   * guardaban con el cuerpo vacío (el contenido se volcaba antes de que
+   * llegara al editor) y sirven para detectar los que hay que reparar.
+   */
+  version?: number;
   title: string;
   description: string;
   docType: string;
@@ -157,6 +164,16 @@ interface LocalDraft {
   footer: ChromeConfig | null;
   savedAt: string;
 }
+
+/** Versión actual del borrador local. */
+const DRAFT_VERSION = 2;
+
+/** Retardo para agrupar las escrituras del borrador local. */
+const DRAFT_SAVE_DELAY = 400;
+
+let draftTimer: number | undefined;
+/** Clave con la que se agendó el volcado pendiente del borrador. */
+let pendingDraftKey: string | undefined;
 
 function draftStorageKey(): string {
   return `sirpef:doc-draft:${templateId.value ?? 'blank'}`;
@@ -172,31 +189,73 @@ function readLocalDraft(): LocalDraft | null {
   }
 }
 
-function persistLocalDraft(): void {
-  if (!isNew.value) return;
+/**
+ * Escribe el borrador local.
+ *
+ * Recibe la clave con la que se agendó el volcado: al salir de la vista la
+ * ruta puede haber cambiado ya y la clave calculada sería otra.
+ */
+function persistLocalDraft(key = draftStorageKey()): void {
   try {
     const draft: LocalDraft = {
+      version: DRAFT_VERSION,
       title: title.value,
       description: description.value,
       docType: docType.value,
       data: data.value,
-      content: currentContent.value,
+      // Se lee el estado real del editor: un `computed` podría devolver el
+      // documento anterior al último `setContent` y guardar un borrador vacío.
+      content: readEditorContent(editor.value),
       header: chromePayload('header'),
       footer: chromePayload('footer'),
       savedAt: new Date().toISOString(),
     };
-    window.localStorage.setItem(draftStorageKey(), JSON.stringify(draft));
+    window.localStorage.setItem(key, JSON.stringify(draft));
   } catch {
     // Almacenamiento lleno o deshabilitado: el usuario puede guardar a mano.
   }
 }
 
 function clearLocalDraft(): void {
+  // Un volcado pendiente podría volver a escribir el borrador ya guardado
+  // en la base de datos.
+  window.clearTimeout(draftTimer);
+  draftTimer = undefined;
+  pendingDraftKey = undefined;
   try {
     window.localStorage.removeItem(draftStorageKey());
   } catch {
     // Sin almacenamiento disponible: nada que limpiar.
   }
+}
+
+/**
+ * Guarda el borrador local.
+ *
+ * Escribir el documento entero en `localStorage` en cada pulsación es
+ * costoso, así que se agrupan las escrituras en un pequeño retardo. El
+ * volcado se fuerza al salir de la vista para no perder lo último escrito.
+ */
+function scheduleLocalDraftPersist(): void {
+  if (!isNew.value) return;
+  pendingDraftKey = draftStorageKey();
+  window.clearTimeout(draftTimer);
+  draftTimer = window.setTimeout(() => {
+    const key = pendingDraftKey;
+    draftTimer = undefined;
+    pendingDraftKey = undefined;
+    if (key) persistLocalDraft(key);
+  }, DRAFT_SAVE_DELAY);
+}
+
+/** Escribe el borrador pendiente, si lo hay. */
+function flushLocalDraft(): void {
+  if (draftTimer === undefined) return;
+  window.clearTimeout(draftTimer);
+  draftTimer = undefined;
+  const key = pendingDraftKey;
+  pendingDraftKey = undefined;
+  if (key) persistLocalDraft(key);
 }
 
 // Al navegar entre documentos reutilizando esta vista, hay que recargar el
@@ -325,6 +384,17 @@ function resolveNumberVariable(variableKey: string): { text: string; title?: str
   return null;
 }
 
+/**
+ * Contenido vivo del editor.
+ *
+ * No se usa un `computed` sobre `editor.getJSON()`: el envoltorio de Vue 3 de
+ * TipTap difiere la invalidación reactiva del estado dos `requestAnimationFrame`,
+ * de modo que el `computed` seguía devolviendo el documento anterior al
+ * último `setContent`. Un `ref` sincronizado de forma explícita mantiene la
+ * vista reactiva sin que el contenido llegue atrasado.
+ */
+const currentContent = shallowRef<JSONContent>({ type: 'doc', content: [] });
+
 const editor = useEditor({
   extensions: [
     ...createEditorExtensions({
@@ -341,11 +411,19 @@ const editor = useEditor({
       spellcheck: 'true',
     },
   },
-  onUpdate: () => markDirty(),
+  onUpdate: () => {
+    syncEditorContent();
+    markDirty();
+  },
   onFocus: () => {
     activeChrome.value = 'body';
   },
 });
+
+/** Refleja en la vista el contenido real del editor. */
+function syncEditorContent(): void {
+  currentContent.value = readEditorContent(editor.value);
+}
 
 /* ─────────────────── Cabecera y pie editables ─────────────────── */
 
@@ -395,17 +473,20 @@ const activeEditor = computed(() => {
 });
 
 watch(canEdit, (editable) => {
-  editor.value?.setEditable(editable);
-  headerEditor.value?.setEditable(editable && chromeOpen.value);
-  footerEditor.value?.setEditable(editable && chromeOpen.value);
+  // `setEditable` emite un evento `update` en TipTap v3: sin el segundo
+  // argumento marcaba el documento como modificado (y guardaba un borrador
+  // vacío) sin que el usuario hubiera escrito nada.
+  editor.value?.setEditable(editable, false);
+  headerEditor.value?.setEditable(editable && chromeOpen.value, false);
+  footerEditor.value?.setEditable(editable && chromeOpen.value, false);
 });
 
 watch(chromeOpen, (open) => {
   // No tocamos el editor del cuerpo al abrir/cerrar las bandas: cambiar su
   // estado `editable` puede emitir una actualización y marcar el documento
   // como modificado sin que el usuario haya editado nada.
-  headerEditor.value?.setEditable(canEdit.value && open);
-  footerEditor.value?.setEditable(canEdit.value && open);
+  headerEditor.value?.setEditable(canEdit.value && open, false);
+  footerEditor.value?.setEditable(canEdit.value && open, false);
 });
 
 function chromeConfigFor(kind: ChromeKind): ChromeConfig {
@@ -521,11 +602,6 @@ const saveLabel = computed(() => {
   return 'Sin cambios';
 });
 
-const currentContent = computed<JSONContent>(() => {
-  const json = editor.value?.getJSON();
-  return (json ?? { type: 'doc', content: [] }) as JSONContent;
-});
-
 async function load(): Promise<void> {
   const id = documentId.value;
   if (!id) {
@@ -561,7 +637,8 @@ async function load(): Promise<void> {
 
     editor.value?.commands.setContent(response.document.content, { emitUpdate: false });
     editor.value?.commands.setTextSelection(1);
-    editor.value?.setEditable(canEdit.value);
+    editor.value?.setEditable(canEdit.value, false);
+    syncEditorContent();
 
     inheritedChrome.value = response.inheritedChrome;
     headerConfig.value = structuredClone(response.chrome.header);
@@ -570,8 +647,8 @@ async function load(): Promise<void> {
     footerSource.value = response.chrome.footerSource;
     setChromeContent('header', headerConfig.value.content);
     setChromeContent('footer', footerConfig.value.content);
-    headerEditor.value?.setEditable(canEdit.value && chromeOpen.value);
-    footerEditor.value?.setEditable(canEdit.value && chromeOpen.value);
+    headerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
+    footerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
     activeChrome.value = 'body';
 
     dirty.value = false;
@@ -659,7 +736,19 @@ async function hydrateNewDocument(): Promise<void> {
       setChromeContent('header', headerConfig.value.content);
       setChromeContent('footer', footerConfig.value.content);
 
-      editor.value?.commands.setContent(draft?.content ?? template.body, { emitUpdate: false });
+      // Un borrador heredado (v1) puede haberse guardado con el cuerpo vacío:
+      // en ese caso se conservan el resto de sus datos (título, variables,
+      // cabecera) y se restituye el cuerpo original de la plantilla. Un
+      // borrador v2 en blanco es intencional y se respeta tal cual.
+      const legacyBlankDraft =
+        draft !== null &&
+        draft.version !== DRAFT_VERSION &&
+        isBlankContent(draft.content) &&
+        !isBlankContent(template.body);
+
+      const body = legacyBlankDraft ? template.body : (draft?.content ?? template.body);
+
+      editor.value?.commands.setContent(body, { emitUpdate: false });
     } else {
       title.value = draft?.title ?? 'Documento sin título';
       description.value = draft?.description ?? '';
@@ -674,20 +763,35 @@ async function hydrateNewDocument(): Promise<void> {
       footerSource.value = 'design';
       setChromeContent('header', headerConfig.value.content);
       setChromeContent('footer', footerConfig.value.content);
-      editor.value?.commands.setContent(draft?.content ?? BLANK_CONTENT, { emitUpdate: false });
+      // Un borrador heredado en blanco no debe tapar la hoja inicial.
+      const legacyBlankDraft =
+        draft !== null &&
+        draft.version !== DRAFT_VERSION &&
+        isBlankContent(draft.content);
+      const blankBody = legacyBlankDraft
+        ? BLANK_CONTENT
+        : (draft?.content ?? BLANK_CONTENT);
+      editor.value?.commands.setContent(blankBody, { emitUpdate: false });
     }
 
     editor.value?.commands.setTextSelection(1);
-    editor.value?.setEditable(canEdit.value);
-    headerEditor.value?.setEditable(false);
-    footerEditor.value?.setEditable(false);
+    editor.value?.setEditable(canEdit.value, false);
+    headerEditor.value?.setEditable(false, false);
+    footerEditor.value?.setEditable(false, false);
+    syncEditorContent();
     activeChrome.value = 'body';
 
     dirty.value = Boolean(draft);
     lastSavedAt.value = draft ? new Date(draft.savedAt) : null;
     previewMode.value = false;
     previewHtml.value = '';
-    if (draft) toast.success('Se recuperó el borrador guardado en este navegador');
+    if (draft) {
+      toast.success('Se recuperó el borrador guardado en este navegador');
+      // Si el borrador era heredado y se reparó con el cuerpo de la
+      // plantilla, se reescribe ya con la versión actual para no tener que
+      // repararlo en cada visita.
+      if (draft.version !== DRAFT_VERSION) persistLocalDraft(draftStorageKey());
+    }
   } catch (error) {
     loadError.value =
       error instanceof Error ? error.message : 'No se pudo preparar el documento';
@@ -712,7 +816,7 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
       description: description.value.trim(),
       docType: docType.value,
       data: data.value,
-      content: currentContent.value,
+      content: readEditorContent(editor.value),
       header: chromePayload('header'),
       footer: chromePayload('footer'),
     });
@@ -744,7 +848,7 @@ function markDirty(): void {
   // Un documento nuevo nunca se guarda en la base de datos por autoguardado:
   // se conserva en el navegador hasta que el usuario pulsa Guardar/Enviar.
   if (isNew.value) {
-    persistLocalDraft();
+    scheduleLocalDraftPersist();
     return;
   }
   window.clearTimeout(saveTimer);
@@ -767,7 +871,7 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
     const response = await api.put<{ version: number; updatedAt: string }>(
       `/documents/${targetId}/content`,
       {
-        content: currentContent.value,
+        content: readEditorContent(editor.value),
         header: chromePayload('header'),
         footer: chromePayload('footer'),
         data: data.value,
@@ -1092,7 +1196,7 @@ async function saveAsTemplate(): Promise<void> {
       docType: docType.value,
       designId: null,
       schema: schema.value,
-      body: currentContent.value,
+      body: readEditorContent(editor.value),
       // La plantilla nueva conserva el marco visible del documento.
       header: chromePayload('header') ?? headerConfig.value,
       footer: chromePayload('footer') ?? footerConfig.value,
@@ -1105,6 +1209,9 @@ async function saveAsTemplate(): Promise<void> {
 }
 
 function onBeforeUnload(event: BeforeUnloadEvent): void {
+  // Se vuelca el borrador pendiente antes de cerrar: `localStorage` es
+  // síncrono, así que el contenido llega a guardarse.
+  flushLocalDraft();
   if (dirty.value) {
     event.preventDefault();
     event.returnValue = '';
@@ -1124,7 +1231,10 @@ function onKeydown(event: KeyboardEvent): void {
 onBeforeRouteLeave(async () => {
   // Un documento nuevo sin guardar no se crea: el borrador local sigue en el
   // navegador y se puede recuperar la próxima vez.
-  if (isNew.value) return true;
+  if (isNew.value) {
+    flushLocalDraft();
+    return true;
+  }
   if (!dirty.value || !canEdit.value) return true;
 
   const id = documentId.value;
@@ -1168,6 +1278,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown);
   window.clearTimeout(saveTimer);
   window.clearTimeout(previewTimer);
+  // Se vuelca el borrador pendiente: si no, se perdería lo escrito en los
+  // últimos milisegundos antes de salir de la vista.
+  flushLocalDraft();
 });
 </script>
 
