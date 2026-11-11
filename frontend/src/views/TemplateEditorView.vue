@@ -166,12 +166,17 @@ watch(
 );
 
 const design = computed(() => designs.value.find((item) => item.id === designId.value) ?? null);
-const designTokens = computed(() => design.value?.tokens ?? null);
 
-/** Los diseños inactivos solo se muestran si ya están asignados a la plantilla. */
-const designOptions = computed(() =>
-  designs.value.filter((item) => item.isActive || item.id === designId.value),
+/**
+ * Diseño con el que se dibuja la plantilla: el que está en uso. Si la
+ * cuenta no tiene ninguno en uso, se usa el que la plantilla tenía guardado.
+ */
+const activeDesign = computed(
+  () => designs.value.find((item) => item.isCurrent) ?? null,
 );
+
+const effectiveDesign = computed(() => activeDesign.value ?? design.value);
+const designTokens = computed(() => effectiveDesign.value?.tokens ?? null);
 
 /* ───────────────────────────── Numeración ───────────────────────────── */
 
@@ -254,13 +259,13 @@ function onDocTypeChange(): void {
 }
 
 const inheritedChrome = computed<ResolvedChrome>(() =>
-  resolveChrome({ template: null, design: design.value?.tokens ?? null }),
+  resolveChrome({ template: null, design: effectiveDesign.value?.tokens ?? null }),
 );
 
 const effectiveChrome = computed<ResolvedChrome>(() =>
   resolveChrome({
     template: { header: templateHeader.value, footer: templateFooter.value },
-    design: design.value?.tokens ?? null,
+    design: effectiveDesign.value?.tokens ?? null,
   }),
 );
 
@@ -344,11 +349,6 @@ function syncInheritedChrome(): void {
   }
 }
 
-function onDesignChange(): void {
-  dirty.value = true;
-  syncInheritedChrome();
-}
-
 function toggleChromeMode(): void {
   chromeOpen.value = !chromeOpen.value;
   if (!chromeOpen.value) {
@@ -389,7 +389,7 @@ async function load(): Promise<void> {
 
     if (isNew.value) {
       const requestedDesign = typeof route.query.designId === 'string' ? route.query.designId : null;
-      if (requestedDesign && designs.value.some((item) => item.id === requestedDesign && item.isActive)) {
+      if (requestedDesign && designs.value.some((item) => item.id === requestedDesign)) {
         designId.value = requestedDesign;
       }
     } else {
@@ -420,7 +420,7 @@ async function load(): Promise<void> {
     // Inicializa las bandas con lo heredado del diseño (o sin diseño).
     const initialChrome = resolveChrome({
       template: { header: templateHeader.value, footer: templateFooter.value },
-      design: design.value?.tokens ?? null,
+      design: effectiveDesign.value?.tokens ?? null,
     });
     setChromeContent('header', initialChrome.header.content);
     setChromeContent('footer', initialChrome.footer.content);
@@ -582,7 +582,8 @@ async function togglePreview(): Promise<void> {
       name: name.value.trim() || 'Vista previa de plantilla',
       body: (editor.value?.getJSON() ?? { type: 'doc', content: [] }) as JSONContent,
       schema: schema.value,
-      designId: designId.value,
+      // Sin diseño: el servidor aplica el que está en uso.
+      designId: null,
       header: templateHeader.value,
       footer: templateFooter.value,
       numbering: {
@@ -609,14 +610,9 @@ async function createDocument(): Promise<void> {
     return;
   }
   if (dirty.value) await save();
-  try {
-    const data = await api.post<{ document: { id: string } }>('/documents', {
-      templateId: templateId.value,
-    });
-    await router.push({ name: 'document', params: { id: data.document.id } });
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo crear el documento');
-  }
+  // Abre el editor en modo «documento nuevo»: no se crea la fila hasta que el
+  // usuario guarde o envíe.
+  await router.push({ name: 'document-new', query: { template: templateId.value } });
 }
 
 function clone(): void {
@@ -1036,15 +1032,20 @@ onMounted(() => {
 
               <div>
                 <label class="label">Diseño</label>
-                <select v-model="designId" class="field" @change="onDesignChange">
-                  <option :value="null">Sin diseño (predeterminado)</option>
-                  <option v-for="item in designOptions" :key="item.id" :value="item.id">
-                    {{ item.name }}{{ item.isActive ? '' : ' (inactivo)' }}
-                  </option>
-                </select>
+                <p
+                  class="rounded-lg border border-hairline bg-surface-muted/60 px-3 py-2 text-[12.5px] text-ink-muted"
+                >
+                  <template v-if="activeDesign">
+                    Esta plantilla se dibuja con <strong class="text-ink">{{ activeDesign.name }}</strong>,
+                    el diseño que está en uso.
+                  </template>
+                  <template v-else>
+                    No hay ningún diseño en uso: se usará el que tenía guardado la plantilla.
+                  </template>
+                </p>
                 <p class="mt-1 text-[11px] text-ink-subtle">
-                  La hoja y las bandas de cabecera/pie se actualizan con el diseño.
-                  Solo se muestran diseños activos y el que ya está asignado.
+                  Las plantillas siempre usan el diseño en uso. Puedes cambiarlo en
+                  <strong>Diseños</strong>, sin tocar estas plantillas.
                 </p>
               </div>
 

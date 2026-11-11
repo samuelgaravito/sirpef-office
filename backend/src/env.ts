@@ -50,8 +50,13 @@ const envSchema = z.object({
 
   JWT_ACCESS_SECRET: z.string().min(16, 'JWT_ACCESS_SECRET debe tener al menos 16 caracteres'),
   JWT_REFRESH_SECRET: z.string().min(16, 'JWT_REFRESH_SECRET debe tener al menos 16 caracteres'),
-  ACCESS_TOKEN_TTL: z.string().default('15m'),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  /**
+   * Vida del access token. El frontend renueva solo con la cookie de refresco,
+   * así que este valor define cada cuánto se hace ese canje silencioso.
+   */
+  ACCESS_TOKEN_TTL: z.string().default('8h'),
+  /** Vida del refresh token local: define cuánto sobrevive la sesión sin login. */
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(90),
 
   SEED_ADMIN_EMAIL: z.string().default('admin@sirpefoffice.local'),
   SEED_ADMIN_PASSWORD: z.string().default('admin'),
@@ -68,8 +73,8 @@ const envSchema = z.object({
   SVA_API_KEY: z.string().default(''),
   SVA_TIMEOUT_MS: z.coerce.number().int().positive().default(8_000),
   SVA_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(10 * 60 * 1_000),
-  /** Los usuarios de SVA renuevan su sesión local durante 7 días. */
-  SVA_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(7),
+  /** Los usuarios de SVA renuevan su sesión local durante 30 días. */
+  SVA_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
 
   AI_PROVIDER: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'none']).default('none'),
   AI_BASE_URL: z.string().default('https://api.openai.com/v1'),

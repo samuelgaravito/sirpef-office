@@ -3,6 +3,7 @@ import { useEditor } from '@tiptap/vue-3';
 import {
   ArrowLeft,
   Check,
+  CheckCircle2,
   ChevronDown,
   Cloud,
   CloudOff,
@@ -10,6 +11,7 @@ import {
   Eye,
   FileCode2,
   FileText,
+  GitCompareArrows,
   History,
   Loader2,
   Lock,
@@ -21,8 +23,10 @@ import {
   Search,
   Send,
   Share2,
+  ShieldCheck,
   Sparkles,
   TriangleAlert,
+  XCircle,
 } from 'lucide-vue-next';
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
@@ -34,6 +38,8 @@ import FindReplacePanel from '@/components/editor/FindReplacePanel.vue';
 import ShareDialog from '@/components/editor/ShareDialog.vue';
 import VariablePanel from '@/components/editor/VariablePanel.vue';
 import VersionHistoryPanel from '@/components/editor/VersionHistoryPanel.vue';
+import NumberingBadge from '@/components/editor/NumberingBadge.vue';
+import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
 import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
@@ -45,7 +51,9 @@ import {
   buildAutoDescription,
   clampChromeWidth,
   createEditorExtensions,
+  DOCUMENT_NUMBER_VARIABLE,
   emptyChrome,
+  NUMBERING_MESSAGES,
 } from '@sirpefoffice/shared';
 import type {
   ChromeConfig,
@@ -55,14 +63,32 @@ import type {
   DocType,
   DocumentStatus,
   JSONContent,
+  NumberingPreview,
   ResolvedChrome,
+  VariableDef,
   VariableValues,
 } from '@sirpefoffice/shared';
-import { docTypeLabel, STATUS_LABELS, STATUS_STYLES, relativeTime } from '@/lib/labels';
+import {
+  docTypeLabel,
+  EXPORT_FORBIDDEN_MESSAGE,
+  formatDateTime,
+  STATUS_ADMIN_ONLY_MESSAGE,
+  STATUS_LABELS,
+  STATUS_STYLES,
+  relativeTime,
+} from '@/lib/labels';
 import { normalizeRouteId } from '@/lib/routes';
-import { VariableHighlight } from '@/lib/variable-highlight';
+import { VARIABLE_HIGHLIGHT_REFRESH, VariableHighlight } from '@/lib/variable-highlight';
 import { useAuthStore } from '@/stores/auth';
-import type { DocumentDetailResponse, PendingMessageSummary, ShareRecord } from '@/types';
+import type {
+  DocumentDetailResponse,
+  DocumentRejection,
+  DocumentSummary,
+  InboxMessageDetail,
+  PendingMessageSummary,
+  ShareRecord,
+  TemplateDetailResponse,
+} from '@/types';
 
 const route = useRoute();
 const router = useRouter();
@@ -71,10 +97,115 @@ const auth = useAuthStore();
 const { refresh: refreshInbox } = useInboxBadge();
 
 const documentId = computed(() => normalizeRouteId(route.params.id));
+/**
+ * Modo "documento nuevo": la fila todavía no existe en la base de datos. El
+ * contenido se guarda en `localStorage` y solo se materializa (POST) cuando el
+ * usuario pulsa Guardar, Enviar o Exportar.
+ */
+const isNew = computed(() => route.name === 'document-new');
+const templateId = computed(() => {
+  const value = route.query.template;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+});
+const originMessageId = computed(() => normalizeRouteId(route.query.message));
+const fromInbox = computed(
+  () => route.query.from === 'inbox' && Boolean(originMessageId.value),
+);
+/** Vuelve al mensaje que abrió el documento, no siempre a la lista. */
+const backTarget = computed(() =>
+  fromInbox.value
+    ? { name: 'inbox-message', params: { id: originMessageId.value! } }
+    : { name: 'documents' },
+);
+const backLabel = computed(() =>
+  fromInbox.value ? 'Volver al mensaje' : 'Volver a documentos',
+);
+
+const BLANK_CONTENT: JSONContent = {
+  type: 'doc',
+  content: [
+    {
+      type: 'heading',
+      attrs: { level: 1 },
+      content: [{ type: 'text', text: 'Documento sin título' }],
+    },
+    { type: 'paragraph' },
+  ],
+};
+
+/** Valores iniciales de las variables, igual que en el backend. */
+function defaultData(schemaDef: VariableDef[]): VariableValues {
+  const values: VariableValues = {};
+  for (const variable of schemaDef) {
+    if (variable.defaultValue !== undefined) values[variable.key] = variable.defaultValue;
+    else if (variable.type === 'table') values[variable.key] = [];
+    else if (variable.type === 'multiselect') values[variable.key] = [];
+    else if (variable.type === 'checkbox') values[variable.key] = false;
+  }
+  return values;
+}
+
+/* ─────────────────── Borrador local del documento nuevo ─────────────────── */
+
+interface LocalDraft {
+  title: string;
+  description: string;
+  docType: string;
+  data: VariableValues;
+  content: JSONContent;
+  header: ChromeConfig | null;
+  footer: ChromeConfig | null;
+  savedAt: string;
+}
+
+function draftStorageKey(): string {
+  return `sirpef:doc-draft:${templateId.value ?? 'blank'}`;
+}
+
+function readLocalDraft(): LocalDraft | null {
+  try {
+    const raw = window.localStorage.getItem(draftStorageKey());
+    if (!raw) return null;
+    return JSON.parse(raw) as LocalDraft;
+  } catch {
+    return null;
+  }
+}
+
+function persistLocalDraft(): void {
+  if (!isNew.value) return;
+  try {
+    const draft: LocalDraft = {
+      title: title.value,
+      description: description.value,
+      docType: docType.value,
+      data: data.value,
+      content: currentContent.value,
+      header: chromePayload('header'),
+      footer: chromePayload('footer'),
+      savedAt: new Date().toISOString(),
+    };
+    window.localStorage.setItem(draftStorageKey(), JSON.stringify(draft));
+  } catch {
+    // Almacenamiento lleno o deshabilitado: el usuario puede guardar a mano.
+  }
+}
+
+function clearLocalDraft(): void {
+  try {
+    window.localStorage.removeItem(draftStorageKey());
+  } catch {
+    // Sin almacenamiento disponible: nada que limpiar.
+  }
+}
 
 // Al navegar entre documentos reutilizando esta vista, hay que recargar el
 // detalle para no conservar el esquema ni los datos del documento anterior.
-watch(documentId, (id) => {
+watch([documentId, templateId], ([id]) => {
+  if (isNew.value) {
+    void hydrateNewDocument();
+    return;
+  }
   if (!id) {
     void router.replace({ name: 'documents' });
     return;
@@ -87,6 +218,8 @@ const loadError = ref('');
 const title = ref('');
 const description = ref('');
 const docNumber = ref<string | null>(null);
+/** Previsto del borrador (orientativo; no reserva el correlativo). */
+const numberingPreview = ref<NumberingPreview | null>(null);
 const docType = ref<string>('blank');
 const status = ref<DocumentStatus>('draft');
 const permission = ref<'owner' | 'editor' | 'viewer'>('viewer');
@@ -94,7 +227,22 @@ const version = ref(1);
 const locked = ref(false);
 const canExport = ref(true);
 const pendingMessage = ref<PendingMessageSummary | null>(null);
+const lastRejection = ref<DocumentRejection | null>(null);
+const reviewMessage = ref<InboxMessageDetail | null>(null);
+const reviewLoading = ref(false);
+const reviewError = ref(false);
+const reviewExpanded = ref(false);
+const reviewInitialVersion = ref<number | null>(null);
+const rejectOpen = ref(false);
+const rejectionPanelOpen = ref(true);
 const sendOpen = ref(false);
+const sendMode = ref<'send' | 'approve'>('send');
+const approveMessageId = ref<string | null>(null);
+const sendPrefill = ref<{ subject: string; body: string; recipientIds: string[] }>({
+  subject: '',
+  body: '',
+  recipientIds: [],
+});
 const data = ref<VariableValues>({});
 const schema = ref<DocumentDetailResponse['templateSchema']>([]);
 const design = ref<DesignTokens | null>(null);
@@ -123,6 +271,19 @@ const canEdit = computed(
   () => (permission.value === 'owner' || permission.value === 'editor') && !locked.value,
 );
 
+const canReview = computed(() =>
+  Boolean(reviewMessage.value?.canApprove && pendingMessage.value && !locked.value),
+);
+const reviewVersionChanged = computed(() =>
+  Boolean(reviewMessage.value && reviewMessage.value.documentVersion !== version.value),
+);
+const reviewRecipientNames = computed(
+  () => reviewMessage.value?.recipients.map((recipient) => recipient.name).join(', ') ?? '',
+);
+const approveSentVersion = computed(() =>
+  sendMode.value === 'approve' ? (reviewMessage.value?.documentVersion ?? null) : null,
+);
+
 /** Los estados finales solo los asigna el flujo de bandeja. */
 const manualStatusOptions = (
   Object.entries(STATUS_LABELS) as [DocumentStatus, string][]
@@ -146,12 +307,30 @@ const inheritedChrome = ref<ResolvedChrome | null>(null);
 /** Evita que cargar contenido programáticamente cree una sobrescritura. */
 let syncingChrome = false;
 
+/**
+ * Sustituye `{{numero_documento}}` por el número asignado o, en un borrador,
+ * por el previsto. Las decoraciones no modifican el documento guardado.
+ */
+function resolveNumberVariable(variableKey: string): { text: string; title?: string } | null {
+  if (variableKey !== DOCUMENT_NUMBER_VARIABLE) return null;
+  if (docNumber.value) {
+    return { text: docNumber.value, title: NUMBERING_MESSAGES.variableLabel };
+  }
+  if (numberingPreview.value) {
+    return {
+      text: numberingPreview.value.number,
+      title: NUMBERING_MESSAGES.variablePendingTitle,
+    };
+  }
+  return null;
+}
+
 const editor = useEditor({
   extensions: [
     ...createEditorExtensions({
       placeholder: 'Escribe el contenido del documento…',
     }),
-    VariableHighlight,
+    VariableHighlight.configure({ resolve: resolveNumberVariable }),
     PaginationExtension,
   ],
   content: null,
@@ -180,7 +359,7 @@ function chromeEditorOptions(kind: ChromeKind) {
             : 'Pie: texto, {page} y {total} para la numeración…',
         pageBreak: false,
       }),
-      VariableHighlight,
+      VariableHighlight.configure({ resolve: resolveNumberVariable }),
     ],
     content: null,
     editable: false,
@@ -199,6 +378,15 @@ function chromeEditorOptions(kind: ChromeKind) {
 
 const headerEditor = useEditor(chromeEditorOptions('header'));
 const footerEditor = useEditor(chromeEditorOptions('footer'));
+
+// El valor que sustituye a `{{numero_documento}}` debe refrescarse cuando se
+// asigna el número o cambia el previsto.
+watch([docNumber, numberingPreview], () => {
+  for (const instance of [editor.value, headerEditor.value, footerEditor.value]) {
+    const view = instance?.view;
+    if (view) view.dispatch(view.state.tr.setMeta(VARIABLE_HIGHLIGHT_REFRESH, true));
+  }
+});
 
 const activeEditor = computed(() => {
   if (activeChrome.value === 'header') return headerEditor.value ?? null;
@@ -322,6 +510,11 @@ function chromePayload(kind: ChromeKind): ChromeConfig | null {
 
 const saveLabel = computed(() => {
   if (saving.value) return 'Guardando…';
+  if (isNew.value) {
+    return dirty.value
+      ? 'Borrador local · pulsa Guardar para crearlo'
+      : 'Sin guardar · no se creará hasta que pulses Guardar';
+  }
   if (conflict.value) return 'Conflicto de versión';
   if (dirty.value) return 'Cambios sin guardar';
   if (lastSavedAt.value) return `Guardado ${relativeTime(lastSavedAt.value)}`;
@@ -348,6 +541,7 @@ async function load(): Promise<void> {
     title.value = response.document.title;
     description.value = response.document.description ?? '';
     docNumber.value = response.document.docNumber;
+    numberingPreview.value = response.document.numberingPreview ?? null;
     docType.value = response.document.docType;
     status.value = response.document.status;
     permission.value = response.document.permission;
@@ -355,6 +549,9 @@ async function load(): Promise<void> {
     locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent';
     canExport.value = response.canExport;
     pendingMessage.value = response.document.pendingMessage ?? null;
+    lastRejection.value = response.document.lastRejection ?? null;
+    rejectionPanelOpen.value = true;
+    reviewExpanded.value = false;
     data.value = response.document.data ?? {};
     schema.value = response.templateSchema ?? [];
     design.value = response.design?.tokens ?? response.document.designTokens ?? null;
@@ -381,6 +578,7 @@ async function load(): Promise<void> {
     conflict.value = false;
     previewMode.value = false;
     previewHtml.value = '';
+    void loadReviewMessage();
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : 'No se pudo cargar el documento';
   } finally {
@@ -388,14 +586,177 @@ async function load(): Promise<void> {
   }
 }
 
+/**
+ * Carga el mensaje completo del envío pendiente para que el jefe pueda
+ * revisarlo y decidir sin salir del editor.
+ */
+async function loadReviewMessage(): Promise<void> {
+  if (!pendingMessage.value || !auth.isAdmin) {
+    reviewMessage.value = null;
+    reviewError.value = false;
+    reviewLoading.value = false;
+    return;
+  }
+
+  reviewLoading.value = true;
+  reviewError.value = false;
+  try {
+    reviewMessage.value = await api.get<InboxMessageDetail>(
+      `/inbox/${pendingMessage.value.id}`,
+    );
+  } catch {
+    reviewMessage.value = null;
+    reviewError.value = true;
+  } finally {
+    reviewLoading.value = false;
+  }
+}
+
+/**
+ * Prepara el editor para un documento que todavía no existe en la base de
+ * datos. No crea ninguna fila: hidrata desde la plantilla (o en blanco) y
+ * recupera el borrador guardado en este navegador, si lo hay.
+ */
+async function hydrateNewDocument(): Promise<void> {
+  loading.value = true;
+  loadError.value = '';
+  permission.value = 'owner';
+  status.value = 'draft';
+  locked.value = false;
+  // Todavía no hay documento: solo el administrador puede exportar, el
+  // asistente necesita que el jefe autorice la exportación al aprobar.
+  canExport.value = auth.isAdmin;
+  pendingMessage.value = null;
+  lastRejection.value = null;
+  shares.value = [];
+  ownerName.value = auth.user?.name ?? '';
+  docNumber.value = null;
+  numberingPreview.value = null;
+  conflict.value = false;
+
+  const draft = readLocalDraft();
+
+  try {
+    if (templateId.value) {
+      const response = await api.get<TemplateDetailResponse>(`/templates/${templateId.value}`);
+      const template = response.template;
+
+      title.value = draft?.title ?? template.name;
+      description.value = draft?.description ?? (template.description ?? '').slice(0, 500);
+      docType.value = template.docType;
+      schema.value = template.schema ?? [];
+      data.value = { ...defaultData(template.schema ?? []), ...(draft?.data ?? {}) };
+      design.value = response.design?.tokens ?? null;
+      inheritedChrome.value = response.inheritedChrome;
+      numberingPreview.value = response.numberingPreview ?? null;
+
+      const header = draft?.header ?? response.chrome.header;
+      headerConfig.value = structuredClone(header);
+      headerSource.value = draft?.header ? 'document' : response.chrome.headerSource;
+      const footer = draft?.footer ?? response.chrome.footer;
+      footerConfig.value = structuredClone(footer);
+      footerSource.value = draft?.footer ? 'document' : response.chrome.footerSource;
+      setChromeContent('header', headerConfig.value.content);
+      setChromeContent('footer', footerConfig.value.content);
+
+      editor.value?.commands.setContent(draft?.content ?? template.body, { emitUpdate: false });
+    } else {
+      title.value = draft?.title ?? 'Documento sin título';
+      description.value = draft?.description ?? '';
+      docType.value = 'blank';
+      schema.value = [];
+      data.value = draft?.data ?? {};
+      design.value = null;
+      inheritedChrome.value = null;
+      headerConfig.value = emptyChrome('header');
+      footerConfig.value = emptyChrome('footer');
+      headerSource.value = 'design';
+      footerSource.value = 'design';
+      setChromeContent('header', headerConfig.value.content);
+      setChromeContent('footer', footerConfig.value.content);
+      editor.value?.commands.setContent(draft?.content ?? BLANK_CONTENT, { emitUpdate: false });
+    }
+
+    editor.value?.commands.setTextSelection(1);
+    editor.value?.setEditable(canEdit.value);
+    headerEditor.value?.setEditable(false);
+    footerEditor.value?.setEditable(false);
+    activeChrome.value = 'body';
+
+    dirty.value = Boolean(draft);
+    lastSavedAt.value = draft ? new Date(draft.savedAt) : null;
+    previewMode.value = false;
+    previewHtml.value = '';
+    if (draft) toast.success('Se recuperó el borrador guardado en este navegador');
+  } catch (error) {
+    loadError.value =
+      error instanceof Error ? error.message : 'No se pudo preparar el documento';
+  } finally {
+    loading.value = false;
+  }
+}
+
+/**
+ * Crea la fila del documento en la base de datos con el contenido actual.
+ * Es la única vía por la que un documento nuevo llega a existir.
+ */
+async function materialize(navigateToDocument = true): Promise<string | null> {
+  if (!isNew.value) return documentId.value;
+  if (saving.value) return null;
+
+  saving.value = true;
+  try {
+    const response = await api.post<{ document: DocumentSummary }>('/documents', {
+      templateId: templateId.value ?? undefined,
+      title: title.value.trim() || 'Documento sin título',
+      description: description.value.trim(),
+      docType: docType.value,
+      data: data.value,
+      content: currentContent.value,
+      header: chromePayload('header'),
+      footer: chromePayload('footer'),
+    });
+
+    const created = response.document;
+    clearLocalDraft();
+    dirty.value = false;
+    conflict.value = false;
+    version.value = created.version;
+    docNumber.value = created.docNumber;
+    numberingPreview.value = created.numberingPreview ?? null;
+    lastSavedAt.value = new Date(created.updatedAt);
+
+    if (navigateToDocument) {
+      await router.replace({ name: 'document', params: { id: created.id } });
+    }
+    return created.id;
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'No se pudo crear el documento');
+    return null;
+  } finally {
+    saving.value = false;
+  }
+}
+
 function markDirty(): void {
   if (!canEdit.value) return;
   dirty.value = true;
+  // Un documento nuevo nunca se guarda en la base de datos por autoguardado:
+  // se conserva en el navegador hasta que el usuario pulsa Guardar/Enviar.
+  if (isNew.value) {
+    persistLocalDraft();
+    return;
+  }
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => void save(), 1400);
 }
 
 async function save(checkpoint = false, targetId: string | null = documentId.value): Promise<void> {
+  if (isNew.value) {
+    if (!dirty.value && !checkpoint) return;
+    await materialize();
+    return;
+  }
   if (!targetId || !canEdit.value || saving.value) return;
   if (!checkpoint && !dirty.value) return;
 
@@ -443,6 +804,14 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
 }
 
 async function saveAndExit(): Promise<void> {
+  if (isNew.value) {
+    const id = await materialize(false);
+    if (!id) return;
+    toast.success('Documento guardado');
+    await router.replace({ name: 'documents' });
+    return;
+  }
+
   const id = documentId.value;
   if (!id || !canEdit.value || saving.value) return;
 
@@ -451,21 +820,102 @@ async function saveAndExit(): Promise<void> {
   if (dirty.value || conflict.value) return;
 
   toast.success('Documento guardado');
-  await router.replace({ name: 'documents' });
+  await router.replace(backTarget.value);
 }
 
 /** Guarda los cambios pendientes antes de abrir el diálogo de envío. */
-async function openSendDialog(): Promise<void> {
+async function openSendDialog(prefill?: {
+  subject?: string;
+  body?: string;
+  recipientIds?: string[];
+}): Promise<void> {
   if (!canEdit.value || pendingMessage.value) return;
+  sendMode.value = 'send';
+  approveMessageId.value = null;
+
+  if (isNew.value) {
+    const id = await materialize();
+    if (!id) return;
+    sendPrefill.value = {
+      subject: prefill?.subject ?? '',
+      body: prefill?.body ?? '',
+      recipientIds: prefill?.recipientIds ?? [],
+    };
+    sendOpen.value = true;
+    return;
+  }
+
   if (dirty.value) await save();
   if (dirty.value || conflict.value) return;
+  sendPrefill.value = {
+    subject: prefill?.subject ?? '',
+    body: prefill?.body ?? '',
+    recipientIds: prefill?.recipientIds ?? [],
+  };
   sendOpen.value = true;
 }
 
-async function onSent(): Promise<void> {
-  sendOpen.value = false;
+/** Abre la aprobación del envío pendiente sin salir del editor. */
+async function openApproveDialog(): Promise<void> {
+  if (!reviewMessage.value) return;
+  if (dirty.value) await save();
+  if (dirty.value || conflict.value) return;
+
+  sendMode.value = 'approve';
+  approveMessageId.value = reviewMessage.value.id;
+  sendPrefill.value = {
+    subject: reviewMessage.value.subject,
+    body: reviewMessage.value.body,
+    recipientIds: reviewMessage.value.recipients.map((recipient) => recipient.userId),
+  };
+  sendOpen.value = true;
+}
+
+function openRejectDialog(): void {
+  rejectOpen.value = true;
+}
+
+async function onRejected(): Promise<void> {
+  rejectOpen.value = false;
   await load();
+}
+
+function openHistory(initialVersion: number | null = null): void {
+  reviewInitialVersion.value = initialVersion;
+  historyOpen.value = true;
+}
+
+/** Reenvía el documento con los datos del envío rechazado. */
+function resendRejected(): void {
+  if (!lastRejection.value) return;
+  void openSendDialog({
+    subject: lastRejection.value.subject,
+    body: lastRejection.value.body,
+    recipientIds: lastRejection.value.recipientIds,
+  });
+}
+
+async function onSent(payload?: { id: string; status: 'sent' | 'pending_approval' }): Promise<void> {
+  const wasApprove = sendMode.value === 'approve';
+  sendOpen.value = false;
+  sendMode.value = 'send';
+  approveMessageId.value = null;
   await refreshInbox();
+
+  // Al aprobar desde el editor, el documento se sella y se queda a la vista.
+  if (wasApprove) {
+    await load();
+    return;
+  }
+
+  // Al corregir y reenviar, lleva de vuelta al mensaje para que el asistente
+  // vea de inmediato el estado «Esperando aprobación».
+  if ((lastRejection.value || fromInbox.value) && payload?.id) {
+    await router.replace({ name: 'inbox-message', params: { id: payload.id } });
+    return;
+  }
+
+  await load();
 }
 
 async function overwriteConflict(): Promise<void> {
@@ -483,13 +933,19 @@ async function overwriteConflict(): Promise<void> {
 }
 
 async function updateStatus(next: DocumentStatus): Promise<void> {
-  const id = documentId.value;
-  if (!id || !auth.isAdmin || !canEdit.value) return;
+  let id = documentId.value;
+  if (!id) {
+    if (!isNew.value || !auth.isAdmin || !canEdit.value) return;
+    id = await materialize();
+    if (!id) return;
+  }
+  if (!auth.isAdmin || !canEdit.value) return;
   const previous = status.value;
   status.value = next;
   try {
     await api.patch(`/documents/${id}`, { status: next });
     toast.success(`Estado: ${STATUS_LABELS[next]}`);
+    await load();
   } catch (error) {
     status.value = previous;
     toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
@@ -503,10 +959,14 @@ function useAutoDescription(): void {
 }
 
 async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
-  const id = documentId.value;
-  if (!id) return;
+  let id = documentId.value;
+  if (!id) {
+    if (!isNew.value) return;
+    id = await materialize();
+    if (!id) return;
+  }
   if (!canExport.value) {
-    toast.error('No tienes permiso para exportar este memo sellado');
+    toast.error(EXPORT_FORBIDDEN_MESSAGE);
     return;
   }
   try {
@@ -519,14 +979,19 @@ async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
 }
 
 async function printPreview(): Promise<void> {
-  const id = documentId.value;
-  if (!id) return;
+  let id = documentId.value;
+  if (!id) {
+    if (!isNew.value) return;
+    id = await materialize();
+    if (!id) return;
+  }
   if (!canExport.value) {
-    toast.error('No tienes permiso para exportar este memo sellado');
+    toast.error(EXPORT_FORBIDDEN_MESSAGE);
     return;
   }
   try {
     if (dirty.value) await save(true, id);
+    // Sin `preview=1`: es el documento completo, listo para imprimir o guardar.
     const html = await api.get<string>(`/documents/${id}/html`);
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
     window.open(url, '_blank', 'noopener');
@@ -571,12 +1036,17 @@ async function togglePreview(): Promise<void> {
     return;
   }
 
-  const id = documentId.value;
-  if (!id) return;
+  let id = documentId.value;
+  if (!id) {
+    if (!isNew.value) return;
+    id = await materialize();
+    if (!id) return;
+  }
   loadingPreview.value = true;
   try {
     if (dirty.value) await save(true, id);
-    previewHtml.value = await api.get<string>(`/documents/${id}/html`);
+    // `preview=1`: vista previa dentro de la app (no es una exportación).
+    previewHtml.value = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
     previewMode.value = true;
   } catch (error) {
     toast.error(error instanceof Error ? error.message : 'No se pudo generar la vista previa');
@@ -604,7 +1074,8 @@ function schedulePreview(): void {
     const id = documentId.value;
     if (!id) return;
     try {
-      previewHtml.value = await api.get<string>(`/documents/${id}/html`);
+      // `preview=1`: vista previa dentro de la app (no es una exportación).
+      previewHtml.value = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
     } catch {
       /* la vista previa se reintentará en el siguiente cambio */
     }
@@ -651,6 +1122,9 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onBeforeRouteLeave(async () => {
+  // Un documento nuevo sin guardar no se crea: el borrador local sigue en el
+  // navegador y se puede recuperar la próxima vez.
+  if (isNew.value) return true;
   if (!dirty.value || !canEdit.value) return true;
 
   const id = documentId.value;
@@ -672,12 +1146,15 @@ onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload);
   window.addEventListener('keydown', onKeydown);
 
-  if (!documentId.value) {
+  if (isNew.value) {
+    await hydrateNewDocument();
+  } else if (!documentId.value) {
     await router.replace({ name: 'documents' });
     return;
+  } else {
+    await load();
   }
 
-  await load();
   try {
     const settings = await api.get<{ configured: boolean }>('/ai/status');
     aiConfigured.value = settings.configured;
@@ -699,9 +1176,10 @@ onBeforeUnmount(() => {
     <!-- Barra superior -->
     <header class="flex h-14 shrink-0 items-center gap-2 border-b border-hairline bg-surface px-3">
       <RouterLink
-        :to="{ name: 'documents' }"
+        :to="backTarget"
         class="rounded-lg p-2 text-ink-muted hover:bg-surface-hover hover:text-ink"
-        aria-label="Volver a documentos"
+        :aria-label="backLabel"
+        :title="backLabel"
       >
         <ArrowLeft class="size-4.5" />
       </RouterLink>
@@ -717,11 +1195,13 @@ onBeforeUnmount(() => {
             aria-label="Título del documento"
             @input="markDirty"
           />
-          <span
-            v-if="docNumber"
-            class="chip !bg-accent-soft !text-accent"
-            title="También disponible en el documento como {{numero_documento}}"
-          >{{ docNumber }}</span>
+          <NumberingBadge
+            :doc-number="docNumber"
+            :numbering="numberingPreview"
+            :loading="loading"
+            variant="full"
+            class="shrink-0"
+          />
         </div>
         <p class="mt-0.5 flex items-center gap-1.5 px-1.5 text-[11px] text-ink-subtle">
           <component
@@ -745,16 +1225,19 @@ onBeforeUnmount(() => {
       </select>
       <span
         v-else
-        :class="['hidden rounded-full px-2.5 py-1 text-[11px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
+        :class="['hidden items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
+        :title="STATUS_ADMIN_ONLY_MESSAGE"
+        aria-readonly="true"
       >
         {{ STATUS_LABELS[status] }}
+        <Lock class="size-3 opacity-60" />
       </span>
 
       <RouterLink
         v-if="pendingMessage && auth.canSeeMenu('inbox')"
         :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }"
         class="tool-btn sm:hidden"
-        title="Envío pendiente de aprobación"
+        title="Ver mensaje del envío pendiente"
       >
         <Send class="size-4" />
       </RouterLink>
@@ -765,7 +1248,7 @@ onBeforeUnmount(() => {
         class="tool-btn sm:hidden"
         :disabled="saving"
         title="Enviar documento"
-        @click="openSendDialog"
+        @click="openSendDialog()"
       >
         <Send class="size-4" />
       </button>
@@ -776,7 +1259,7 @@ onBeforeUnmount(() => {
         class="btn btn-outline btn-sm hidden sm:inline-flex"
       >
         <Send class="size-3.5" />
-        Pendiente
+        Ver mensaje
       </RouterLink>
 
       <button
@@ -784,7 +1267,7 @@ onBeforeUnmount(() => {
         type="button"
         class="btn btn-primary btn-sm hidden sm:inline-flex"
         :disabled="saving"
-        @click="openSendDialog"
+        @click="openSendDialog()"
       >
         <Send class="size-3.5" />
         Enviar
@@ -811,7 +1294,7 @@ onBeforeUnmount(() => {
         <PanelTop class="size-4" />
       </button>
 
-      <button type="button" class="tool-btn" title="Historial de versiones" @click="historyOpen = true">
+      <button type="button" class="tool-btn" title="Historial de versiones" @click="openHistory()">
         <History class="size-4" />
       </button>
 
@@ -846,25 +1329,22 @@ onBeforeUnmount(() => {
           </button>
         </template>
         <template #content>
-          <template v-if="!locked || canExport">
-            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
-              <FileText class="size-4" />
-              PDF
-            </button>
-            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
-              <FileText class="size-4" />
-              Word (.docx)
-            </button>
-            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
-              <FileCode2 class="size-4" />
-              HTML
-            </button>
-          </template>
-          <p v-else class="px-2.5 py-2 text-[11.5px] leading-snug text-ink-subtle">
-            Solo el administrador puede exportar este memo sellado.
+          <p v-if="!canExport" class="px-2.5 py-2 text-[11.5px] leading-snug text-ink-subtle">
+            {{ EXPORT_FORBIDDEN_MESSAGE }}
           </p>
+          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
+            <FileText class="size-4" />
+            PDF
+          </button>
+          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
+            <FileText class="size-4" />
+            Word (.docx)
+          </button>
+          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
+            <FileCode2 class="size-4" />
+            HTML
+          </button>
           <button
-            v-if="!locked || canExport"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="printPreview"
@@ -908,13 +1388,160 @@ onBeforeUnmount(() => {
       <button type="button" class="btn btn-danger btn-sm" @click="overwriteConflict">Conservar mis cambios</button>
     </div>
 
-    <!-- Solicitud pendiente de aprobación -->
-    <div v-if="pendingMessage && !locked" class="flex flex-wrap items-center gap-2 border-b border-warning/20 bg-warning-soft/60 px-4 py-2 text-[12.5px] text-ink-muted">
-      <Send class="size-4 shrink-0 text-warning" />
-      <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
-      <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
-        Ver solicitud
-      </RouterLink>
+    <!-- Panel de revisión del envío pendiente -->
+    <div v-if="pendingMessage && !locked" class="border-b border-warning/20 bg-warning-soft/50">
+      <!-- Jefe / aprobador -->
+      <div v-if="auth.isAdmin" class="flex flex-wrap items-start gap-3 px-4 py-3 text-[12.5px]">
+        <ShieldCheck class="mt-0.5 size-5 shrink-0 text-warning" />
+        <div class="min-w-0 flex-1">
+          <p class="font-semibold text-ink">Revisión de envío</p>
+
+          <p v-if="reviewLoading" class="mt-0.5 flex items-center gap-1.5 text-ink-muted">
+            <Loader2 class="size-3.5 animate-spin" />
+            Cargando detalles de la solicitud…
+          </p>
+
+          <template v-else-if="reviewMessage">
+            <p class="mt-0.5 text-ink-muted">
+              Enviado por
+              <strong class="font-medium text-ink">{{ reviewMessage.senderName }}</strong>
+              · {{ formatDateTime(reviewMessage.createdAt) }}
+            </p>
+            <p class="mt-1 font-medium text-ink">{{ reviewMessage.subject }}</p>
+
+            <p v-if="reviewVersionChanged" class="mt-1 flex items-center gap-1 font-medium text-danger">
+              <TriangleAlert class="size-3.5 shrink-0" />
+              El documento cambió desde el envío (v{{ reviewMessage.documentVersion }} → v{{ version }}).
+            </p>
+
+            <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button
+                type="button"
+                class="text-[11.5px] font-medium text-accent hover:underline"
+                @click="reviewExpanded = !reviewExpanded"
+              >
+                {{ reviewExpanded ? 'Ocultar detalles' : 'Ver detalles del mensaje' }}
+              </button>
+              <RouterLink
+                :to="{ name: 'inbox-message', params: { id: reviewMessage.id } }"
+                class="text-[11.5px] font-medium text-ink-muted hover:text-ink"
+              >
+                Ver mensaje completo
+              </RouterLink>
+              <button
+                v-if="reviewVersionChanged"
+                type="button"
+                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                @click="openHistory(reviewMessage.documentVersion)"
+              >
+                <GitCompareArrows class="size-3.5" />
+                Ver cambios
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                @click="togglePreview()"
+              >
+                <Eye class="size-3.5" />
+                {{ previewMode ? 'Volver a editar' : 'Ver resultado final' }}
+              </button>
+            </div>
+
+            <div v-if="reviewExpanded" class="mt-2 rounded-lg border border-warning/20 bg-surface/80 px-3 py-2 text-[12px]">
+              <p v-if="reviewMessage.body" class="whitespace-pre-wrap text-ink-muted">
+                {{ reviewMessage.body }}
+              </p>
+              <p :class="['mt-1 text-ink-subtle', reviewMessage.body ? '' : 'mt-0']">
+                <span class="font-medium text-ink-muted">Para:</span>
+                {{ reviewRecipientNames || 'Sin destinatarios' }}
+              </p>
+              <p class="mt-0.5 text-ink-subtle">
+                <span class="font-medium text-ink-muted">Versión enviada:</span>
+                v{{ reviewMessage.documentVersion }}
+              </p>
+            </div>
+          </template>
+
+          <p v-else class="mt-0.5 text-ink-muted">
+            No se pudieron cargar los detalles.
+            <RouterLink
+              :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }"
+              class="font-medium text-accent hover:underline"
+            >
+              Abrir mensaje
+            </RouterLink>
+          </p>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="btn btn-outline btn-sm"
+            :disabled="!canReview"
+            @click="openRejectDialog"
+          >
+            <XCircle class="size-4" />
+            Devolver o rechazar
+          </button>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :disabled="!canReview || saving"
+            @click="openApproveDialog()"
+          >
+            <CheckCircle2 class="size-4" />
+            Aprobar y enviar
+          </button>
+        </div>
+      </div>
+
+      <!-- Remitente / otros usuarios -->
+      <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[12.5px] text-ink-muted">
+        <Send class="size-4 shrink-0 text-warning" />
+        <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
+        <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
+          Ver solicitud
+        </RouterLink>
+      </div>
+    </div>
+
+    <!-- Documento devuelto para corrección (móvil; en escritorio va en el panel lateral) -->
+    <div
+      v-if="lastRejection"
+      :class="[
+        'flex flex-wrap items-start gap-3 border-b px-4 py-2.5 text-[12.5px] lg:hidden',
+        lastRejection.allowSenderEdit
+          ? 'border-danger/20 bg-danger-soft/70 text-danger'
+          : 'border-danger/20 bg-danger-soft/50 text-danger',
+      ]"
+    >
+      <TriangleAlert class="mt-0.5 size-4 shrink-0" />
+      <div class="min-w-0 flex-1">
+        <p class="font-semibold">
+          Devuelto para corrección
+          <template v-if="lastRejection.rejectedByName"> por {{ lastRejection.rejectedByName }}</template>
+          <template v-if="lastRejection.rejectedAt"> el {{ formatDateTime(lastRejection.rejectedAt) }}</template>
+        </p>
+        <p v-if="lastRejection.reason" class="mt-0.5 whitespace-pre-wrap text-ink-muted">
+          <strong class="font-medium text-ink">Motivo:</strong> {{ lastRejection.reason }}
+        </p>
+        <p v-if="!lastRejection.allowSenderEdit" class="mt-0.5 text-ink-muted">
+          El documento quedó cerrado y no se puede editar.
+        </p>
+        <p v-else class="mt-0.5 text-ink-muted">
+          Corrige lo indicado y reenvía el documento a aprobación.
+        </p>
+      </div>
+      <button
+        v-if="lastRejection.allowSenderEdit && canEdit"
+        type="button"
+        class="btn btn-primary btn-sm shrink-0"
+        :disabled="saving"
+        @click="resendRejected"
+      >
+        <Send class="size-3.5" />
+        Reenviar
+      </button>
     </div>
 
     <!-- Documento sellado -->
@@ -1016,6 +1643,81 @@ onBeforeUnmount(() => {
 
       <!-- Panel de datos -->
       <aside class="hidden w-[336px] shrink-0 border-l border-hairline bg-surface lg:flex lg:flex-col">
+        <!-- Mensaje del revisor mientras se corrige -->
+        <div v-if="lastRejection" class="shrink-0 border-b border-danger/20 bg-danger-soft/40">
+          <div class="flex items-center gap-2 px-4 py-2.5">
+            <TriangleAlert class="size-4 shrink-0 text-danger" />
+            <p class="text-[12px] font-semibold text-danger">Mensaje del revisor</p>
+            <button
+              type="button"
+              class="ml-auto rounded p-1 text-danger/70 transition-colors hover:bg-danger/10"
+              :aria-label="rejectionPanelOpen ? 'Ocultar mensaje del revisor' : 'Mostrar mensaje del revisor'"
+              @click="rejectionPanelOpen = !rejectionPanelOpen"
+            >
+              <ChevronDown
+                :class="['size-3.5 transition-transform', rejectionPanelOpen ? 'rotate-180' : '']"
+              />
+            </button>
+          </div>
+
+          <div v-if="rejectionPanelOpen" class="max-h-[44vh] overflow-y-auto px-4 pb-3 text-[12px]">
+            <p class="text-[11.5px] text-ink-muted">
+              <template v-if="lastRejection.rejectedByName">
+                Devuelto por
+                <strong class="font-medium text-ink">{{ lastRejection.rejectedByName }}</strong>
+              </template>
+              <template v-if="lastRejection.rejectedAt">
+                · {{ formatDateTime(lastRejection.rejectedAt) }}
+              </template>
+            </p>
+
+            <p class="mt-1.5 font-medium text-ink">{{ lastRejection.subject }}</p>
+            <p
+              v-if="lastRejection.body"
+              class="mt-1 whitespace-pre-wrap text-[11.5px] leading-snug text-ink-muted"
+            >
+              {{ lastRejection.body }}
+            </p>
+
+            <div class="mt-2 rounded-lg border border-danger/20 bg-surface px-2.5 py-2">
+              <p class="text-[10.5px] font-semibold uppercase tracking-wide text-danger">Motivo</p>
+              <p class="mt-0.5 whitespace-pre-wrap text-[12px] text-ink">
+                {{ lastRejection.reason || 'Sin motivo indicado' }}
+              </p>
+            </div>
+
+            <p class="mt-1.5 text-[11px] text-ink-subtle">
+              Versión enviada: v{{ lastRejection.documentVersion }} ·
+              {{ lastRejection.recipientIds.length }} destinatario{{ lastRejection.recipientIds.length === 1 ? '' : 's' }}
+            </p>
+
+            <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[11.5px] text-ink-muted">
+              El documento quedó cerrado y no se puede editar.
+            </p>
+
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button
+                v-if="lastRejection.allowSenderEdit && canEdit"
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="saving"
+                @click="resendRejected"
+              >
+                <Send class="size-3.5" />
+                Reenviar
+              </button>
+              <button type="button" class="btn btn-outline btn-sm" @click="togglePreview()">
+                <Eye class="size-3.5" />
+                Ver resultado final
+              </button>
+            </div>
+
+            <p v-if="lastRejection.allowSenderEdit" class="mt-1.5 text-[11px] text-ink-subtle">
+              Corrige lo indicado y reenvía el documento a aprobación.
+            </p>
+          </div>
+        </div>
+
         <div class="shrink-0 border-b border-hairline px-4 py-3">
           <label class="label" for="document-description">Descripción</label>
           <textarea
@@ -1046,6 +1748,8 @@ onBeforeUnmount(() => {
             :disabled="!canEdit"
             :ai-enabled="aiConfigured && canEdit"
             :generating="generating"
+            :doc-number="docNumber"
+            :numbering="numberingPreview"
             @update:model-value="onDataChange"
             @generate="generateWithAI"
           />
@@ -1108,6 +1812,8 @@ onBeforeUnmount(() => {
               :disabled="!canEdit"
               :ai-enabled="aiConfigured && canEdit"
               :generating="generating"
+              :doc-number="docNumber"
+              :numbering="numberingPreview"
               @update:model-value="onDataChange"
               @generate="generateWithAI"
             />
@@ -1121,6 +1827,7 @@ onBeforeUnmount(() => {
       :document-id="documentId ?? ''"
       :current-content="currentContent"
       :current-version="version"
+      :initial-version="reviewInitialVersion"
       :can-restore="canEdit"
       @close="historyOpen = false"
       @restored="load"
@@ -1139,8 +1846,24 @@ onBeforeUnmount(() => {
       :document-id="documentId ?? ''"
       :document-title="title"
       :expected-version="version"
+      :mode="sendMode"
+      :message-id="approveMessageId"
+      :sent-version="approveSentVersion"
+      :initial-subject="sendPrefill.subject"
+      :initial-body="sendPrefill.body"
+      :initial-recipient-ids="sendPrefill.recipientIds"
+      :doc-number="docNumber"
+      :numbering="numberingPreview"
       @close="sendOpen = false"
       @sent="onSent"
+    />
+
+    <RejectDocumentDialog
+      v-if="reviewMessage"
+      :open="rejectOpen"
+      :message-id="reviewMessage.id"
+      @close="rejectOpen = false"
+      @rejected="onRejected"
     />
 
     <div v-if="!canEdit" class="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2">

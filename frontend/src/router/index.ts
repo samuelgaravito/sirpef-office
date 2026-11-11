@@ -67,6 +67,12 @@ const router = createRouter({
       ],
     },
     {
+      path: '/documents/new',
+      name: 'document-new',
+      component: () => import('@/views/DocumentEditorView.vue'),
+      meta: { title: 'Nuevo documento', fullscreen: true, menu: 'documents' },
+    },
+    {
       path: '/documents/:id',
       name: 'document',
       component: () => import('@/views/DocumentEditorView.vue'),

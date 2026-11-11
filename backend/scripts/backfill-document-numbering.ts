@@ -1,0 +1,244 @@
+/**
+ * Migra los correlativos existentes al modelo de numeración diferida.
+ *
+ * Hace tres cosas, de forma idempotente (se registra en `app_migrations`):
+ *
+ * 1. Libera el número de los documentos que siguen en borrador: un borrador
+ *    no debe consumir la secuencia.
+ * 2. Rellena `numbering_prefix/year/value` de los documentos ya oficiales para
+ *    poder recalcular los contadores sin parsear el texto formateado.
+ * 3. Recalcula `document_counters` desde los documentos realmente emitidos.
+ *
+ * Antes de tocar nada guarda una copia JSON de `documents` y
+ * `document_counters` en `data/backups/`. Si algún documento con número no
+ * encaja con ninguna serie, aborta sin aplicar: reutilizar un número ya
+ * emitido rompería el índice único.
+ *
+ * Uso: npx tsx scripts/backfill-document-numbering.ts
+ */
+import { mkdir, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+import postgres from 'postgres';
+
+import { env } from '../src/env.js';
+
+const MIGRATION_ID = 'numbering-backfill-v1';
+
+interface SeriesRow {
+  prefix: string;
+  start_value: number;
+  padding: number;
+  include_year: boolean;
+}
+
+interface ParsedNumber {
+  prefix: string;
+  year: number;
+  value: number;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Asocia un número formateado con su serie. Se prueban primero los prefijos
+ * más largos para resolver la ambigüedad de `2026-0007` (serie `2026` sin año
+ * frente a serie sin prefijo con año).
+ */
+function parseNumber(number: string, series: SeriesRow[]): ParsedNumber | null {
+  const ordered = [...series].sort((a, b) => b.prefix.length - a.prefix.length);
+
+  for (const row of ordered) {
+    const head = row.prefix ? `${escapeRegex(row.prefix)}-` : '';
+    const pattern = row.include_year
+      ? new RegExp(`^${head}(\\d{4})-(\\d+)$`)
+      : new RegExp(`^${head}(\\d+)$`);
+    const match = pattern.exec(number);
+    if (!match) continue;
+
+    return row.include_year
+      ? { prefix: row.prefix, year: Number(match[1]), value: Number(match[2]) }
+      : { prefix: row.prefix, year: 0, value: Number(match[1]) };
+  }
+
+  return null;
+}
+
+async function main(): Promise<void> {
+  const sql = postgres(env.DATABASE_URL, { max: 5, onnotice: () => {} });
+
+  try {
+    await sql`
+      create table if not exists app_migrations (
+        id text primary key,
+        applied_at timestamptz not null default now(),
+        details jsonb not null default '{}'::jsonb
+      )
+    `;
+
+    const [already] = await sql`
+      select id from app_migrations where id = ${MIGRATION_ID} limit 1
+    `;
+    if (already) {
+      console.log(`La migración ${MIGRATION_ID} ya se aplicó. Nada que hacer.`);
+      return;
+    }
+
+    const series = (await sql`
+      select prefix, start_value, padding, include_year from numbering_series
+    `) as unknown as SeriesRow[];
+
+    const numbered = (await sql`
+      select id, doc_number, status, data
+      from documents
+      where doc_number is not null
+      order by created_at
+    `) as unknown as Array<{
+      id: string;
+      doc_number: string;
+      status: string;
+      data: Record<string, unknown> | null;
+    }>;
+
+    const parsed = new Map<string, ParsedNumber>();
+    const unmatched: Array<{ id: string; docNumber: string }> = [];
+
+    for (const row of numbered) {
+      const match = parseNumber(row.doc_number, series);
+      if (!match) {
+        unmatched.push({ id: row.id, docNumber: row.doc_number });
+        continue;
+      }
+      parsed.set(row.id, match);
+    }
+
+    if (unmatched.length > 0) {
+      console.error(
+        `\n✖ Hay ${unmatched.length} documento(s) con número que no encajan en ninguna serie.`,
+      );
+      console.error('  No se aplicó ningún cambio. Corrige las series y vuelve a ejecutar:\n');
+      for (const row of unmatched.slice(0, 50)) {
+        console.error(`  - ${row.docNumber}  (documento ${row.id})`);
+      }
+      process.exit(1);
+    }
+
+    const backup = {
+      createdAt: new Date().toISOString(),
+      migration: MIGRATION_ID,
+      documents: await sql`select * from documents`,
+      documentCounters: await sql`select * from document_counters`,
+    };
+
+    const backupDir = resolve(process.cwd(), 'data/backups');
+    await mkdir(backupDir, { recursive: true });
+    const backupPath = resolve(
+      backupDir,
+      `numbering-backfill-${new Date().toISOString().replace(/[:.]/g, '-')}.json`,
+    );
+    await writeFile(backupPath, JSON.stringify(backup, null, 2), 'utf8');
+    console.log(`Copia de seguridad: ${backupPath}`);
+
+    const counts = {
+      releasedDrafts: 0,
+      numbered: 0,
+      countersUpdated: 0,
+      countersKept: 0,
+    };
+
+    await sql.begin(async (tx) => {
+      /* 1. Liberar borradores. */
+      const released = await tx`
+        update documents
+        set doc_number = null,
+            numbering_prefix = null,
+            numbering_year = null,
+            numbering_value = null,
+            data = case
+              when data ? 'numero' then data - 'numero'
+              else data
+            end
+        where doc_number is not null
+          and status = 'draft'
+        returning id
+      `;
+      counts.releasedDrafts = released.length;
+
+      /* 2. Rellenar la identidad de numeración de los oficiales. */
+      for (const row of numbered) {
+        if (row.status === 'draft') continue;
+        const match = parsed.get(row.id);
+        if (!match) continue;
+
+        await tx`
+          update documents
+          set numbering_prefix = ${match.prefix},
+              numbering_year = ${match.year},
+              numbering_value = ${match.value}
+          where id = ${row.id}
+        `;
+        counts.numbered += 1;
+      }
+
+      /* 3. Recalcular contadores desde los documentos emitidos. */
+      const maxima = (await tx`
+        select numbering_prefix as prefix,
+               numbering_year as year,
+               max(numbering_value) as value
+        from documents
+        where numbering_value is not null
+        group by numbering_prefix, numbering_year
+      `) as unknown as Array<{ prefix: string; year: number; value: number }>;
+
+      for (const row of maxima) {
+        await tx`
+          insert into document_counters (scope, year, counter)
+          values (${row.prefix}, ${row.year}, ${row.value})
+          on conflict (scope, year)
+          do update set counter = ${row.value}
+        `;
+        counts.countersUpdated += 1;
+      }
+
+      /**
+       * Series cuyos documentos eran todos borradores: el contador vigente se
+       * quedó alto. Si no hay ningún documento emitido en el período actual,
+       * se devuelve al valor inicial para no arrastrar el hueco.
+       */
+      for (const row of series) {
+        const year = row.include_year ? new Date().getFullYear() : 0;
+        const hasOfficial = maxima.some(
+          (item) => item.prefix === row.prefix && Number(item.year) === year,
+        );
+        if (hasOfficial) continue;
+
+        const updated = await tx`
+          update document_counters
+          set counter = ${row.start_value - 1}
+          where scope = ${row.prefix}
+            and year = ${year}
+            and counter >= ${row.start_value}
+          returning scope
+        `;
+        counts.countersUpdated += updated.length;
+        counts.countersKept += 1;
+      }
+
+      await tx`
+        insert into app_migrations (id, details)
+        values (${MIGRATION_ID}, ${tx.json(counts)})
+      `;
+    });
+
+    console.log('Migración completada:', counts);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+main().catch((error) => {
+  console.error('Error en la migración:', error);
+  process.exit(1);
+});

@@ -39,6 +39,7 @@ y conservar el **historial de versiones** de cada documento.
 | Crear desde plantilla | Al pulsar una tarjeta de **Inicio** o **Usar** en **Plantillas**, el documento se crea directamente con el diseño de la plantilla y se abre el editor. Sin modal intermedio. |
 | Nueva plantilla | Al crear una plantilla se abre una modal para elegir el diseño inicial, con vista previa y opción **Sin diseño**. Después se abre el editor con ese diseño cargado. |
 | Diseños | 3 diseños iniciales + editor visual con **hoja de trabajo ampliable**: tipografía (incluida **Georama** autoalojada), tamaño, **interlineado global con presets y valor personalizado**, colores, formato de página (A4/Letter/Legal/Folio), orientación, márgenes, membrete, logotipo, encabezado y pie con `{page}` / `{total}`. La cabecera y el pie admiten **alto y ancho configurables** (hasta el 100 % del ancho de página) e **imágenes globales** colocadas en milímetros, con arrastre, redimensionado, modos **Ajustar/Estirar** y anclaje a los bordes superior e inferior, directamente sobre la hoja, con zoom, desplazamiento y panel ocultable. |
+| Diseño en uso | Cada cuenta tiene **un único diseño en uso** (un interruptor en la tarjeta de **Diseños**): es el con el que se dibujan **todas las plantillas**. Al encender otro se apaga el anterior, así que cambiar de aspecto (Navidad → año nuevo) es un clic y **no obliga a rehacer ninguna plantilla**. Los documentos ya creados **conservan el diseño con el que nacieron**. |
 | Editor | TipTap 3 con barra de herramientas tipo cinta: estilos de párrafo, negrita/cursiva/subrayado/tachado, colores, resaltado, alineación, listas, tablas, imágenes, enlaces, regla horizontal, deshacer/rehacer y selector de tipografía con Georama. |
 | Tablas | Inserción visual de 1×1 a 8×8 con cabecera opcional, barra contextual para añadir/eliminar filas y columnas, unir y dividir celdas, alternar cabeceras, fondo de tabla/celda, alineación, padding, bordes, anchos y distribución. La estructura se conserva en editor, HTML, PDF y DOCX, incluidas las celdas combinadas. |
 | Imágenes | Redimensionado con tiradores, tamaños predefinidos (automático/pequeña/mediana/grande/ancho total), alineación de bloque y modos flotantes: izquierda/derecha con ajuste de texto y detrás del texto (marca de agua). Arrastre libre en los modos flotantes. Mismo resultado en editor, vista previa, PDF, DOCX y HTML. |
@@ -255,6 +256,44 @@ comparticiones.
    una hoja ampliable con zoom y desplazamiento. El botón del ojo del editor de plantilla
    genera una vista previa completa con el borrador actual, sin guardar ni crear una versión.
 
+## Diseño en uso
+
+Las plantillas guardan su **estructura** (cuerpo TipTap), sus **variables** (esquema) y el
+diseño que tenían. El aspecto, en cambio, es de la **cuenta**: hay **un único diseño en
+uso** y todas las plantillas se dibujan con él.
+
+```
+Diseños                        Plantillas                   Documentos
+─────────                      ───────────                  ──────────
+[✓] Navidad 2026  En uso ──┐   todas cargan el             cada uno guarda
+[  ] Año nuevo 2027        ├──▶ diseño en uso             el diseño con el
+[  ] Genérico              ┘                             que se creó (fijo)
+```
+
+- En **Diseños**, cada tarjeta tiene un interruptor **«En uso»**. Al encender uno se apaga
+  el que lo estuviera: solo puede haber uno por cuenta (lo garantiza un índice único en la
+  base de datos).
+- Las **plantillas** se dibujan siempre con el diseño en uso, en la vista previa, el PDF y
+  el DOCX. No hay que recrearlas ni tocar sus variables para cambiar de aspecto.
+- Los **documentos** guardan el diseño concreto con el que nacieron y **no cambian nunca**:
+  el documento de diciembre se sigue exportando con el diseño de Navidad aunque en enero
+  se encienda «Año nuevo 2027».
+- Editar los **tokens** de un diseño sí se refleja en sus documentos (así se corrigen
+  erratas).
+- Si apagas el diseño en uso, las plantillas vuelven al diseño que tenían guardado.
+- El diseño en uso es **por cuenta**: un diseño compartido no arrastra el diseño en uso de
+  otro usuario.
+- El interruptor se mueve con animación y **no recarga la lista**: el cambio se aplica al
+  instante y, si el servidor fallara, se revierte. Encender un diseño **no reordena** la
+  lista (no cambia su fecha de actualización).
+
+### Cambiar de aspecto por temporada
+
+1. Crea el diseño nuevo (**Nuevo diseño**) y dale el aspecto que quieras.
+2. En su tarjeta, enciende el interruptor **«En uso»**: el anterior se apaga solo.
+3. Todas las plantillas pasan al diseño nuevo al instante.
+4. Los documentos ya emitidos siguen con el diseño que tenían.
+
 ## Variables y numeración automática
 
 Las plantillas usan la sintaxis `{{clave}}`. Cada variable se define en el esquema de la
@@ -274,10 +313,31 @@ plantilla con tipo, etiqueta, obligatoriedad, valor por defecto, opciones y ayud
   clona la fila por cada elemento del arreglo `items`.
 - Los valores se interpolan en el **servidor** (exportación y vista previa) y en el
   cliente solo se muestran resaltados, para no alterar el documento original.
-- Al crear un documento se asigna un correlativo de la **serie de su plantilla**. La serie
-  se identifica por el prefijo (`MEM`, `OFI`…), de modo que varias plantillas que lo
-  compartan suman la misma secuencia. La configuración vive en `numbering_series` y el
-  contador en `document_counters` (sin carreras: `INSERT … ON CONFLICT DO UPDATE`).
+- El correlativo de la **serie de su plantilla** se asigna cuando el documento se
+  **oficializa** (al aprobarlo y enviarlo, o al pasar a `final`/`archived`), no al crearlo.
+  Un borrador nunca consume la secuencia: la fila nace con `doc_number = NULL` y la UI
+  muestra un **número previsto** orientativo que no reserva nada. La serie se identifica
+  por el prefijo (`MEM`, `OFI`…), de modo que varias plantillas que lo compartan suman la
+  misma secuencia. La configuración vive en `numbering_series` y el contador en
+  `document_counters` (sin carreras: `INSERT … ON CONFLICT DO UPDATE` dentro de la misma
+  transacción que sella el documento). Cada documento emitido guarda además su identidad
+  de serie en `documents.numbering_prefix/year/value`, lo que permite recalcular los
+  contadores sin parsear el texto.
+- **Crear un documento no escribe en la base de datos.** El editor se abre en modo
+  virtual (`/documents/new`) y el autoguardado vive en `localStorage`. La fila se crea
+  solo al pulsar **Guardar**, **Enviar** o **Exportar**. Abrir un documento existente
+  tampoco escribe: si el contenido no cambió, el `PUT` no incrementa la versión.
+- El **número previsto** se explica en toda la interfaz, no solo en un tooltip: el editor
+  muestra `MEM-2026-0008` con la leyenda `se asigna al aprobar` y `Serie MEM · puede
+  cambiar si otro memo se aprueba antes`; la tarjeta del listado añade `· previsto`; el
+  panel de **Datos del documento** incluye una fila fija «Número de documento»; y el
+  diálogo de envío avisa *«Al aprobarse, este documento quedará numerado como
+  MEM-2026-0008»*. El número previsto se calcula con una lectura (`numberingPreview`) y
+  se expone también en `GET /api/templates/:id` para el modo «documento nuevo».
+- Dentro del documento, `{{numero_documento}}` se **sustituye visualmente** por el número
+  asignado o el previsto (subrayado punteado y tooltip «se confirmará al aprobar»); el
+  texto guardado sigue siendo el token. En la vista previa y el PDF de un borrador el
+  número aparece como `MEM-2026-0008 (previsto)`.
 - Desde **Ajustes de la plantilla** se activa o desactiva la numeración y se define el
   prefijo (opcional), el número inicial, los dígitos y el reinicio anual. Si el prefijo
   queda vacío se usa una serie sin prefijo: `2026-0001`, `2026-0002`… Todas las plantillas
@@ -286,10 +346,10 @@ plantilla con tipo, etiqueta, obligatoriedad, valor por defecto, opciones y ayud
   series se consultan y ajustan con `GET /api/numbering` y `PUT /api/numbering/:prefix`.
 - El número está disponible como **variable de sistema** `{{numero_documento}}` en el
   cuerpo, la cabecera y el pie. Se inserta desde **Ajustes → Numeración** o desde la
-  pestaña **Variables**, y se rellena automáticamente al crear el documento. La clave
+  pestaña **Variables**, y se rellena al oficializar el documento. La clave
   `numero_documento` está reservada y no puede definirse como variable normal.
 - Las plantillas antiguas que usan `{{numero}}` como campo manual reciben el correlativo
-  precargado al crear el documento, aunque el usuario puede editarlo después.
+  cuando el documento se oficializa, aunque el usuario puede editarlo después.
 - Los campos automáticos (`fecha`, `firmante`, `cargo`) se inicializan con el usuario y
   la fecha actual, y quedan editables.
 
@@ -420,6 +480,17 @@ sin guardar ni crear una versión. La lista usa
 `designId=none` como **Sin diseño**. Las respuestas se renderizan en servidor y se
 muestran en un iframe aislado, igual que la vista previa de un documento.
 
+Cuando el diseño de la plantilla tiene una **variante activada**, la vista previa usa los
+tokens de la variante (igual que el editor y la exportación). La caché de miniaturas se
+invalida con `effectiveDesignUpdatedAt`, que cambia al encender o apagar una campaña.
+
+### API del diseño en uso
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/designs` | Devuelve `isCurrent`: si ese diseño es el que está en uso. |
+| `POST /api/designs/:id/activate` | `{ "isCurrent": true \| false }` → el interruptor: al encenderlo se apaga el que lo estuviera. Solo el propietario. |
+
 ## Asistente de IA
 
 La IA es **opcional**: con `AI_PROVIDER=none` la aplicación funciona al 100 % en modo manual.
@@ -456,6 +527,29 @@ exportarlo el administrador que aprobó (o rechazó) el envío, los administrado
 figuran como destinatarios y, únicamente si el jefe lo autorizó al aprobar, el asistente
 remitente. El formato se elige en el menú **Exportar**: PDF, Word (`.docx`) o HTML.
 
+### Quién puede exportar
+
+| Usuario | Documento abierto (borrador) | Memo sellado |
+| --- | --- | --- |
+| Administrador | sí | sí, si aprobó el envío o es destinatario |
+| Asistente (`member`) | **no** | solo si el jefe autorizó la exportación al aprobar |
+
+Un borrador **nunca** está autorizado: para obtener una copia, el jefe tiene que aprobar
+el envío y marcar «el asistente también podrá exportarlo». El botón **Exportar** sigue
+visible para todos, pero al pulsarlo sin autorización explica qué falta; el HTML
+completo del documento (el que se descarga o se imprime) sigue la misma regla. La
+**vista previa dentro de la app** (miniaturas de las tarjetas, vista previa del editor e
+historial de versiones) queda disponible para cualquiera con acceso: no es una
+exportación.
+
+### Quién puede cambiar el estado
+
+Solo los **administradores** cambian el estado a mano (Borrador, Final, Archivado). Un
+asistente ve el estado como una etiqueta informative con candado, y el servidor rechaza
+el cambio con `403` aunque se manipule la petición. Los estados que dependen del flujo
+de bandeja (`Enviado`, `Aprobado`, `Rechazado`, `Anulado`) solo los asigna el propio
+flujo.
+
 ## Scripts disponibles
 
 ### Backend
@@ -474,6 +568,11 @@ cd backend
 | `npm run db:up` / `db:down` / `db:reset` | Controla el contenedor de PostgreSQL. |
 | `npm run db:migrate` / `db:generate` / `db:seed` | Migraciones, generación de migraciones y seed. |
 | `npm run db:migrate:fullwidth` | Migra cabeceras y pies existentes al ancho de página (idempotente, con copia de seguridad). |
+| `npm run db:migrate:numbering` | Libera el número de los borradores, rellena `documents.numbering_*` y recalcula los contadores (idempotente, con copia de seguridad). |
+| `npm run db:reconcile-counters` | Compara `document_counters` con los documentos emitidos e informa/corrige desviaciones (`--apply`). |
+| `npm run db:purge-empty-drafts` | Elimina definitivamente los borradores nunca usados (simulación por defecto; `--apply` ejecuta y deja bitácora). |
+| `npm run smoke:numbering` | Con la API levantada, verifica la numeración diferida: el borrador no consume número, el previsto no reserva, la oficialización asigna y las aprobaciones simultáneas no repiten. |
+| `npm run smoke:campaign` | Con la API levantada, verifica el diseño en uso: encender uno apaga el anterior, las plantillas cargan el que está en uso sin tocar estructura ni variables, el documento creado guarda ese diseño y lo conserva tras cambiar el diseño en uso (limpia los datos de prueba). |
 | `npm run admin:reset` | Alinea el email y la contraseña del administrador con los valores del seed. |
 | `npm run smoke:inbox` | Con la API levantada, prueba el flujo de bandeja: solicitud de envío, aprobación, autorización de exportación, sellado, lectura, rechazo y bloqueo de edición/borrado/exportación (crea usuarios y documentos temporales y los elimina). |
 | `node scripts/ui-smoke.mjs` | Prueba de humo de la UI con Chrome headless: previews reales de documentos y plantillas, hoja de Diseño con bandas editables y ancho de página completo, inserción de tablas y unión de celdas, creación directa de documentos, modal de diseño al crear plantilla y flujo completo (capturas en `/tmp/sirpefoffice-shots`). |

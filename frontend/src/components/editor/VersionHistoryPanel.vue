@@ -15,6 +15,8 @@ const props = defineProps<{
   documentId: string;
   currentContent: JSONContent;
   currentVersion: number;
+  /** Versión concreta que se quiere comparar al abrir el panel. */
+  initialVersion?: number | null;
   canRestore: boolean;
 }>();
 
@@ -41,8 +43,13 @@ async function load(): Promise<void> {
   try {
     const data = await api.get<ListResponse<VersionSummary>>(`/documents/${props.documentId}/versions`);
     versions.value = data.items;
-    // Por defecto se compara la versión anterior con la actual, no la actual consigo misma.
-    const initial = data.items[1]?.version ?? data.items[0]?.version ?? null;
+    // Si el editor pide una versión concreta (por ejemplo, la enviada a
+    // aprobación), se compara esa; si no, la anterior con la actual.
+    const preferred =
+      props.initialVersion && data.items.some((item) => item.version === props.initialVersion)
+        ? props.initialVersion
+        : null;
+    const initial = preferred ?? data.items[1]?.version ?? data.items[0]?.version ?? null;
     selected.value = initial;
     if (initial) await loadVersion(initial);
   } catch {
@@ -73,6 +80,8 @@ async function loadPreview(): Promise<void> {
   try {
     previewHtml.value = await api.get<string>(
       `/documents/${props.documentId}/versions/${selected.value}/html`,
+      // `preview=1`: es una vista previa dentro de la app, no una exportación.
+      { preview: '1' },
     );
   } catch {
     toast.error('No se pudo generar la vista previa');

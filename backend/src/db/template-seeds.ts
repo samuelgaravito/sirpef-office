@@ -118,6 +118,34 @@ export const seedDesigns: SeedDesign[] = [
       margins: { top: 2.4, right: 2.4, bottom: 2.4, left: 2.4, header: 1.2, footer: 1.2 },
     },
   },
+  {
+    name: 'Navidad 2026',
+    description:
+      'Diseño de campaña navideña (verdes y rojo). Se enciende con el interruptor «En uso» y todas las plantillas pasan a usarlo.',
+    tokens: {
+      ...DEFAULT_DESIGN_TOKENS,
+      fontFamily: "Georgia, 'Times New Roman', serif",
+      fontSize: 11,
+      lineHeight: 1.55,
+      primaryColor: '#0f5132',
+      accentColor: '#9b2226',
+      tableHeadColor: '#e4f1ea',
+      tableBorderColor: '#a9c7b6',
+      letterhead: {
+        enabled: true,
+        title: 'INSTITUCIÓN',
+        subtitle: 'Área / Departamento',
+        align: 'center',
+      },
+      footer: {
+        enabled: true,
+        content: 'Página {page} de {total}',
+        align: 'center',
+        showPageNumber: true,
+        showTotal: true,
+      },
+    },
+  },
 ];
 
 /* ────────────────────────────── Plantillas ────────────────────────────── */

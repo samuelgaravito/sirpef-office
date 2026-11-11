@@ -4,6 +4,7 @@ import type {
   ChromeSource,
   DesignTokens,
   DocType,
+  DocumentRejection,
   DocumentStatus,
   DocumentSummary,
   InboxMessageDetail,
@@ -11,6 +12,7 @@ import type {
   InboxMessageSummary,
   InboxRecipient,
   JSONContent,
+  NumberingPreview,
   PendingMessageSummary,
   ResolvedChrome,
   VariableDef,
@@ -28,6 +30,12 @@ export interface TemplateSummary {
   designTokens: DesignTokens | null;
   /** Fecha de actualización del diseño para invalidar cachés de preview. */
   designUpdatedAt: string | null;
+  /** Diseño realmente aplicado (base o variante activada). */
+  effectiveDesignId?: string | null;
+  /** Nombre del diseño realmente aplicado. */
+  effectiveDesignName?: string | null;
+  /** Fecha del diseño aplicado; invalida la caché de la vista previa. */
+  effectiveDesignUpdatedAt?: string | null;
   schema?: VariableDef[];
   version: number;
   isShared: boolean;
@@ -73,10 +81,19 @@ export interface DesignRecord {
   isShared: boolean;
   isActive: boolean;
   isMine?: boolean | number;
+  /**
+   * Interruptor «en uso»: es el diseño con el que se dibujan las plantillas.
+   * Solo puede haber uno por cuenta.
+   */
+  isCurrent?: boolean;
   createdAt?: string;
   updatedAt: string;
   /** Fecha de borrado lógico; `null` o ausente = activo. */
   deletedAt?: string | null;
+}
+
+export interface DesignDetailResponse {
+  design: DesignRecord;
 }
 
 export interface ShareRecord {
@@ -94,6 +111,7 @@ export interface DocumentDetailResponse {
     header: ChromeConfig | null;
     footer: ChromeConfig | null;
     pendingMessage?: PendingMessageSummary | null;
+    lastRejection?: DocumentRejection | null;
   };
   design: DesignRecord | null;
   templateSchema: VariableDef[];
@@ -105,9 +123,14 @@ export interface DocumentDetailResponse {
 
 export interface TemplateDetailResponse {
   template: TemplateRecord;
+  /** Diseño que se aplica ahora (el que está en uso). */
   design: DesignRecord | null;
+  effectiveDesignId?: string | null;
+  effectiveDesignName?: string | null;
   chrome: ResolvedChrome;
   inheritedChrome: ResolvedChrome;
+  /** Número que tendría un documento creado con esta plantilla (no reserva). */
+  numberingPreview?: NumberingPreview | null;
 }
 
 export interface VersionSummary {
@@ -163,6 +186,7 @@ export type {
   ChromeSource,
   DesignTokens,
   DocType,
+  DocumentRejection,
   DocumentStatus,
   DocumentSummary,
   InboxMessageDetail,

@@ -2,7 +2,9 @@
 import { ImagePlus, Plus, Sparkles, Trash2 } from 'lucide-vue-next';
 import { computed } from 'vue';
 
-import type { VariableDef, VariableValues } from '@sirpefoffice/shared';
+import { NUMBERING_MESSAGES, type NumberingPreview, type VariableDef, type VariableValues } from '@sirpefoffice/shared';
+
+import NumberingBadge from '@/components/editor/NumberingBadge.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -11,8 +13,18 @@ const props = withDefaults(
     disabled?: boolean;
     aiEnabled?: boolean;
     generating?: boolean;
+    /** Número ya asignado al documento. */
+    docNumber?: string | null;
+    /** Número previsto mientras el documento es borrador. */
+    numbering?: NumberingPreview | null;
   }>(),
-  { disabled: false, aiEnabled: true, generating: false },
+  {
+    disabled: false,
+    aiEnabled: true,
+    generating: false,
+    docNumber: null,
+    numbering: null,
+  },
 );
 
 const emit = defineEmits<{
@@ -108,6 +120,14 @@ const missingRequired = computed(() =>
     </header>
 
     <div class="flex-1 space-y-3.5 overflow-y-auto px-4 py-4">
+      <!-- Número de documento: variable de sistema, no editable -->
+      <div class="rounded-lg border border-hairline bg-surface-muted/40 px-3 py-2.5">
+        <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-subtle">
+          {{ NUMBERING_MESSAGES.variableLabel }}
+        </p>
+        <NumberingBadge :doc-number="docNumber" :numbering="numbering" variant="full" />
+      </div>
+
       <p v-if="schema.length === 0" class="text-[12.5px] text-ink-muted">
         Esta plantilla no define variables. Puedes escribir libremente en el documento.
       </p>

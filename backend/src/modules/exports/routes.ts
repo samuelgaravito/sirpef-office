@@ -10,6 +10,7 @@ import { designs, documentVersions, documents, templates } from '../../db/schema
 import { assertDocument, canExportDocument } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
+import { pendingNumberForDocument } from '../../lib/counter.js';
 import { forbidden, notFound } from '../../lib/errors.js';
 import { renderDocumentHtml } from '../../lib/document-html.js';
 import { buildDocumentHtml, interpolateDoc } from '../../lib/render.js';
@@ -76,19 +77,25 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
 
     const { document } = await assertDocument(user.sub, params.id, 'viewer');
 
-    // Un memo sellado solo lo exporta el administrador que aprobó el envío,
-    // los administradores destinatarios o el remitente si fue autorizado.
+    // El administrador exporta lo que puede; el asistente solo cuando el
+    // jefe autorizó la exportación al aprobar el envío.
     if (!(await canExportDocument(user.sub, user.role, document))) {
-      throw forbidden('No tienes permiso para exportar este memo sellado');
+      throw forbidden(
+        'Necesitas que el administrador autorice la exportación de este documento',
+      );
     }
 
     const { design, chrome } = await resolveDocumentChrome(document);
+
+    // Un borrador aún no tiene número: se muestra el previsto con la marca
+    // `(previsto)` para que el PDF no quede con el hueco vacío.
+    const pendingNumber = await pendingNumberForDocument(document);
 
     const base = {
       content: document.content,
       design,
       chrome,
-      values: withDocumentNumber(document.data, document.docNumber),
+      values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
       title: document.title,
     };
 
@@ -143,53 +150,99 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  /** HTML en línea para la vista de impresión / previsualización. */
+  /**
+   * HTML en línea.
+   *
+   * Tres modos:
+   * - `?embed=1`: miniatura de las tarjetas (primera hoja), para cualquier lector.
+   * - `?preview=1`: vista previa dentro de la app, para cualquier lector.
+   * - sin parámetros: el documento completo, listo para descargar o imprimir:
+   *   exige permiso de exportación.
+   */
   app.get('/:id/html', async (request, reply) => {
     const user = await authenticate(request);
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const { embed } = z
-      .object({ embed: z.enum(['0', '1']).optional() })
+    const { embed, preview } = z
+      .object({
+        embed: z.enum(['0', '1']).optional(),
+        preview: z.enum(['0', '1']).optional(),
+      })
       .parse(request.query);
 
     const { document } = await assertDocument(user.sub, id, 'viewer');
     const { design, chrome } = await resolveDocumentChrome(document);
+    const pendingNumber = await pendingNumberForDocument(document);
 
-    // Las miniaturas solo muestran la primera hoja: no necesitan paginar todo
-    // el documento ni lanzar Chrome para medirlo.
-    const html =
-      embed === '1'
-        ? buildDocumentHtml({
-            content: document.content,
-            design,
-            chrome,
-            values: withDocumentNumber(document.data, document.docNumber),
-            title: document.title,
-            includeLetterhead: true,
-            embed: true,
-          })
-        : await renderDocumentHtml({
-            content: document.content,
-            design,
-            chrome,
-            values: withDocumentNumber(document.data, document.docNumber),
-            title: document.title,
-            includeLetterhead: true,
-          });
+    const isThumbnail = embed === '1';
+    const isPreview = preview === '1';
+
+    // El documento completo es una exportación: requiere autorización.
+    if (!isThumbnail && !isPreview) {
+      if (!(await canExportDocument(user.sub, user.role, document))) {
+        throw forbidden(
+          'Necesitas que el administrador autorice la exportación de este documento',
+        );
+      }
+    }
+
+    const renderOptions = {
+      content: document.content,
+      design,
+      chrome,
+      values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
+      title: document.title,
+      includeLetterhead: true,
+    };
+
+    let html: string;
+    if (isThumbnail) {
+      // Las miniaturas solo muestran la primera hoja: no necesitan paginar
+      // todo el documento ni lanzar Chrome para medirlo.
+      html = buildDocumentHtml({ ...renderOptions, embed: true });
+    } else {
+      try {
+        html = await renderDocumentHtml(renderOptions);
+      } catch (error) {
+        // Si el navegador de paginación no está disponible, se entrega el
+        // documento completo en una sola hoja: la revisión no queda bloqueada.
+        request.log.warn(
+          { err: error },
+          'Paginación no disponible; se sirve la vista continua',
+        );
+        html = buildDocumentHtml(renderOptions);
+      }
+    }
 
     return reply.header('Content-Type', 'text/html; charset=utf-8').send(html);
   });
 
-  /** HTML de una versión concreta, para previsualizar el historial. */
+  /**
+   * HTML de una versión concreta, para previsualizar el historial.
+   * Con `?preview=1` es una vista previa dentro de la app; sin parámetros es
+   * el documento completo y exige permiso de exportación.
+   */
   app.get('/:id/versions/:version/html', async (request, reply) => {
     const user = await authenticate(request);
     const params = z
       .object({ id: z.uuid(), version: z.coerce.number().int().positive() })
       .parse(request.params);
-    const { embed } = z
-      .object({ embed: z.enum(['0', '1']).optional() })
+    const { embed, preview } = z
+      .object({
+        embed: z.enum(['0', '1']).optional(),
+        preview: z.enum(['0', '1']).optional(),
+      })
       .parse(request.query);
 
     const { document } = await assertDocument(user.sub, params.id, 'viewer');
+
+    if (embed !== '1' && preview !== '1') {
+      if (!(await canExportDocument(user.sub, user.role, document))) {
+        throw forbidden(
+          'Necesitas que el administrador autorice la exportación de este documento',
+        );
+      }
+    }
+
     const [snapshot] = await db
       .select()
       .from(documentVersions)
@@ -211,13 +264,15 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       footer: snapshot.footer,
     });
 
+    const pendingNumber = await pendingNumberForDocument(document);
+
     const html =
       embed === '1'
         ? buildDocumentHtml({
             content: snapshot.content,
             design,
             chrome,
-            values: withDocumentNumber(snapshot.data, document.docNumber),
+            values: withDocumentNumber(snapshot.data, document.docNumber, pendingNumber),
             title: snapshot.title || document.title,
             includeLetterhead: true,
             embed: true,
@@ -226,7 +281,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
             content: snapshot.content,
             design,
             chrome,
-            values: withDocumentNumber(snapshot.data, document.docNumber),
+            values: withDocumentNumber(snapshot.data, document.docNumber, pendingNumber),
             title: snapshot.title || document.title,
             includeLetterhead: true,
           });

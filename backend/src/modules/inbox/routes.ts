@@ -22,6 +22,7 @@ import {
 } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
+import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
 import { saveVersion, toSummary } from '../documents/routes.js';
 
@@ -412,6 +413,8 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         designTokens: designs.tokens,
         designUpdatedAt: designs.updatedAt,
         templateSchema: templates.schema,
+        templateNumberingEnabled: templates.numberingEnabled,
+        templateNumberingPrefix: templates.numberingPrefix,
       })
       .from(documents)
       .innerJoin(users, eq(users.id, documents.ownerId))
@@ -476,6 +479,20 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       message.approvedById !== user.sub &&
       message.senderReadAt === null;
 
+    // Número previsto para el revisor: no reserva el correlativo.
+    const numberingPreview = docRow.doc.docNumber
+      ? null
+      : await previewDocumentNumber({
+          docType: docRow.doc.docType,
+          template:
+            docRow.doc.templateId && docRow.templateNumberingEnabled !== null
+              ? {
+                  numberingEnabled: docRow.templateNumberingEnabled,
+                  numberingPrefix: docRow.templateNumberingPrefix,
+                }
+              : null,
+        });
+
     return {
       ...serializeMessage(
         row as MessageListRow,
@@ -504,6 +521,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         docRow.designTokens ?? null,
         docRow.designUpdatedAt ?? null,
         (docRow.templateSchema ?? []) as VariableDef[],
+        numberingPreview,
       ),
       pendingMessage: pending ?? null,
     };
@@ -544,6 +562,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
 
     const now = new Date();
     let messageId = '';
+    let assignedDocNumber: string | null = null;
     const direct = user.role === 'admin';
 
     await db.transaction(async (tx) => {
@@ -575,6 +594,10 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
           .update(documents)
           .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
           .where(eq(documents.id, document.id));
+
+        // El administrador envía directamente: el documento se oficializa y
+        // recibe su correlativo en la misma transacción del sello.
+        assignedDocNumber = await numberDocumentInTx(tx, document.id);
 
         await tx
           .insert(documentShares)
@@ -620,11 +643,15 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         messageId,
         recipientIds,
       });
+      // Guarda la versión exacta que se envió a revisión para poder compararla
+      // con los cambios posteriores desde el editor.
+      await saveVersion(document.id, user.sub, 'manual', 'Enviado a aprobación');
     }
 
     return reply.status(201).send({
       id: messageId,
       status: direct ? 'sent' : 'pending_approval',
+      docNumber: assignedDocNumber,
     });
   });
 
@@ -665,6 +692,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       : null;
 
     const now = new Date();
+    let assignedDocNumber: string | null = null;
 
     await db.transaction(async (tx) => {
       if (recipientIds) {
@@ -709,6 +737,10 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
         .where(eq(documents.id, document.id));
 
+      // Aprobación: el memo se sella y recibe su número correlativo de forma
+      // atómica con el cambio de estado. Si ya tenía número, es idempotente.
+      assignedDocNumber = await numberDocumentInTx(tx, document.id);
+
       await tx
         .insert(documentShares)
         .values(
@@ -728,7 +760,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     });
     await logActivity(user.sub, 'document', document.id, 'sent', { messageId: id });
 
-    return { ok: true, id, status: 'sent' };
+    return { ok: true, id, status: 'sent', docNumber: assignedDocNumber };
   });
 
   /** Devuelve el documento al asistente con un motivo. */

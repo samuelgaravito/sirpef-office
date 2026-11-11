@@ -37,12 +37,20 @@ export const DOCUMENT_NUMBER_VARIABLE_DEF: VariableDef = {
 
 export const SYSTEM_VARIABLES: readonly VariableDef[] = [DOCUMENT_NUMBER_VARIABLE_DEF];
 
-/** Devuelve una copia de los valores con el número de documento inyectado. */
+/**
+ * Devuelve una copia de los valores con el número de documento inyectado.
+ *
+ * Si el documento todavía no se ha numerado pero se conoce el previsto, se
+ * muestra con la marca `(previsto)` para que el PDF de un borrador no quede
+ * con el hueco vacío.
+ */
 export function withDocumentNumber(
   values: VariableValues,
   docNumber: string | null | undefined,
+  pendingNumber?: string | null,
 ): VariableValues {
-  return { ...values, [DOCUMENT_NUMBER_VARIABLE]: docNumber ?? '' };
+  const value = docNumber || (pendingNumber ? pendingNumberText(pendingNumber) : '');
+  return { ...values, [DOCUMENT_NUMBER_VARIABLE]: value };
 }
 
 /** Configuración de una serie de numeración (identificada por su prefijo). */
@@ -54,6 +62,55 @@ export interface NumberingSeriesConfig {
   padding: number;
   /** Si el número incluye el año y se reinicia cada año. */
   includeYear: boolean;
+}
+
+/**
+ * Número que le tocaría a un documento si se oficializara ahora. Es
+ * orientativo: no reserva el correlativo.
+ */
+export interface NumberingPreview {
+  /** Número formateado, p. ej. `MEM-2026-0008`. */
+  number: string;
+  /** Prefijo de la serie (`''` = serie sin prefijo). */
+  prefix: string;
+  /** Etiqueta legible de la serie, p. ej. `Serie MEM`. */
+  seriesLabel: string;
+  /** Valor correlativo que se usará. */
+  nextValue: number;
+  includeYear: boolean;
+  /** Año del período (`0` = serie continua). */
+  year: number;
+}
+
+/** Textos de la numeración, compartidos por todas las pantallas. */
+export const NUMBERING_MESSAGES = {
+  pendingSuffix: '(previsto)',
+  calculating: 'Calculando…',
+  assigned: 'Número asignado',
+  pendingChip: 'se asigna al aprobar',
+  pendingTitle: 'Número previsto',
+  pendingHint: 'El número que tendrá el documento cuando se apruebe y envíe.',
+  pendingWarning: 'Puede cambiar si otro documento se aprueba antes.',
+  pendingWarningShort: 'puede cambiar si otro memo se aprueba antes',
+  disabled: 'Sin numeración',
+  variableLabel: 'Número de documento',
+  variablePendingTitle: 'Número previsto: se confirmará al aprobar',
+  assignOnApprove: (number: string) =>
+    `Al aprobarse, este documento quedará numerado como ${number}.`,
+  assignOnApproveShort: (number: string) => `Se asigna al aprobar como ${number}`,
+  approvedAs: (number: string) => `Aprobado y enviado como ${number}`,
+  changedFrom: (number: string, previous: string) =>
+    `Se asignó ${number} (el previsto era ${previous})`,
+} as const;
+
+/** Etiqueta legible de una serie a partir de su prefijo. */
+export function numberingSeriesLabel(prefix: string): string {
+  return prefix ? `Serie ${prefix}` : 'Serie sin prefijo';
+}
+
+/** Cómo se muestra un número previsto dentro del documento. */
+export function pendingNumberText(number: string): string {
+  return `${number} ${NUMBERING_MESSAGES.pendingSuffix}`;
 }
 
 /** Estado calculado de una serie para mostrarlo en la interfaz. */

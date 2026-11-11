@@ -23,6 +23,14 @@ export const STATUS_LABELS: Record<DocumentStatus, string> = {
   cancelled: 'Anulado',
 };
 
+/** Motivo por el que no se puede exportar (el administrador debe autorizarlo). */
+export const EXPORT_FORBIDDEN_MESSAGE =
+  'Necesitas que el administrador autorice la exportación de este documento';
+
+/** Aviso de que el estado del documento solo lo cambian los administradores. */
+export const STATUS_ADMIN_ONLY_MESSAGE =
+  'Solo los administradores pueden cambiar el estado del documento';
+
 export const STATUS_STYLES: Record<DocumentStatus, string> = {
   draft: 'bg-surface-muted text-ink-muted',
   in_review: 'bg-warning-soft text-warning',

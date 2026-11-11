@@ -98,6 +98,7 @@ backend/src/
     access.ts            # assertDocument(userId, id, 'viewer'|'editor')
     counter.ts           # Resuelve el número de un documento nuevo
     numbering.ts         # Series por prefijo, contadores y validación del número inicial
+    active-design.ts       # Diseño en uso: resuelve el que dibujan las plantillas y el interruptor
     render.ts            # Interpolación + datos de muestra + CSS + HTML + bandas
     errors.ts            # AppError + helpers (notFound, conflict, forbidden…)
     validators.ts        # Esquemas Zod compartidos
@@ -146,17 +147,17 @@ users ─┬─< refresh_tokens
        │      └─< activities
        └─< app_settings (key/value JSONB, IA)
 numbering_series (prefix) → configuración de la serie
-document_counters (scope = prefix, year) → secuencia
+document_counters (scope = prefix, year) → secuencia emitida al oficializar
 ```
 
 | Tabla | Campos relevantes | Notas |
 | --- | --- | --- |
 | `users` | `email` único, `password_hash`, `name`, `role`, `avatar_url` | `role` ∈ `admin`/`member`. |
 | `refresh_tokens` | `token_hash`, `user_id`, `expires_at`, `revoked_at`, `user_agent`, `ip` | Rotación: al refrescar se revoca el anterior y se inserta uno nuevo. |
-| `designs` | `tokens` JSONB, `is_shared`, `owner_id` | Los tokens siguen `DesignTokens`. El diseño conserva su formato histórico de encabezado/pie; se adapta a `ChromeConfig` al resolver. |
+| `designs` | `tokens` JSONB, `is_shared`, `owner_id`, `is_current` | Los tokens siguen `DesignTokens`. El diseño conserva su formato histórico de encabezado/pie; se adapta a `ChromeConfig` al resolver. `is_current` marca el **diseño en uso** de la cuenta: es el que dibujan todas sus plantillas. Índice único parcial `(owner_id) WHERE is_current`: solo uno por cuenta. Los documentos guardan el diseño concreto y quedan congelados. |
 | `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled`, `numbering_prefix` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y referencia una serie por prefijo. |
 | `template_versions` | `body`, `schema`, `header`, `footer`, `version`, `note` | Historial de plantillas; la instantánea incluye las bandas. |
-| `documents` | `content` JSONB, `data` JSONB, `doc_number`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
+| `documents` | `content` JSONB, `data` JSONB, `doc_number`, `numbering_prefix/year/value`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado real (un guardado idéntico no escribe). `doc_number` queda `NULL` mientras el documento es borrador y se asigna al oficializarlo. `numbering_*` guarda la identidad de la serie emitida. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
 | `document_versions` | `version`, `content`, `data`, `header`, `footer`, `kind`, `created_by`, `note` | `kind` ∈ `auto/manual/ai/export/restore`; la instantánea permite restaurar las bandas. |
 | `document_shares` | `document_id`, `user_id`, `permission` | Único por par documento/usuario. |
 | `document_messages` | `document_id`, `sender_id`, `subject`, `body`, `status`, `document_version`, `approved_by_id`, `sent_at`, `sender_read_at`, `allow_sender_edit`, `allow_sender_export` | Envío o solicitud de aprobación de la bandeja. `status` ∈ `pending_approval/sent/rejected/cancelled`. `sender_read_at` marca cuándo el remitente vio el resultado; `allow_sender_edit` indica si puede corregir tras un rechazo; `allow_sender_export` si puede exportar tras la aprobación. Índice único parcial: un solo pendiente por documento. |
@@ -164,44 +165,74 @@ document_counters (scope = prefix, year) → secuencia
 | `comments` | `document_id`, `author_id`, `body`, `anchor`, `resolved_at` | Reservada para la UI de comentarios. |
 | `activities` | `actor_id`, `entity_type`, `entity_id`, `action`, `metadata` | Auditoría funcional. |
 | `numbering_series` | `prefix` PK, `start_value`, `padding`, `include_year` | Serie identificada por el prefijo; `''` es la serie sin prefijo (`2026-0001`). Varias plantillas pueden compartirla. |
-| `document_counters` | `scope` (= prefijo), `year`, `counter` | Último número emitido por serie y año; sin colisiones. |
+| `document_counters` | `scope` (= prefijo), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
 
 Índices destacados: búsqueda por título (`ILIKE`), filtros por `owner_id`, `status`,
 `doc_type`, y `document_versions(document_id, version)` para el historial.
 
-### Flujo de envío y aprobación
+### Flujo de envío, aprobación y numeración
 
-1. El asistente (`member`) crea y edita el memo en estado `draft`.
+1. El asistente (`member`) crea y edita el memo en estado `draft`. El documento
+   **no existe en la base de datos** hasta que se guarda o se envía: el editor
+   arranca en modo virtual y el autoguardado vive en `localStorage`.
 2. Al pulsar **Enviar**, elige destinatarios, asunto y mensaje. Se crea un
    `document_messages` en `pending_approval`, el memo pasa a `in_review` y se
    comparte como `editor` con los administradores. El asistente lo ve en
-   **Enviados** con el chip ámbar «Pendiente de aprobación».
+   **Enviados** con el chip ámbar «Pendiente de aprobación». El memo aún **no
+   tiene número**: se muestra el número previsto, que no reserva el contador.
 3. El jefe (`admin`) lo ve en **Bandeja → Recibidos**, dentro del bloque destacado
    «Requiere tu aprobación». Puede abrirlo, corregirlo y, al aprobar, decide si el
    asistente podrá exportar el memo; se guarda una versión de historial con la nota
    «Aprobado y enviado».
 4. La aprobación es atómica: el mensaje pasa a `sent`, el memo a `sent`, se
    rellena `locked_at`/`locked_by`, `allow_sender_export` y los destinatarios
-   reciben acceso `viewer`. El memo aparece en **Enviados** para el remitente y
-   el aprobador (filtro «Aprobados»), y en **Recibidos** para los destinatarios.
-   El asistente recibe un aviso: el badge del menú sube, la fila se marca como
-   **Nuevo** y ve un toast con el nombre del aprobador. Al abrir el mensaje se
-   guarda `sender_read_at` y el aviso se apaga.
+   reciben acceso `viewer`. **En la misma transacción se asigna el correlativo**:
+   se bloquea la fila del documento (`SELECT … FOR UPDATE`), se resuelve su serie
+   y se hace el `INSERT … ON CONFLICT DO UPDATE` sobre `document_counters`. El memo
+   aparece en **Enviados** para el remitente y el aprobador (filtro «Aprobados»),
+   y en **Recibidos** para los destinatarios. El asistente recibe un aviso: el
+   badge del menú sube, la fila se marca como **Nuevo** y ve un toast con el nombre
+   del aprobador. Al abrir el mensaje se guarda `sender_read_at` y el aviso se apaga.
 5. Un memo con `locked_at` es inmutable: se bloquean edición, borrado,
    restauración de versiones y cambios de compartición. Solo se puede leer o
    consultar en pantalla. La **exportación (PDF/DOCX/HTML)** queda reservada al
    administrador que aprobó/rechazó el envío, a los administradores destinatarios
-   y, si se autorizó al aprobar, al asistente remitente. Las vistas previas siguen
-   disponibles para quien tenga acceso.
+   y, si se autorizó al aprobar, al asistente remitente. Las vistas previas (la
+   miniatura de las tarjetas y la vista previa dentro del editor) siguen
+   disponibles para quien tenga acceso: no son una exportación.
 6. Si el jefe rechaza, el mensaje queda `rejected` con un motivo. El rechazo
    permite elegir si el asistente puede corregir:
    - **con edición** (por defecto): el memo vuelve a `draft` y puede corregirse y
-     reenviarse;
+     reenviarse. Como nunca se emitió, **no consume número**;
    - **sin edición**: el memo queda `rejected` con `locked_at`, cerrado y sin
      posibilidad de edición ni exportación por parte del asistente.
    Aparece en **Enviados** con el filtro «Rechazados» y el remitente recibe el
    aviso (badge, fila **Nuevo** y toast de rechazo).
+
+### Numeración
+
+- El número se asigna la primera vez que el documento alcanza un estado oficial
+  (`sent`, `approved`, `final`, `archived`), nunca al crear el borrador.
+- `documents.numbering_prefix/year/value` guardan la identidad de la serie con la
+  que se emitió el documento, de modo que `document_counters` se puede recalcular
+  sin parsear `doc_number`.
+- El número previsto se calcula en lectura (`nextNumberValue` + el último emitido)
+  y se expone como `numberingPreview` (`{ number, prefix, seriesLabel, nextValue,
+  includeYear, year }`); no modifica `document_counters`. Se calcula en lote para el
+  listado (`numberingPreviewsFor`) y también lo devuelve `GET /api/templates/:id`
+  para el modo «documento nuevo».
+- La interfaz lo explica en el editor (`MEM-2026-0008 · se asigna al aprobar`), en
+  la tarjeta del listado (`· previsto`), en el panel de variables, en el diálogo de
+  envío y en la bandeja. Dentro del documento, `{{numero_documento}}` se sustituye
+  visualmente por el número (decoración de ProseMirror, sin tocar el contenido); en
+  la vista previa y el PDF de un borrador aparece como `MEM-2026-0008 (previsto)`.
+- Al aprobar, `POST /api/inbox/:id/approve` y el envío directo devuelven `docNumber`
+  para que el cliente confirme el número real (y avise si difiere del previsto).
+- Herramientas de mantenimiento: `npm run db:migrate:numbering` (migración de datos
+  idempotente), `npm run db:reconcile-counters` (recalcula y corrige) y
+  `npm run db:purge-empty-drafts` (elimina borradores vacíos; simulación por
+  defecto).
 
 ### Versionado
 
@@ -215,6 +246,9 @@ RETURNING *
 ```
 
 - Si no actualiza filas → `409 CONFLICT` con `{ currentVersion, updatedAt }`.
+- Si el contenido, los datos, el título y las bandas son **idénticos** a lo guardado, no
+  se escribe nada: se devuelve la versión actual sin incrementarla. Así, abrir un
+  documento no ensucia `updated_at` ni el historial.
 - Si actualiza → inserta en `document_versions` (`auto` o `manual` si `checkpoint: true`).
 - El cliente, ante `409`, muestra un aviso con opción de recargar la versión del servidor.
 
@@ -377,9 +411,29 @@ SVA: admin crea usuario + asigna sistema SirpefOffice + rol
 
 `assertDocument(userId, id, minimum)` resuelve el permiso y lanza `404`/`403`. Los listados
 filtran por `scope=all|mine|shared`. `canExportDocument(userId, role, doc)` es la autoridad
-para las descargas: documentos abiertos para cualquier usuario con acceso, documentos
-sellados solo para el aprobador, los administradores destinatarios y el remitente
-autorizado.
+para las descargas:
+
+| Rol | Documento abierto (borrador) | Memo sellado |
+| --- | --- | --- |
+| `admin` | sí | sí, si es el aprobador o un destinatario |
+| `member` | no | solo con `document_messages.allow_sender_export` |
+
+Es decir: **un asistente nunca exporta un borrador**; para obtener una copia el jefe tiene
+que aprobar el envío marcando «el asistente también podrá exportarlo». La misma regla
+protege el HTML completo del documento (`GET /api/documents/:id/html` sin `preview=1`),
+que antes se entregaba a cualquier lector y permitía llevarse el memo sellado.
+
+La **vista previa dentro de la app** no es una exportación y queda disponible para
+cualquier lector: `?embed=1` (miniaturas de las tarjetas) y `?preview=1` (vista previa
+del editor, del visor y del historial de versiones).
+
+### Estado del documento
+
+El estado solo lo cambia a mano un **administrador** (`PATCH /api/documents/:id` con
+`status`). El servidor responde `403` a cualquier otro rol y la interfaz muestra el
+estado como una etiqueta con candado, sin aspecto de control. Los estados que dependen
+del flujo de bandeja (`Enviado`, `Aprobado`, `Rechazado`, `Anulado`) los asigna el propio
+flujo, no una edición manual.
 
 ---
 
@@ -697,10 +751,12 @@ de cabecera/pie en el mismo `PATCH` y versiona la instantánea completa.
 
 ### 7.5 Vista previa
 
-**Documentos.** El botón del ojo guarda si hay cambios y pide `GET /api/documents/:id/html`;
-el HTML se muestra en un `<iframe sandbox srcdoc>`. Si el usuario edita datos con la vista
-previa abierta, un *debounce* de 900 ms vuelve a guardar y refrescar el iframe. Esto da una
-previsualización casi en vivo sin duplicar el motor de render en el cliente.
+**Documentos.** El botón del ojo guarda si hay cambios y pide
+`GET /api/documents/:id/html?preview=1` (vista previa dentro de la app, sin exigir
+permiso de exportación); el HTML se muestra en un `<iframe sandbox srcdoc>`. Si el
+usuario edita datos con la vista previa abierta, un *debounce* de 900 ms vuelve a guardar
+y refrescar el iframe. Esto da una previsualización casi en vivo sin duplicar el motor de
+render en el cliente.
 
 Las tarjetas de **Documentos** e **Inicio → Documentos recientes** usan
 `DocumentPreview.vue`: piden `GET /api/documents/:id/html?embed=1` con carga diferida
@@ -794,8 +850,10 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `POST` | `/documents/:id/restore/:version` | Restaura (crea versión `restore`). |
 | `POST/DELETE` | `/documents/:id/shares[/:userId]` | Compartir / revocar. |
 | `GET` | `/documents/:id/activity` | Actividad. |
-| `GET` | `/documents/:id/html?embed=1` | Documento renderizado con datos; `embed=1` elimina fondo y sombra para tarjetas. |
-| `GET` | `/documents/:id/export/:format` | `pdf`, `docx`, `html`. Si el documento está sellado, solo un administrador puede exportarlo. |
+| `GET` | `/documents/:id/html?embed=1` | Documento renderizado con datos; `embed=1` lo prepara para miniaturas (cualquier lector). |
+| `GET` | `/documents/:id/html?preview=1` | Vista previa dentro de la app (cualquier lector). |
+| `GET` | `/documents/:id/html` | Documento completo: exige permiso de exportación. |
+| `GET` | `/documents/:id/export/:format` | `pdf`, `docx`, `html`. Exige permiso de exportación: el administrador según las reglas del envío; el asistente solo con `allow_sender_export`. |
 | `GET` | `/inbox?scope=received\|sent\|approved\|rejected&filter=all\|pending\|sent&status=all\|pending_approval\|sent\|rejected\|cancelled` | Bandeja paginada. `sent` incluye los envíos propios y los memos aprobados/rechazados por el usuario. `filter` solo aplica a `received`; `status` solo a `sent`. `pending` requiere administrador. |
 | `GET` | `/inbox/unread-count` | Contadores de no leídos, pendientes de aprobación y resultados propios sin ver, con desglose `sections` (Recibidos, Enviados, Aprobados, Rechazados) y el último resultado. |
 | `GET` | `/inbox/:id` | Detalle del mensaje, destinatarios y memo adjunto. |

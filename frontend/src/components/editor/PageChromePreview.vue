@@ -3,7 +3,7 @@ import { renderToHTMLString } from '@tiptap/static-renderer';
 import { computed } from 'vue';
 
 import { bandImageStyleMm } from '@/lib/band-images';
-import { clampChromeWidth, editorExtensions } from '@sirpefoffice/shared';
+import { clampChromeWidth, editorExtensions, withEmptyParagraphHeights } from '@sirpefoffice/shared';
 import type { ChromeConfig, ChromeKind } from '@sirpefoffice/shared';
 
 const props = defineProps<{
@@ -28,13 +28,15 @@ const html = computed(() => {
     extensions: editorExtensions,
   });
 
-  return rendered
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '')
-    .replace(/href="javascript:[^"]*"/gi, 'href="#"')
-    .replace(/\{page\}/g, String(props.pageNumber))
-    .replace(/\{total\}/g, String(props.pageCount));
+  return withEmptyParagraphHeights(
+    rendered
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/\son\w+="[^"]*"/gi, '')
+      .replace(/\son\w+='[^']*'/gi, '')
+      .replace(/href="javascript:[^"]*"/gi, 'href="#"')
+      .replace(/\{page\}/g, String(props.pageNumber))
+      .replace(/\{total\}/g, String(props.pageCount)),
+  );
 });
 </script>
 

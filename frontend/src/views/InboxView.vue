@@ -160,7 +160,7 @@ const emptyDescription = computed(() => {
       return `No hay envíos ${statusFilterLabel(statusFilter.value).toLowerCase()}. Cambia el estado o envía un documento.`;
     }
     return auth.isAdmin
-      ? 'Aquí aparecerán tus envíos y los memos que apruebes o rechaces.'
+      ? 'Aquí aparecerán tus envíos y los documentos que apruebes o rechaces.'
       : 'Abre un documento y pulsa «Enviar» para compartirlo con otros usuarios.';
   }
   return 'Los documentos que te envíen aparecerán aquí.';

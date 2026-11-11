@@ -7,7 +7,7 @@ import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 import { env, isProduction } from '../env.js';
 import { forbidden, unauthorized } from './errors.js';
-import { verifyAccessToken, type AccessTokenPayload } from './jwt.js';
+import { accessTokenMaxAgeSeconds, verifyAccessToken, type AccessTokenPayload } from './jwt.js';
 
 /** Identidad autenticada con los menús vigentes leídos de la base local. */
 export interface AuthenticatedUser extends AccessTokenPayload {
@@ -82,7 +82,9 @@ export function setAuthCookies(
     sameSite: 'lax',
     secure,
     path: '/',
-    maxAge: 60 * 60,
+    // La cookie vive lo mismo que el token que envuelve: si el token sigue
+    // siendo válido, la cookie también, y al revés.
+    maxAge: accessTokenMaxAgeSeconds(),
   });
 
   reply.setCookie(REFRESH_COOKIE, refreshToken, {
