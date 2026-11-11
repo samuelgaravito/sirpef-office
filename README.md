@@ -580,6 +580,7 @@ cd backend
 | `node scripts/chrome-smoke.mjs` | Prueba funcional de cabecera/pie: pie visible y anclado en modo lectura, herencia, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño en plantilla y exportación PDF/DOCX (capturas en `/tmp/sirpefoffice-shots-chrome`). |
 | `node scripts/page-break-export-smoke.mjs` | Comprueba el salto de página manual de extremo a extremo: HTML con `data-page-break`, PDF de 2 páginas y DOCX con salto real. |
 | `npm run smoke:pdf-bands` | Regresión de imágenes globales de cabecera/pie: el PDF tiene las mismas páginas que el layout, las imágenes conservan su posición en mm y ninguna hoja desborda (no requiere API ni base de datos). |
+| `npm run smoke:draft` | Regresión del borrador local del documento nuevo: al abrir una plantilla y volver a entrar el cuerpo no aparece en blanco, el borrador conserva lo escrito y los borradores heredados se reparan (necesita la API y la web de desarrollo levantadas). |
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 
