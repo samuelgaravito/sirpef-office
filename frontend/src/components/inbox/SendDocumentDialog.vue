@@ -112,8 +112,8 @@ async function loadUsers(): Promise<void> {
   try {
     const data = await api.get<ListResponse<UserListItem>>('/auth/users');
     users.value = data.items;
-  } catch {
-    toast.error('No se pudo cargar la lista de usuarios');
+  } catch (error) {
+    toast.failure(error, 'No se pudo cargar la lista de usuarios');
   } finally {
     loadingUsers.value = false;
   }
@@ -197,7 +197,7 @@ async function submit(): Promise<void> {
       emit('sent', { id: response.id, status: response.status });
     }
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo enviar el documento');
+    toast.failure(error, 'No se pudo enviar el documento');
   } finally {
     submitting.value = false;
   }

@@ -33,7 +33,7 @@ const numberLabel = computed(() => {
 const numberTitle = computed(() => {
   if (props.document.docNumber) return props.document.docNumber;
   if (props.document.numberingPreview) {
-    return 'Número previsto: se asigna al aprobar y enviar. Puede cambiar si otro documento se aprueba antes.';
+    return 'Número previsto: se asigna al aprobar y enviar. Puede cambiar si otro documento de esta plantilla se aprueba antes.';
   }
   return '';
 });

@@ -9,7 +9,7 @@ import { documents, templates } from '../../db/schema.js';
 import { assertDocument, assertDocumentMutable } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
-import { badRequest, notFound } from '../../lib/errors.js';
+import { badRequest, internal, notFound } from '../../lib/errors.js';
 import { saveVersion } from '../documents/routes.js';
 import {
   clearApiKey,
@@ -125,7 +125,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(documents.id, id))
       .returning();
 
-    if (!updated) throw new Error('No se pudo guardar el contenido generado');
+    if (!updated) throw internal('AI_SAVE_FAILED', 'No se pudo guardar el contenido generado');
 
     await saveVersion(id, user.sub, 'ai', `Redacción IA (${config.model})`);
     await logActivity(user.sub, 'document', id, 'ai_generated', {

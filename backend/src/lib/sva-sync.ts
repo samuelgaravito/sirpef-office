@@ -3,6 +3,7 @@ import { and, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-or
 import { db } from '../db/index.js';
 import { refreshTokens, users, type UserRow } from '../db/schema.js';
 import { env } from '../env.js';
+import { conflict, internal } from './errors.js';
 import { fetchSvaUsers, type SvaUser } from './sva.js';
 
 export interface SyncSvaResult {
@@ -39,7 +40,7 @@ export async function upsertSvaUser(identity: SvaUser): Promise<UserRow> {
   }
 
   if (existing && existing.svaUuid && existing.svaUuid !== identity.uuid) {
-    throw new Error(`El correo ${email} ya pertenece a otro usuario de SVA`);
+    throw conflict(`El correo ${email} ya pertenece a otro usuario de SVA`);
   }
 
   // El admin local de emergencia no se pisa desde SVA, y tampoco se puede
@@ -50,7 +51,7 @@ export async function upsertSvaUser(identity: SvaUser): Promise<UserRow> {
     existing.role === 'admin' &&
     existing.svaUuid !== identity.uuid
   ) {
-    throw new Error(
+    throw conflict(
       `El correo ${email} está reservado para la cuenta local de emergencia; usa otro correo en SVA`,
     );
   }
@@ -79,7 +80,7 @@ export async function upsertSvaUser(identity: SvaUser): Promise<UserRow> {
       })
       .where(eq(users.id, existing.id))
       .returning();
-    if (!updated) throw new Error(`No se pudo actualizar el usuario ${email}`);
+    if (!updated) throw internal('SVA_USER_UPDATE_FAILED', `No se pudo actualizar el usuario ${email}`);
     return updated;
   }
 
@@ -91,7 +92,7 @@ export async function upsertSvaUser(identity: SvaUser): Promise<UserRow> {
       passwordHash: null,
     })
     .returning();
-  if (!created) throw new Error(`No se pudo crear el usuario ${email}`);
+  if (!created) throw internal('SVA_USER_CREATE_FAILED', `No se pudo crear el usuario ${email}`);
   return created;
 }
 

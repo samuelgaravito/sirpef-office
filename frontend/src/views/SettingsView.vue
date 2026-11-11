@@ -8,6 +8,7 @@ import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
 import { useToast } from '@/composables/useToast';
+import { errorMessage as explainError } from '@/lib/error-message';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
@@ -36,9 +37,9 @@ async function syncUsers(): Promise<void> {
     }
     toast.success('Usuarios sincronizados con SVA');
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'No se pudo sincronizar con SVA';
+    const message = explainError(error, 'No se pudo sincronizar con SVA');
     syncMessage.value = message;
-    toast.error(message);
+    toast.failure(error, 'No se pudo sincronizar con SVA');
   } finally {
     syncingUsers.value = false;
   }
@@ -131,7 +132,7 @@ async function saveProfile(): Promise<void> {
     newPassword.value = '';
     toast.success('Perfil actualizado');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo actualizar el perfil');
+    toast.failure(error, 'No se pudo actualizar el perfil');
   } finally {
     savingProfile.value = false;
   }
@@ -152,7 +153,7 @@ async function saveAi(): Promise<void> {
     Object.assign(ai, data.settings, { apiKey: '' });
     toast.success('Configuración de IA guardada');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo guardar la configuración');
+    toast.failure(error, 'No se pudo guardar la configuración');
   } finally {
     savingAi.value = false;
   }
@@ -167,7 +168,7 @@ async function testAi(): Promise<void> {
     testResult.value = result;
     toast.success(`Conexión correcta en ${result.latencyMs} ms`);
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo conectar con el proveedor');
+    toast.failure(error, 'No se pudo conectar con el proveedor');
   } finally {
     testing.value = false;
   }
@@ -179,7 +180,7 @@ async function removeKey(): Promise<void> {
     Object.assign(ai, data.settings, { apiKey: '' });
     toast.success('Clave eliminada');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo eliminar la clave');
+    toast.failure(error, 'No se pudo eliminar la clave');
   }
 }
 

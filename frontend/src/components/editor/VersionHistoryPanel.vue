@@ -52,8 +52,8 @@ async function load(): Promise<void> {
     const initial = preferred ?? data.items[1]?.version ?? data.items[0]?.version ?? null;
     selected.value = initial;
     if (initial) await loadVersion(initial);
-  } catch {
-    toast.error('No se pudo cargar el historial');
+  } catch (error) {
+    toast.failure(error, 'No se pudo cargar el historial');
   } finally {
     loading.value = false;
   }
@@ -68,8 +68,8 @@ async function loadVersion(version: number): Promise<void> {
       `/documents/${props.documentId}/versions/${version}`,
     );
     snapshot.value = data.version;
-  } catch {
-    toast.error('No se pudo cargar la versión');
+  } catch (error) {
+    toast.failure(error, 'No se pudo cargar la versión');
   } finally {
     loadingDetail.value = false;
   }
@@ -83,8 +83,8 @@ async function loadPreview(): Promise<void> {
       // `preview=1`: es una vista previa dentro de la app, no una exportación.
       { preview: '1' },
     );
-  } catch {
-    toast.error('No se pudo generar la vista previa');
+  } catch (error) {
+    toast.failure(error, 'No se pudo generar la vista previa');
   }
 }
 
@@ -119,7 +119,7 @@ async function restore(): Promise<void> {
     emit('restored');
     emit('close');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo restaurar');
+    toast.failure(error, 'No se pudo restaurar');
   } finally {
     restoring.value = false;
   }

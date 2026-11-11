@@ -6,6 +6,10 @@
  * (por ejemplo, tras una restauración o un ajuste manual) y, con `--apply`,
  * las corrige.
  *
+ * Solo cuentan los documentos **vivos**: un documento en la papelera libera su
+ * correlativo, así que su número puede volver a emitirse y no debe fijar el
+ * suelo del contador.
+ *
  * Uso:
  *   npx tsx scripts/reconcile-counters.ts          # solo informa
  *   npx tsx scripts/reconcile-counters.ts --apply  # corrige
@@ -41,6 +45,7 @@ async function main(): Promise<void> {
              max(numbering_value) as value
       from documents
       where numbering_value is not null
+        and deleted_at is null
       group by numbering_prefix, numbering_year
     `) as unknown as MaxRow[];
 
@@ -54,6 +59,7 @@ async function main(): Promise<void> {
         and numbering_value is null
       limit 100
     `) as unknown as Array<{ id: string; doc_number: string }>;
+
 
     const pending: Array<{ scope: string; year: number; current: number; expected: number }> = [];
 

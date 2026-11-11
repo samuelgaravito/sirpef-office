@@ -9,8 +9,10 @@ import type {
   VariableValues,
 } from '@sirpefoffice/shared';
 import { packBlocks } from '@sirpefoffice/shared';
+import type { Page } from 'puppeteer-core';
 
 import { getBrowser } from './browser.js';
+import { internal } from './errors.js';
 import { buildDocumentHtml, prepareContent } from './render.js';
 
 export const PAGE_GAP_PX = 24;
@@ -55,6 +57,59 @@ interface Measurement {
 
 const cache = new Map<string, DocumentPageLayout>();
 const CACHE_LIMIT = 64;
+
+/**
+ * Mide el documento dentro de Chrome.
+ *
+ * La medición se hace en el navegador, así que el error de `page.evaluate`
+ * llega como un fallo genérico de Puppeteer. Aquí se convierte en un error
+ * con mensaje útil: si el HTML no tiene la estructura esperada, el problema
+ * está en el documento, no en el servidor.
+ */
+async function measurePage(page: Page): Promise<Measurement> {
+  try {
+    return await page.evaluate((): Measurement => {
+      const top = document.querySelector<HTMLElement>('.doc-page-top');
+      const bottom = document.querySelector<HTMLElement>('.doc-page-bottom');
+      const body = document.querySelector<HTMLElement>('.doc-body');
+      if (!top || !bottom || !body) {
+        throw new Error('No se encontró la estructura de página para medir');
+      }
+
+      const rootTop = body.getBoundingClientRect().top;
+      const children: MeasuredChild[] = Array.from(body.children).map((child, index) => {
+        const element = child as HTMLElement;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          index,
+          top: rect.top - rootTop,
+          height: rect.height,
+          marginTop: Number.parseFloat(style.marginTop) || 0,
+          marginBottom: Number.parseFloat(style.marginBottom) || 0,
+          isPageBreak:
+            element.classList.contains('page-break') ||
+            element.hasAttribute('data-page-break'),
+        };
+      });
+
+      const rootStyle = getComputedStyle(document.documentElement);
+      const heightCm = Number.parseFloat(rootStyle.getPropertyValue('--page-h')) || 29.7;
+      return {
+        pageHeightPx: (heightCm * 96) / 2.54,
+        topInsetPx: top.getBoundingClientRect().height,
+        bottomInsetPx: bottom.getBoundingClientRect().height,
+        children,
+      };
+    });
+  } catch (error) {
+    throw internal(
+      'PAGINATION_MEASURE_FAILED',
+      'No se pudo medir el documento para paginarlo. Revisa su contenido e inténtalo de nuevo.',
+      { reason: (error as Error).message },
+    );
+  }
+}
 
 function cacheKey(
   content: JSONContent,
@@ -128,40 +183,7 @@ export async function paginateDocument(options: PaginateOptions): Promise<Pagina
       await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
     });
 
-    const measured = await page.evaluate((): Measurement => {
-      const top = document.querySelector<HTMLElement>('.doc-page-top');
-      const bottom = document.querySelector<HTMLElement>('.doc-page-bottom');
-      const body = document.querySelector<HTMLElement>('.doc-body');
-      if (!top || !bottom || !body) {
-        throw new Error('No se encontró la estructura de página para medir');
-      }
-
-      const rootTop = body.getBoundingClientRect().top;
-      const children: MeasuredChild[] = Array.from(body.children).map((child, index) => {
-        const element = child as HTMLElement;
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        return {
-          index,
-          top: rect.top - rootTop,
-          height: rect.height,
-          marginTop: Number.parseFloat(style.marginTop) || 0,
-          marginBottom: Number.parseFloat(style.marginBottom) || 0,
-          isPageBreak:
-            element.classList.contains('page-break') ||
-            element.hasAttribute('data-page-break'),
-        };
-      });
-
-      const rootStyle = getComputedStyle(document.documentElement);
-      const heightCm = Number.parseFloat(rootStyle.getPropertyValue('--page-h')) || 29.7;
-      return {
-        pageHeightPx: (heightCm * 96) / 2.54,
-        topInsetPx: top.getBoundingClientRect().height,
-        bottomInsetPx: bottom.getBoundingClientRect().height,
-        children,
-      };
-    });
+    const measured = await measurePage(page);
 
     const capacityPx = Math.max(
       48,

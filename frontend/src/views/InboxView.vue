@@ -189,7 +189,7 @@ async function load(): Promise<void> {
     messages.value = data.items;
     total.value = data.total ?? data.items.length;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cargar la bandeja');
+    toast.failure(error, 'No se pudo cargar la bandeja');
   } finally {
     loading.value = false;
   }

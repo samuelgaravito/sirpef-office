@@ -449,7 +449,7 @@ const handles: { mode: HandleMode; class: string }[] = [
         <h1 :style="{ color: tokens.primaryColor, fontSize: `${1.75 * tokens.headingScale}em`, fontWeight: 700, marginBottom: '.4em' }">
           MEMORÁNDUM
         </h1>
-        <p :style="{ marginBottom: '.7em' }"><strong>N° </strong>MEM-2026-0001</p>
+        <p :style="{ marginBottom: '.7em' }"><strong>N° </strong>MEM-0001-2026</p>
         <hr :style="{ border: 0, borderTop: `1px solid ${tokens.tableBorderColor}`, margin: '.8em 0' }" />
 
         <table :style="{ width: '100%', borderCollapse: 'collapse', marginBottom: '1em' }">

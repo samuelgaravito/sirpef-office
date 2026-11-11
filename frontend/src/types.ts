@@ -42,7 +42,11 @@ export interface TemplateSummary {
   /** Solo las plantillas activas se pueden usar para crear documentos. */
   isActive: boolean;
   ownerId: string;
+  /** Nombre del propietario de la plantilla. */
+  ownerName?: string | null;
   isMine: boolean | number;
+  /** Permiso efectivo del usuario: 'owner' | 'editor' | 'viewer'. */
+  permission?: TemplatePermission;
   updatedAt: string;
   /** Fecha de borrado lógico; `null` o ausente = activa. */
   deletedAt?: string | null;
@@ -66,6 +70,8 @@ export interface TemplateRecord {
   numberingEnabled: boolean;
   /** Serie de numeración (prefijo) o null si no lleva número. */
   numberingPrefix: string | null;
+  /** El prefijo lo asignó el servidor en lugar del usuario. */
+  numberingPrefixAuto?: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -103,6 +109,9 @@ export interface ShareRecord {
   email: string;
 }
 
+/** Permiso del usuario sobre una plantilla. */
+export type TemplatePermission = 'owner' | 'editor' | 'viewer';
+
 export interface DocumentDetailResponse {
   canExport: boolean;
   document: DocumentSummary & {
@@ -123,6 +132,10 @@ export interface DocumentDetailResponse {
 
 export interface TemplateDetailResponse {
   template: TemplateRecord;
+  /** Permiso efectivo del usuario: 'owner' | 'editor' | 'viewer'. */
+  permission: TemplatePermission;
+  /** Nombre del propietario de la plantilla. */
+  ownerName: string | null;
   /** Diseño que se aplica ahora (el que está en uso). */
   design: DesignRecord | null;
   effectiveDesignId?: string | null;
@@ -131,6 +144,8 @@ export interface TemplateDetailResponse {
   inheritedChrome: ResolvedChrome;
   /** Número que tendría un documento creado con esta plantilla (no reserva). */
   numberingPreview?: NumberingPreview | null;
+  /** Personas con acceso explícito (solo para el propietario). */
+  shares: ShareRecord[];
 }
 
 export interface VersionSummary {
@@ -155,6 +170,8 @@ export interface TemplateVersionSummary {
   note: string;
   createdAt: string;
   createdBy: string | null;
+  /** Quién hizo el cambio: la mejora de un colaborador queda firmada. */
+  authorName?: string | null;
 }
 
 export interface ActivityRecord {

@@ -19,6 +19,7 @@ import type { DesignTokens } from '@sirpefoffice/shared';
 
 import { db } from '../db/index.js';
 import { designs } from '../db/schema.js';
+import { internal } from './errors.js';
 
 export type DesignRow = typeof designs.$inferSelect;
 
@@ -96,7 +97,7 @@ export async function setActiveDesign(
     .set({ isCurrent })
     .where(eq(designs.id, design.id))
     .returning();
-  if (!updated) throw new Error('No se pudo actualizar el diseño');
+  if (!updated) throw internal('DESIGN_STATUS_FAILED', 'No se pudo actualizar el diseño');
   return updated;
 }
 

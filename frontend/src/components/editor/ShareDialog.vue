@@ -35,8 +35,8 @@ async function loadUsers(): Promise<void> {
   try {
     const data = await api.get<ListResponse<UserListItem>>('/auth/users');
     users.value = data.items;
-  } catch {
-    toast.error('No se pudo cargar la lista de usuarios');
+  } catch (error) {
+    toast.failure(error, 'No se pudo cargar la lista de usuarios');
   }
 }
 
@@ -64,7 +64,7 @@ async function add(): Promise<void> {
     toast.success('Acceso otorgado');
     emit('changed');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo compartir');
+    toast.failure(error, 'No se pudo compartir');
   } finally {
     adding.value = false;
   }
@@ -77,7 +77,7 @@ async function remove(userId: string): Promise<void> {
     toast.success('Acceso retirado');
     emit('changed');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo retirar el acceso');
+    toast.failure(error, 'No se pudo retirar el acceso');
   }
 }
 

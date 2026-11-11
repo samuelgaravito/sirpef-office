@@ -222,7 +222,7 @@ async function load(): Promise<void> {
     }
     ensureBandDefaults();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cargar el diseño');
+    toast.failure(error, 'No se pudo cargar el diseño');
   } finally {
     loading.value = false;
   }
@@ -263,7 +263,7 @@ async function setCampaign(next: boolean): Promise<void> {
     );
   } catch (error) {
     isCurrent.value = previous;
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el diseño en uso');
+    toast.failure(error, 'No se pudo cambiar el diseño en uso');
   }
 }
 
@@ -302,7 +302,7 @@ async function save(): Promise<void> {
 
     await router.replace({ name: 'designs' });
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo guardar el diseño');
+    toast.failure(error, 'No se pudo guardar el diseño');
   } finally {
     saving.value = false;
   }

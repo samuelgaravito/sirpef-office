@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, Info, X, XCircle } from 'lucide-vue-next';
+import { CheckCircle2, Info, TriangleAlert, X, XCircle } from 'lucide-vue-next';
 
 import { useToast } from '@/composables/useToast';
 
@@ -8,6 +8,7 @@ const { items, dismiss } = useToast();
 const styles = {
   success: 'border-success/25 bg-success-soft text-success',
   error: 'border-danger/25 bg-danger-soft text-danger',
+  warning: 'border-warning/25 bg-warning-soft text-warning',
   info: 'border-accent/20 bg-accent-soft text-accent',
 } as const;
 </script>
@@ -29,6 +30,7 @@ const styles = {
       >
         <span :class="['mt-0.5 shrink-0 rounded-full p-1', styles[toast.kind]]">
           <CheckCircle2 v-if="toast.kind === 'success'" class="size-4" />
+          <TriangleAlert v-else-if="toast.kind === 'warning'" class="size-4" />
           <XCircle v-else-if="toast.kind === 'error'" class="size-4" />
           <Info v-else class="size-4" />
         </span>

@@ -63,8 +63,8 @@ async function loadTemplates(): Promise<void> {
       currentPage += 1;
     }
     templates.value = items;
-  } catch {
-    toast.error('No se pudieron cargar las plantillas para el filtro');
+  } catch (error) {
+    toast.failure(error, 'No se pudieron cargar las plantillas para el filtro');
   }
 }
 
@@ -83,8 +83,8 @@ async function load(): Promise<void> {
     });
     documents.value = data.items;
     total.value = data.total ?? data.items.length;
-  } catch {
-    toast.error('No se pudieron cargar los documentos');
+  } catch (error) {
+    toast.failure(error, 'No se pudieron cargar los documentos');
   } finally {
     loading.value = false;
   }
@@ -128,7 +128,7 @@ async function confirmDelete(): Promise<void> {
     deleting.value = null;
     await load();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo eliminar');
+    toast.failure(error, 'No se pudo eliminar');
   } finally {
     removing.value = false;
   }
@@ -145,7 +145,7 @@ async function restore(document: DocumentSummary): Promise<void> {
     toast.success('Documento restaurado');
     await load();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo restaurar');
+    toast.failure(error, 'No se pudo restaurar');
   }
 }
 

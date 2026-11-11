@@ -221,7 +221,7 @@ async function onFile(event: Event): Promise<void> {
     emit('added');
     selectedId.value = image.id;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo añadir la imagen');
+    toast.failure(error, 'No se pudo añadir la imagen');
   }
 }
 

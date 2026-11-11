@@ -9,7 +9,7 @@ import { designs } from '../../db/schema.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { setActiveDesign } from '../../lib/active-design.js';
-import { forbidden, notFound } from '../../lib/errors.js';
+import { AppError, forbidden, internal, notFound } from '../../lib/errors.js';
 import { designTokensSchema } from '../../lib/validators.js';
 
 const createSchema = z.object({
@@ -118,7 +118,7 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning();
 
-    if (!created) throw new Error('No se pudo crear el diseño');
+    if (!created) throw internal('DESIGN_CREATE_FAILED', 'No se pudo crear el diseño');
     await logActivity(user.sub, 'design', created.id, 'created', { name: created.name });
     return reply.status(201).send({ design: created });
   });
@@ -138,10 +138,11 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede editar este diseño');
 
     if (body.expectedVersion !== undefined && body.expectedVersion !== row.version) {
-      throw Object.assign(new Error('El diseño cambió en otra sesión'), {
-        statusCode: 409,
-        code: 'VERSION_CONFLICT',
-      });
+      throw new AppError(
+        409,
+        'VERSION_CONFLICT',
+        'El diseño cambió en otra sesión. Recarga para ver la versión más reciente.',
+      );
     }
 
     const [updated] = await db
@@ -157,7 +158,7 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(designs.id, id))
       .returning();
 
-    if (!updated) throw new Error('No se pudo actualizar el diseño');
+    if (!updated) throw internal('DESIGN_UPDATE_FAILED', 'No se pudo actualizar el diseño');
     await logActivity(user.sub, 'design', id, 'updated', { version: updated.version });
     return { design: updated };
   });
@@ -216,7 +217,7 @@ export async function designRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning();
 
-    if (!created) throw new Error('No se pudo duplicar el diseño');
+    if (!created) throw internal('DESIGN_CLONE_FAILED', 'No se pudo duplicar el diseño');
     await logActivity(user.sub, 'design', created.id, 'cloned', { from: id });
     return reply.status(201).send({ design: created });
   });

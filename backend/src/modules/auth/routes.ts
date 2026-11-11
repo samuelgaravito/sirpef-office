@@ -14,7 +14,7 @@ import {
   clearAuthCookies,
   setAuthCookies,
 } from '../../lib/auth-guard.js';
-import { AppError, badRequest, conflict, forbidden, notFound, unauthorized } from '../../lib/errors.js';
+import { AppError, badRequest, conflict, forbidden, internal, notFound, unauthorized } from '../../lib/errors.js';
 import {
   generateRefreshToken,
   hashToken,
@@ -101,7 +101,13 @@ function svaError(error: unknown): AppError {
   if (error instanceof SvaAccessError) {
     return new AppError(error.statusCode, 'SVA_ACCESS_DENIED', error.message);
   }
-  return new AppError(500, 'SVA_ERROR', (error as Error).message);
+  // Cualquier otro fallo de SVA es una incidencia del servicio: no se filtra
+  // el detalle técnico al usuario, solo se registra en el log.
+  return new AppError(
+    502,
+    'SVA_ERROR',
+    'SVA respondió con un error inesperado. Inténtalo de nuevo en unos minutos.',
+  );
 }
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -141,7 +147,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       })
       .returning();
 
-    if (!created) throw new AppError(500, 'CREATE_FAILED', 'No se pudo crear el usuario');
+    if (!created) throw internal('USER_CREATE_FAILED', 'No se pudo crear el usuario');
 
     const response = await issueSession(request, reply, created);
     return reply.status(201).send(response);
@@ -199,11 +205,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (error instanceof SvaAccessError || error instanceof SvaUnavailableError) {
         throw svaError(error);
       }
-      if (error instanceof AppError) throw error;
-      const message = (error as Error).message;
-      if (message.includes('pertenece a otro usuario') || message.includes('reservado')) {
-        throw conflict(message);
-      }
+      // El conflicto de correo ya viene tipado desde `upsertSvaUser`.
       throw error;
     }
   });
@@ -320,7 +322,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const [updated] = await db.update(users).set(patch).where(eq(users.id, user.id)).returning();
-    if (!updated) throw new AppError(500, 'UPDATE_FAILED', 'No se pudo actualizar el perfil');
+    if (!updated) throw internal('PROFILE_UPDATE_FAILED', 'No se pudo actualizar el perfil');
 
     return { user: toPublicUser(updated) };
   });
