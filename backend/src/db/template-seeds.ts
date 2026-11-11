@@ -175,7 +175,7 @@ export const seedTemplates: SeedTemplate[] = [
     description: 'Comunicación interna con destinatario, remitente, asunto y cuerpo.',
     designIndex: 0,
     schema: [
-      { key: 'numero', label: 'Número', type: 'text', required: true, aiHint: 'Correlativo, p. ej. MEM-2026-0001' },
+      { key: 'numero', label: 'Número', type: 'text', required: true, aiHint: 'Correlativo, p. ej. MEM-0001-2026' },
       { key: 'destinatario', label: 'Para', type: 'text', required: true },
       { key: 'cargo_destinatario', label: 'Cargo del destinatario', type: 'text' },
       { key: 'remitente', label: 'De', type: 'text', required: true },

@@ -46,8 +46,8 @@ async function load(): Promise<void> {
       trashed: view.value === 'trash' ? 'true' : undefined,
     });
     designs.value = data.items;
-  } catch {
-    toast.error('No se pudieron cargar los diseños');
+  } catch (error) {
+    toast.failure(error, 'No se pudieron cargar los diseños');
   } finally {
     loading.value = false;
   }
@@ -59,7 +59,7 @@ async function clone(design: DesignRecord): Promise<void> {
     toast.success('Diseño duplicado');
     await router.push({ name: 'design', params: { id: data.design.id } });
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo duplicar');
+    toast.failure(error, 'No se pudo duplicar');
   }
 }
 
@@ -96,7 +96,7 @@ async function toggleCurrent(design: DesignRecord, next: boolean): Promise<void>
     );
   } catch (error) {
     designs.value = previous;
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el diseño en uso');
+    toast.failure(error, 'No se pudo cambiar el diseño en uso');
   } finally {
     switching.value = null;
   }
@@ -116,7 +116,7 @@ async function confirmDelete(): Promise<void> {
     toast.success('Diseño eliminado');
     deleting.value = null;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo eliminar');
+    toast.failure(error, 'No se pudo eliminar');
   } finally {
     removing.value = false;
   }
@@ -128,7 +128,7 @@ async function restore(design: DesignRecord): Promise<void> {
     toast.success('Diseño restaurado');
     await load();
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo restaurar');
+    toast.failure(error, 'No se pudo restaurar');
   }
 }
 

@@ -1,4 +1,5 @@
-import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -15,18 +16,25 @@ import {
 import type { DesignTokens, DocType, JSONContent } from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
-import { designs, templateVersions, templates } from '../../db/schema.js';
+import {
+  designs,
+  templateShares,
+  templateVersions,
+  templates,
+  users,
+} from '../../db/schema.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { logActivity } from '../../lib/activity.js';
 import { previewDocumentNumber } from '../../lib/counter.js';
 import { getActiveDesigns, resolveTemplateDesign } from '../../lib/active-design.js';
-import { forbidden, notFound } from '../../lib/errors.js';
+import { getTemplateAccess, type Permission } from '../../lib/access.js';
+import { AppError, badRequest, forbidden, internal, notFound } from '../../lib/errors.js';
 import {
   ensureNumberingSeries,
-  getNumberingSeries,
+  findSeriesOwner,
+  generateAutoPrefix,
   getNumberingState,
-  parseNumberingPrefix,
-  updateNumberingSeries,
+  resolveTemplateNumbering as resolveTemplateNumberingConfig,
 } from '../../lib/numbering.js';
 import { renderDocumentHtml } from '../../lib/document-html.js';
 import { buildDocumentHtml, sampleValues } from '../../lib/render.js';
@@ -39,7 +47,8 @@ import {
 
 const numberingInputSchema = z.object({
   enabled: z.boolean().optional(),
-  prefix: z.string().trim().max(10).nullable().optional(),
+  /** Prefijo de 1 a 20 caracteres; vacío = que el servidor asigne uno. */
+  prefix: z.string().trim().max(20).nullable().optional(),
   startValue: z.number().int().min(1).max(999_999).optional(),
   padding: z.number().int().min(1).max(8).optional(),
   includeYear: z.boolean().optional(),
@@ -129,100 +138,85 @@ interface TemplateAccessUser {
   role: 'admin' | 'member';
 }
 
-interface TemplateAccessRow {
-  ownerId: string;
-  isShared: boolean;
-  isActive: boolean;
-}
-
-/** Propietario, o cualquier usuario sobre una plantilla compartida activa. */
-function canViewTemplate(user: TemplateAccessUser, row: TemplateAccessRow): boolean {
-  if (row.ownerId === user.sub) return true;
-  if (!row.isShared) return false;
-  // Los administradores también ven las compartidas inactivas para mantenerlas.
-  return user.role === 'admin' || row.isActive;
-}
-
-/** Propietario, o administrador sobre una plantilla compartida. */
-function canEditTemplate(
+/**
+ * Permiso efectivo sobre una plantilla concreta, para las rutas que ya
+ * tienen la fila cargada (listados).
+ */
+function permissionFor(
   user: TemplateAccessUser,
-  row: Pick<TemplateAccessRow, 'ownerId' | 'isShared'>,
-): boolean {
-  return row.ownerId === user.sub || (user.role === 'admin' && row.isShared);
+  row: { ownerId: string; isShared: boolean; isActive: boolean },
+  sharePermission?: Permission | null,
+): Permission {
+  if (row.ownerId === user.sub) return 'owner';
+  if (sharePermission) {
+    // Una compartición explícita de tipo 'owner' no existe: el propietario es
+    // quien la tiene. Por seguridad se degrada a editor.
+    const granted = sharePermission === 'owner' ? 'editor' : sharePermission;
+    return user.role === 'admin' ? 'editor' : granted;
+  }
+  if (row.isShared && (row.isActive || user.role === 'admin')) {
+    return user.role === 'admin' ? 'editor' : 'viewer';
+  }
+  return 'viewer';
+}
+
+/**
+ * ¿La plantilla se ha compartido con alguien, explícitamente o con todos?
+ *
+ * El administrador mantiene sobre las plantillas compartidas los mismos
+ * poderes que tenía antes (editarlas y activarlas), así que necesita saber si
+ * la plantilla es de dominio compartido o privada.
+ */
+async function isSharedWithOthers(templateId: string, isSharedGlobally: boolean): Promise<boolean> {
+  if (isSharedGlobally) return true;
+  const [row] = await db
+    .select({ templateId: templateShares.templateId })
+    .from(templateShares)
+    .where(eq(templateShares.templateId, templateId))
+    .limit(1);
+  return Boolean(row);
 }
 
 interface TemplateNumbering {
   enabled: boolean;
   prefix: string | null;
+  /** El prefijo lo asignó el servidor, no el usuario. */
+  auto: boolean;
 }
 
 /**
- * Resuelve la serie de numeración de una plantilla. Reutiliza la serie si el
- * prefijo ya existe y solo la modifica cuando el usuario cambia de verdad el
- * número inicial, el relleno o el uso del año.
+ * Resuelve la serie de numeración de una plantilla.
+ *
+ * Cada plantilla tiene su propia serie: el prefijo es único entre las
+ * plantillas vivas, de modo que su contador no se comparte con nadie más. Si
+ * el usuario deja el prefijo vacío, el servidor le asigna un código corto
+ * único.
  */
 async function resolveTemplateNumbering(options: {
   userId: string;
+  role: 'admin' | 'member';
   docType: DocType;
+  templateId: string;
   input?: z.infer<typeof numberingInputSchema>;
-  current?: { numberingEnabled: boolean; numberingPrefix: string | null } | null;
+  current?: {
+    numberingEnabled: boolean;
+    numberingPrefix: string | null;
+    numberingPrefixAuto: boolean;
+  } | null;
 }): Promise<TemplateNumbering> {
-  const { input, current } = options;
-  const fallbackPrefix = DOC_TYPE_PREFIX[options.docType];
-  const enabled =
-    input?.enabled ??
-    current?.numberingEnabled ??
-    !DOC_TYPES_WITHOUT_NUMBER.includes(options.docType);
+  const resolved = await resolveTemplateNumberingConfig({
+    templateId: options.templateId,
+    docType: options.docType,
+    user: { sub: options.userId, role: options.role },
+    input: options.input,
+    current: options.current,
+  });
 
-  // `prefix: ''` explícito significa “sin prefijo”. Si el campo no se envía,
-  // se conserva el prefijo actual o se usa el sugerido por tipo.
-  const requestedPrefix = input?.prefix;
-  const rawPrefix =
-    requestedPrefix !== undefined && requestedPrefix !== null
-      ? requestedPrefix
-      : current?.numberingPrefix ?? fallbackPrefix;
-  const prefix = normalizeNumberingPrefix(rawPrefix ?? '');
-  parseNumberingPrefix(prefix);
-
-  if (!enabled) {
-    // Asegura la serie para que la clave foránea de templates no falle.
-    await ensureNumberingSeries({
-      prefix,
-      startValue: input?.startValue ?? 1,
-      padding: input?.padding ?? 4,
-      includeYear: input?.includeYear ?? true,
-      createdBy: options.userId,
-    });
-    return { enabled: false, prefix };
-  }
-
-  const existing = await getNumberingSeries(prefix);
-  if (!existing) {
-    await ensureNumberingSeries({
-      prefix,
-      startValue: input?.startValue ?? 1,
-      padding: input?.padding ?? 4,
-      includeYear: input?.includeYear ?? true,
-      createdBy: options.userId,
-    });
-  } else if (
-    input &&
-    ((input.startValue !== undefined && input.startValue !== existing.startValue) ||
-      (input.padding !== undefined && input.padding !== existing.padding) ||
-      (input.includeYear !== undefined && input.includeYear !== existing.includeYear))
-  ) {
-    await updateNumberingSeries(
-      prefix,
-      {
-        startValue: input.startValue,
-        padding: input.padding,
-        includeYear: input.includeYear,
-      },
-      options.userId,
-    );
-  }
-
-  return { enabled: true, prefix };
+  return {
+    enabled: resolved.enabled,
+    prefix: resolved.prefix,
+    auto: resolved.auto,
+  };
 }
 
 /** Número de ejemplo para la vista previa de una plantilla guardada. */
@@ -264,7 +258,6 @@ function draftSampleNumber(input?: {
     includeYear: input.includeYear ?? true,
   });
 }
-
 async function previewHtml(options: {
   title: string;
   body: JSONContent;
@@ -298,15 +291,29 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const query = listQuery.parse(request.query);
 
     const own = eq(templates.ownerId, user.sub);
-    // Los administradores ven las compartidas aunque estén inactivas; el resto
-    // solo las activas. Las privadas ajenas nunca se listan.
-    const sharedVisible = and(
+    // Compartidas con este usuario por nombre (editor o lector).
+    const sharedWithMe = inArray(
+      templates.id,
+      db
+        .select({ templateId: templateShares.templateId })
+        .from(templateShares)
+        .where(eq(templateShares.userId, user.sub)),
+    );
+    // Compartidas con todo el mundo. Los administradores ven las inactivas
+    // para poder mantenerlas; el resto, solo las activas. Las privadas ajenas
+    // nunca se listan.
+    const sharedGlobal = and(
       eq(templates.isShared, true),
       user.role === 'admin' ? undefined : eq(templates.isActive, true),
       sql`${templates.ownerId} <> ${user.sub}`,
     );
+
     const visibility =
-      query.scope === 'mine' ? own : query.scope === 'shared' ? sharedVisible : or(own, sharedVisible);
+      query.scope === 'mine'
+        ? own
+        : query.scope === 'shared'
+          ? or(sharedWithMe, sharedGlobal)
+          : or(own, sharedWithMe, sharedGlobal);
 
     const where = query.trashed === 'true'
       ? [eq(templates.ownerId, user.sub), isNotNull(templates.deletedAt)]
@@ -329,13 +336,25 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: templates.isShared,
         isActive: templates.isActive,
         ownerId: templates.ownerId,
+        ownerName: users.name,
         schema: templates.schema,
         isMine: sql<boolean>`${templates.ownerId} = ${user.sub}`,
+        /** Permiso de este usuario: viene del acceso explícito, si lo hay. */
+        sharePermission: templateShares.permission,
+        /** Numeración de la plantilla: prefijo propio o código automático. */
+        numberingEnabled: templates.numberingEnabled,
+        numberingPrefix: templates.numberingPrefix,
+        numberingPrefixAuto: templates.numberingPrefixAuto,
         updatedAt: templates.updatedAt,
         deletedAt: templates.deletedAt,
       })
       .from(templates)
       .leftJoin(designs, and(eq(designs.id, templates.designId), isNull(designs.deletedAt)))
+      .leftJoin(users, eq(users.id, templates.ownerId))
+      .leftJoin(
+        templateShares,
+        and(eq(templateShares.templateId, templates.id), eq(templateShares.userId, user.sub)),
+      )
       .where(and(...where))
       .orderBy(desc(templates.updatedAt))
       .limit(query.pageSize)
@@ -361,6 +380,8 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
           effectiveDesignName: active?.name ?? item.designName,
           /** Fecha del diseño aplicado: invalida la caché de la vista previa. */
           effectiveDesignUpdatedAt: active?.updatedAt ?? item.designUpdatedAt,
+          /** Permiso efectivo del usuario sobre esta plantilla. */
+          permission: permissionFor(user, item, item.sharePermission),
         };
       }),
       total: countRows[0]?.count ?? 0,
@@ -375,13 +396,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const query = previewQuery.parse(request.query);
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
+    const { template: row } = await getTemplateAccess(user.sub, id, user.role);
 
     let tokens: DesignTokens = DEFAULT_DESIGN_TOKENS;
     if (query.designId === 'none') {
@@ -446,19 +461,39 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const user = await authenticate(request);
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
+    const { template: row, permission } = await getTemplateAccess(user.sub, id, user.role);
 
     // El diseño efectivo es el que está en uso en la cuenta de la plantilla.
     const resolved = await resolveTemplateDesign(row.ownerId, row.designId);
 
+    // Los accesos son datos del propietario: solo él (o un administrador)
+    // necesita ver quién puede mejorar la plantilla.
+    const shares =
+      permission === 'owner' || user.role === 'admin'
+        ? await db
+            .select({
+              userId: templateShares.userId,
+              permission: templateShares.permission,
+              name: users.name,
+              email: users.email,
+            })
+            .from(templateShares)
+            .innerJoin(users, eq(users.id, templateShares.userId))
+            .where(eq(templateShares.templateId, id))
+        : [];
+
+    const [owner] = await db
+      .select({ name: users.name })
+      .from(users)
+      .where(eq(users.id, row.ownerId))
+      .limit(1);
+
     return {
       template: row,
+      /** Permiso efectivo del usuario: 'owner' | 'editor' | 'viewer'. */
+      permission,
+      /** Nombre del propietario de la plantilla. */
+      ownerName: owner?.name ?? null,
       /** Diseño que se aplica ahora (el que está en uso). */
       design: resolved.design ?? null,
       effectiveDesignId: resolved.design?.id ?? null,
@@ -468,6 +503,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       // Número que tendría un documento creado con esta plantilla. Es solo una
       // lectura: no reserva el correlativo.
       numberingPreview: await previewDocumentNumber({ docType: row.docType, template: row }),
+      shares,
     };
   });
 
@@ -487,15 +523,22 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // El identificador se genera aquí para poder derivar de él el prefijo
+    // automático cuando la plantilla no lleva prefijo propio.
+    const templateId = randomUUID();
+
     const numbering = await resolveTemplateNumbering({
       userId: user.sub,
+      role: user.role,
       docType: body.docType,
+      templateId,
       input: body.numbering,
     });
 
     const [created] = await db
       .insert(templates)
       .values({
+        id: templateId,
         ownerId: user.sub,
         designId: body.designId ?? null,
         name: body.name,
@@ -509,10 +552,11 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: body.isShared,
         numberingEnabled: numbering.enabled,
         numberingPrefix: numbering.prefix,
+        numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
-    if (!created) throw new Error('No se pudo crear la plantilla');
+    if (!created) throw internal('TEMPLATE_CREATE_FAILED', 'No se pudo crear la plantilla');
 
     await logActivity(user.sub, 'template', created.id, 'created', { name: created.name });
     return reply.status(201).send({ template: created });
@@ -524,14 +568,12 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = z.object({ isActive: z.boolean() }).parse(request.body);
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canEditTemplate(user, row)) {
-      throw forbidden('Solo el propietario o un administrador pueden cambiar el estado de esta plantilla');
+    const { template: row, permission } = await getTemplateAccess(user.sub, id, user.role);
+    const canToggle =
+      permission === 'owner' ||
+      (user.role === 'admin' && (await isSharedWithOthers(id, row.isShared)));
+    if (!canToggle) {
+      throw forbidden('Solo el propietario puede cambiar el estado de esta plantilla');
     }
 
     const [updated] = await db
@@ -540,7 +582,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(templates.id, id))
       .returning();
 
-    if (!updated) throw new Error('No se pudo actualizar la plantilla');
+    if (!updated) throw internal('TEMPLATE_STATUS_FAILED', 'No se pudo actualizar el estado de la plantilla');
     await logActivity(user.sub, 'template', id, body.isActive ? 'activated' : 'deactivated', {
       name: updated.name,
     });
@@ -553,34 +595,61 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = updateSchema.parse(request.body);
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canEditTemplate(user, row)) {
-      throw forbidden('Solo el propietario o un administrador pueden editar esta plantilla');
+    const { template: row, permission } = await getTemplateAccess(user.sub, id, user.role);
+    if (permission !== 'owner' && permission !== 'editor') {
+      throw forbidden('Necesitas permiso de edición sobre esta plantilla');
+    }
+
+    // Los ajustes de propiedad (visibilidad, numeración, tipo, diseño) son del
+    // propietario: quien solo puede mejorar la plantilla no los cambia. El
+    // administrador mantiene esos poderes sobre las plantillas compartidas.
+    const ownsSettings =
+      permission === 'owner' ||
+      (user.role === 'admin' && (await isSharedWithOthers(id, row.isShared)));
+    if (!ownsSettings) {
+      const attempted = [
+        body.isShared !== undefined ? 'la visibilidad' : null,
+        body.numbering !== undefined ? 'la numeración' : null,
+        body.docType !== undefined ? 'el tipo de documento' : null,
+        body.designId !== undefined ? 'el diseño' : null,
+      ].filter((item): item is string => item !== null);
+      if (attempted.length > 0) {
+        throw forbidden(
+          `Solo el propietario puede cambiar ${attempted.join(', ')} de la plantilla`,
+        );
+      }
     }
 
     if (body.expectedVersion !== undefined && body.expectedVersion !== row.version) {
-      throw Object.assign(new Error('La plantilla cambió en otra sesión'), {
-        statusCode: 409,
-        code: 'VERSION_CONFLICT',
-      });
+      throw new AppError(
+        409,
+        'VERSION_CONFLICT',
+        'La plantilla cambió en otra sesión. Recarga para ver la versión más reciente.',
+      );
     }
 
     const nextVersion = row.version + 1;
     const effectiveDocType = body.docType ?? row.docType;
-    const numbering = await resolveTemplateNumbering({
-      userId: user.sub,
-      docType: effectiveDocType,
-      input: body.numbering,
-      current: {
-        numberingEnabled: row.numberingEnabled,
-        numberingPrefix: row.numberingPrefix,
-      },
-    });
+    // Quien no gobierna los ajustes de propiedad conserva la numeración tal
+    // como está: no se recalcula ni se toca la serie.
+    const numbering = ownsSettings
+      ? await resolveTemplateNumbering({
+          userId: user.sub,
+          role: user.role,
+          docType: effectiveDocType,
+          templateId: id,
+          input: body.numbering,
+          current: {
+            numberingEnabled: row.numberingEnabled,
+            numberingPrefix: row.numberingPrefix,
+            numberingPrefixAuto: row.numberingPrefixAuto,
+          },
+        })
+      : {
+          enabled: row.numberingEnabled,
+          prefix: row.numberingPrefix,
+          auto: row.numberingPrefixAuto,
+        };
     // La instantánea guarda los tokens del diseño efectivo (el que está en
     // uso en el momento de la edición).
     const resolved = await resolveTemplateDesign(row.ownerId, row.designId);
@@ -600,13 +669,14 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: body.isShared ?? row.isShared,
         numberingEnabled: numbering.enabled,
         numberingPrefix: numbering.prefix,
+        numberingPrefixAuto: numbering.auto,
         version: nextVersion,
         updatedAt: new Date(),
       })
       .where(eq(templates.id, id))
       .returning();
 
-    if (!updated) throw new Error('No se pudo actualizar la plantilla');
+    if (!updated) throw internal('TEMPLATE_UPDATE_FAILED', 'No se pudo actualizar la plantilla');
 
     await db.insert(templateVersions).values({
       templateId: id,
@@ -622,11 +692,14 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: updated.aiInstructions,
         tokens: resolved.tokens,
       },
-      note: body.note ?? 'Edición manual',
+      note: body.note ?? (permission === 'owner' ? 'Edición manual' : 'Mejora de un colaborador'),
       createdBy: user.sub,
     });
 
-    await logActivity(user.sub, 'template', id, 'updated', { version: nextVersion });
+    await logActivity(user.sub, 'template', id, 'updated', {
+      version: nextVersion,
+      permission,
+    });
     return { template: updated };
   });
 
@@ -636,19 +709,28 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = z.object({ name: z.string().trim().min(1).max(160).optional() }).parse(request.body ?? {});
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
+    const { template: row } = await getTemplateAccess(user.sub, id, user.role);
 
     const design = await visibleDesign(user.sub, row.designId);
+
+    // La copia no puede heredar el prefijo: el original sigue usándolo.
+    // Recibe su propio código corto.
+    const cloneId = randomUUID();
+    const numbering = await resolveTemplateNumbering({
+      userId: user.sub,
+      role: user.role,
+      docType: row.docType,
+      templateId: cloneId,
+      input: {
+        enabled: row.numberingEnabled,
+        prefix: row.numberingEnabled ? '' : row.numberingPrefix,
+      },
+    });
 
     const [created] = await db
       .insert(templates)
       .values({
+        id: cloneId,
         ownerId: user.sub,
         designId: design?.id ?? null,
         name: body.name ?? `${row.name} (copia)`,
@@ -661,12 +743,13 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: row.aiInstructions,
         isShared: false,
         isActive: true,
-        numberingEnabled: row.numberingEnabled,
-        numberingPrefix: row.numberingPrefix,
+        numberingEnabled: numbering.enabled,
+        numberingPrefix: numbering.prefix,
+        numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
-    if (!created) throw new Error('No se pudo duplicar la plantilla');
+    if (!created) throw internal('TEMPLATE_CLONE_FAILED', 'No se pudo duplicar la plantilla');
     await logActivity(user.sub, 'template', created.id, 'cloned', { from: id });
     return reply.status(201).send({ template: created });
   });
@@ -683,7 +766,6 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .limit(1);
     if (!row) throw notFound('Plantilla no encontrada');
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede eliminar esta plantilla');
-
     await db
       .update(templates)
       .set({ deletedAt: new Date(), updatedAt: new Date() })
@@ -701,9 +783,29 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     if (!row || !row.deletedAt) throw notFound('Plantilla no encontrada');
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede restaurar esta plantilla');
 
+    // Mientras la plantilla estuvo en la papelera, otra pudo ocupar su
+    // prefijo. En ese caso recibe un código propio para no compartir serie.
+    let prefix = row.numberingPrefix;
+    let auto = row.numberingPrefixAuto;
+    if (prefix) {
+      const owner = await findSeriesOwner(prefix, id);
+      if (owner) {
+        prefix = await generateAutoPrefix(id);
+        auto = true;
+        // La serie del código nuevo debe existir antes de referenciarla.
+        await ensureNumberingSeries({
+          prefix,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+          createdBy: user.sub,
+        });
+      }
+    }
+
     await db
       .update(templates)
-      .set({ deletedAt: null, updatedAt: new Date() })
+      .set({ deletedAt: null, numberingPrefix: prefix, numberingPrefixAuto: auto, updatedAt: new Date() })
       .where(eq(templates.id, id));
 
     await logActivity(user.sub, 'template', id, 'restored', { name: row.name });
@@ -715,13 +817,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     const user = await authenticate(request);
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
 
-    const [row] = await db
-      .select()
-      .from(templates)
-      .where(and(eq(templates.id, id), isNull(templates.deletedAt)))
-      .limit(1);
-    if (!row) throw notFound('Plantilla no encontrada');
-    if (!canViewTemplate(user, row)) throw notFound('Plantilla no encontrada');
+    await getTemplateAccess(user.sub, id, user.role);
 
     const items = await db
       .select({
@@ -730,12 +826,158 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         note: templateVersions.note,
         createdAt: templateVersions.createdAt,
         createdBy: templateVersions.createdBy,
+        /** Quién hizo el cambio: la mejora de un colaborador queda firmada. */
+        authorName: users.name,
       })
       .from(templateVersions)
+      .leftJoin(users, eq(users.id, templateVersions.createdBy))
       .where(eq(templateVersions.templateId, id))
       .orderBy(desc(templateVersions.version))
       .limit(100);
 
     return { items };
+  });
+
+  /** Restaura una versión anterior de la plantilla como una versión nueva. */
+  app.post('/:id/versions/:version/restore', async (request) => {
+    const user = await authenticate(request);
+    const { id, version } = z.object({ id: z.uuid(), version: z.coerce.number().int().positive() })
+      .parse(request.params);
+
+    const { template: row } = await getTemplateAccess(user.sub, id, user.role);
+
+    const [snapshot] = await db
+      .select()
+      .from(templateVersions)
+      .where(and(eq(templateVersions.templateId, id), eq(templateVersions.version, version)))
+      .limit(1);
+    if (!snapshot) throw notFound('La versión no existe');
+
+    const nextVersion = row.version + 1;
+    const [updated] = await db
+      .update(templates)
+      .set({
+        name: snapshot.snapshot.name,
+        description: snapshot.snapshot.description,
+        docType: snapshot.snapshot.docType,
+        schema: snapshot.snapshot.schema,
+        body: snapshot.snapshot.body,
+        header: snapshot.snapshot.header,
+        footer: snapshot.snapshot.footer,
+        aiInstructions: snapshot.snapshot.aiInstructions,
+        version: nextVersion,
+        updatedAt: new Date(),
+      })
+      .where(eq(templates.id, id))
+      .returning();
+
+    if (!updated) throw internal('TEMPLATE_VERSION_RESTORE_FAILED', 'No se pudo restaurar la versión');
+
+    // La restauración no borra la historia: se guarda como una versión nueva.
+    await db.insert(templateVersions).values({
+      templateId: id,
+      version: nextVersion,
+      snapshot: {
+        name: updated.name,
+        description: updated.description,
+        docType: updated.docType,
+        schema: updated.schema,
+        body: updated.body,
+        header: updated.header,
+        footer: updated.footer,
+        aiInstructions: updated.aiInstructions,
+        tokens: snapshot.snapshot.tokens,
+      },
+      note: `Restaurada la versión ${version}`,
+      createdBy: user.sub,
+    });
+
+    await logActivity(user.sub, 'template', id, 'restored', { version: nextVersion, from: version });
+    return { template: updated };
+  });
+
+  /** Lista las personas con acceso explícito a la plantilla. */
+  app.get('/:id/shares', async (request) => {
+    const user = await authenticate(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+    const { permission } = await getTemplateAccess(user.sub, id, user.role);
+    if (permission !== 'owner' && user.role !== 'admin') {
+      throw forbidden('Solo el propietario puede ver los accesos de esta plantilla');
+    }
+
+    const items = await db
+      .select({
+        userId: templateShares.userId,
+        permission: templateShares.permission,
+        name: users.name,
+        email: users.email,
+      })
+      .from(templateShares)
+      .innerJoin(users, eq(users.id, templateShares.userId))
+      .where(eq(templateShares.templateId, id));
+
+    return { items };
+  });
+
+  /** Comparte la plantilla con una persona (editor o lector). */
+  app.post('/:id/shares', async (request) => {
+    const user = await authenticate(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const body = z
+      .object({
+        userId: z.uuid(),
+        permission: z.enum(['editor', 'viewer']).default('editor'),
+      })
+      .parse(request.body);
+
+    const { template: row, permission } = await getTemplateAccess(user.sub, id, user.role);
+    if (permission !== 'owner') {
+      throw forbidden('Solo el propietario puede compartir esta plantilla');
+    }
+
+    const [target] = await db.select().from(users).where(eq(users.id, body.userId)).limit(1);
+    if (!target) throw notFound('Usuario no encontrado');
+    if (target.id === user.sub) throw badRequest('No puedes compartir contigo mismo');
+    if (!target.isActive) throw badRequest('El usuario está inactivo');
+
+    await db
+      .insert(templateShares)
+      .values({ templateId: id, userId: body.userId, permission: body.permission })
+      .onConflictDoUpdate({
+        target: [templateShares.templateId, templateShares.userId],
+        set: { permission: body.permission },
+      });
+
+    await logActivity(user.sub, 'template', id, 'shared', {
+      userId: body.userId,
+      permission: body.permission,
+      name: row.name,
+    });
+
+    return { ok: true };
+  });
+
+  /** Retira el acceso de una persona. */
+  app.delete('/:id/shares/:userId', async (request) => {
+    const user = await authenticate(request);
+    const params = z.object({ id: z.uuid(), userId: z.uuid() }).parse(request.params);
+
+    const { permission } = await getTemplateAccess(user.sub, params.id, user.role);
+    if (permission !== 'owner') {
+      throw forbidden('Solo el propietario puede compartir esta plantilla');
+    }
+
+    await db
+      .delete(templateShares)
+      .where(
+        and(eq(templateShares.templateId, params.id), eq(templateShares.userId, params.userId)),
+      );
+
+    await logActivity(user.sub, 'template', params.id, 'unshared', {
+      userId: params.userId,
+    });
+
+    return { ok: true };
   });
 }

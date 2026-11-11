@@ -58,7 +58,7 @@ async function submit(): Promise<void> {
     emit('rejected', { allowEdit: editable });
     emit('close');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo rechazar el envío');
+    toast.failure(error, 'No se pudo rechazar el envío');
   } finally {
     rejecting.value = false;
   }

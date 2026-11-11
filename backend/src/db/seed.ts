@@ -110,6 +110,9 @@ async function seed(): Promise<void> {
       continue;
     }
 
+    // Cada plantilla tiene su propia serie: el prefijo es único entre
+    // plantillas vivas. Las que no llevan numeración no ocupan serie.
+    const numberingEnabled = !DOC_TYPES_WITHOUT_NUMBER.includes(template.docType);
     await db.insert(templates).values({
       ownerId: admin.id,
       designId: designIds[template.designIndex] ?? null,
@@ -120,8 +123,8 @@ async function seed(): Promise<void> {
       body: template.body,
       aiInstructions: template.aiInstructions,
       isShared: true,
-      numberingEnabled: !DOC_TYPES_WITHOUT_NUMBER.includes(template.docType),
-      numberingPrefix: DOC_TYPE_PREFIX[template.docType],
+      numberingEnabled,
+      numberingPrefix: numberingEnabled ? DOC_TYPE_PREFIX[template.docType] : null,
     });
 
     console.log(`  ✓ Plantilla creada: ${template.name}`);

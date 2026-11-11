@@ -23,12 +23,26 @@ function trimSlash(url: string): string {
 }
 
 async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+  } catch (error) {
+    // Fallo de red o de tiempo de espera contra el proveedor: no es un
+    // problema del documento, así que se explica como caída del servicio.
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+    throw new AppError(
+      timedOut ? 504 : 502,
+      timedOut ? 'AI_TIMEOUT' : 'AI_UNREACHABLE',
+      timedOut
+        ? 'El proveedor de IA tardó demasiado en responder. Inténtalo de nuevo en unos minutos.'
+        : 'No se pudo contactar con el proveedor de IA. Comprueba tu conexión e inténtalo de nuevo.',
+    );
+  }
 
   const text = await response.text();
 
@@ -43,10 +57,16 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
     } catch {
       /* respuesta no JSON */
     }
+    // El mensaje del proveedor ayuda a diagnosticar (clave inválida, cuota,
+    // modelo inexistente…), pero se acompaña de una explicación en español.
     throw new AppError(
       response.status >= 500 ? 502 : 400,
       'AI_PROVIDER_ERROR',
-      `El proveedor de IA respondió ${response.status}: ${detail}`,
+      response.status === 401 || response.status === 403
+        ? 'El proveedor de IA rechazó la clave de API. Revísala en Ajustes.'
+        : response.status === 429
+          ? 'El proveedor de IA alcanzó su límite de peticiones. Espera unos minutos e inténtalo de nuevo.'
+          : `El proveedor de IA respondió con un error (${response.status}): ${detail}`,
     );
   }
 

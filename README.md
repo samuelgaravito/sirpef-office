@@ -35,7 +35,7 @@ y conservar el **historial de versiones** de cada documento.
 
 | Área | Qué incluye |
 | --- | --- |
-| Plantillas | 8 plantillas iniciales (memorándum, nota de entrega, informe, acta, plan de evaluación, currículum, carta/oficio y certificado), clonado, versiones de plantilla y variables tipadas. La lista muestra una **vista previa real** renderizada en servidor con datos de ejemplo. Las plantillas compartidas pueden usarse y duplicarse por cualquiera; solo el propietario o un administrador pueden editarlas. |
+| Plantillas | 8 plantillas iniciales (memorándum, nota de entrega, informe, acta, plan de evaluación, currículum, carta/oficio y certificado), clonado, versiones de plantilla y variables tipadas. La lista muestra una **vista previa real** renderizada en servidor con datos de ejemplo. Las plantillas se **comparten por personas** (`editor`/`viewer`): el propietario invita a quien quiera y un **editor puede mejorar la plantilla directamente** (los cambios se aplican a la original y quedan en el historial con su nombre). Las plantillas marcadas como compartidas con todo el mundo se pueden usar y duplicar por cualquiera. |
 | Crear desde plantilla | Al pulsar una tarjeta de **Inicio** o **Usar** en **Plantillas**, el documento se crea directamente con el diseño de la plantilla y se abre el editor. Sin modal intermedio. |
 | Nueva plantilla | Al crear una plantilla se abre una modal para elegir el diseño inicial, con vista previa y opción **Sin diseño**. Después se abre el editor con ese diseño cargado. |
 | Diseños | 3 diseños iniciales + editor visual con **hoja de trabajo ampliable**: tipografía (incluida **Georama** autoalojada), tamaño, **interlineado global con presets y valor personalizado**, colores, formato de página (A4/Letter/Legal/Folio), orientación, márgenes, membrete, logotipo, encabezado y pie con `{page}` / `{total}`. La cabecera y el pie admiten **alto y ancho configurables** (hasta el 100 % del ancho de página) e **imágenes globales** colocadas en milímetros, con arrastre, redimensionado, modos **Ajustar/Estirar** y anclaje a los bordes superior e inferior, directamente sobre la hoja, con zoom, desplazamiento y panel ocultable. |
@@ -46,14 +46,14 @@ y conservar el **historial de versiones** de cada documento.
 | Cabecera y pie | Bandas enriquecidas editables por documento y por plantilla, con imágenes, variables `{{clave}}`, tokens de numeración `{page}`/`{total}` y **alto y ancho configurables** hasta el ancho completo de la página. Las bandas habilitadas se ven siempre sobre la hoja; la cabecera y el pie quedan anclados a los bordes superior e inferior, y los márgenes solo afectan al cuerpo. El diseño aporta **imágenes globales** que se heredan. Herencia **documento → plantilla → diseño** con restablecimiento a lo heredado. Las bandas y sus imágenes se repiten en cada página del PDF/DOCX. |
 | Variables | Panel lateral con formulario generado desde el esquema (`text`, `date`, `number`, `money`, `select`, `checkbox`, `table`, `image`…), validación de obligatorios y contador de campos pendientes. |
 | Vista previa | Documentos: renderiza el documento real en un iframe aislado con los datos aplicados, también en las tarjetas de **Inicio → Documentos recientes** y **Documentos**; se refresca al cambiar los valores. Plantillas: preview real en la lista y en el editor con datos de ejemplo; la modal de nueva plantilla muestra la vista previa del diseño seleccionado. |
-| Historial | Versiones automáticas/manuales/IA/exportación, punto de control manual, restauración y **diff palabra a palabra** contra la versión actual. |
+| Historial | Versiones automáticas/manuales/IA/exportación, punto de control manual, restauración y **diff palabra a palabra** contra la versión actual. Las **plantillas** tienen su propio historial: cada mejora queda firmada con el nombre de quien la hizo y el propietario puede restaurar cualquier versión anterior. |
 | Autoguardado | Guardado con *debounce*, indicador de estado (“Guardando…”, “Guardado ahora mismo”) y **versionado optimista** con detección de conflictos (HTTP 409). |
 | Búsqueda | Buscar y reemplazar en el documento (`Ctrl/Cmd + F`), con distinción de mayúsculas, contador de coincidencias y “reemplazar todo”. |
 | Exportación | PDF (Chrome headless), DOCX (`docx`) y HTML autocontenido, con los datos interpolados y el diseño aplicado. |
 | IA | OpenAI-compatible, Anthropic, Gemini y Ollama; rellena **solo las variables** del formulario (nunca sobrescribe el formato del cuerpo). Modo manual sin IA. |
-| Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`), registro de actividad. |
+| Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
 | Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso en la bandeja (badge, marca **Nuevo** y toast). Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
-| Numeración | Series de correlativos configurables por plantilla (`MEM-2026-0001`, `CTR-2026-0001`…): prefijo opcional, número inicial, relleno y reinicio anual. Sin prefijo genera `2026-0001`. Varias plantillas que comparten prefijo suman la misma serie, sin duplicados. Incluye campos automáticos (fecha, firmante, cargo). |
+| Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia serie: el prefijo es único entre las plantillas vivas y, si se deja vacío, se asigna un código corto único. Sus números nunca se intercalan con los de otra plantilla. Incluye campos automáticos (fecha, firmante, cargo). |
 
 ### Capturas
 
@@ -323,27 +323,40 @@ plantilla con tipo, etiqueta, obligatoriedad, valor por defecto, opciones y ayud
   transacción que sella el documento). Cada documento emitido guarda además su identidad
   de serie en `documents.numbering_prefix/year/value`, lo que permite recalcular los
   contadores sin parsear el texto.
+- **La papelera no bloquea la numeración.** El número de un documento solo lo reserva
+  mientras el documento está vivo: `documents.doc_number` es único **entre documentos no
+  eliminados** (índice parcial `WHERE deleted_at IS NULL`). Un documento en la papelera
+  conserva su número para la auditoría, pero ya no impide que otro documento lo reciba.
+  La reserva comprueba además el suelo real que ocupan los documentos vivos, de modo que
+  un contador desfasado (por ejemplo tras una reconciliación) nunca emite un correlativo
+  que ya está en uso. Al **restaurar** un documento de la papelera, si su número lo ocupa
+  otro documento vivo, se le libera: vuelve a ser un borrador y recibe un número nuevo la
+  próxima vez que se oficialice. La restauración nunca falla por un número.
 - **Crear un documento no escribe en la base de datos.** El editor se abre en modo
   virtual (`/documents/new`) y el autoguardado vive en `localStorage`. La fila se crea
   solo al pulsar **Guardar**, **Enviar** o **Exportar**. Abrir un documento existente
   tampoco escribe: si el contenido no cambió, el `PUT` no incrementa la versión.
 - El **número previsto** se explica en toda la interfaz, no solo en un tooltip: el editor
-  muestra `MEM-2026-0008` con la leyenda `se asigna al aprobar` y `Serie MEM · puede
-  cambiar si otro memo se aprueba antes`; la tarjeta del listado añade `· previsto`; el
-  panel de **Datos del documento** incluye una fila fija «Número de documento»; y el
-  diálogo de envío avisa *«Al aprobarse, este documento quedará numerado como
-  MEM-2026-0008»*. El número previsto se calcula con una lectura (`numberingPreview`) y
-  se expone también en `GET /api/templates/:id` para el modo «documento nuevo».
+  muestra `MEM-0008-2026` con la leyenda `se asigna al aprobar` y `Serie MEM · puede
+  cambiar si otro documento de esta plantilla se aprueba antes`; la tarjeta del listado
+  añade `· previsto`; el panel de **Datos del documento** incluye una fila fija «Número de
+  documento»; y el diálogo de envío avisa *«Al aprobarse, este documento quedará numerado
+  como MEM-0008-2026»*. El número previsto se calcula con una lectura (`numberingPreview`)
+  y se expone también en `GET /api/templates/:id` para el modo «documento nuevo».
 - Dentro del documento, `{{numero_documento}}` se **sustituye visualmente** por el número
   asignado o el previsto (subrayado punteado y tooltip «se confirmará al aprobar»); el
   texto guardado sigue siendo el token. En la vista previa y el PDF de un borrador el
-  número aparece como `MEM-2026-0008 (previsto)`.
+  número aparece como `MEM-0008-2026 (previsto)`.
 - Desde **Ajustes de la plantilla** se activa o desactiva la numeración y se define el
-  prefijo (opcional), el número inicial, los dígitos y el reinicio anual. Si el prefijo
-  queda vacío se usa una serie sin prefijo: `2026-0001`, `2026-0002`… Todas las plantillas
-  sin prefijo comparten esa serie para no repetir números. El número inicial no puede
-  bajar por debajo de lo ya emitido; si se sube, el próximo documento usa ese valor. Las
-  series se consultan y ajustan con `GET /api/numbering` y `PUT /api/numbering/:prefix`.
+  prefijo, el número inicial, los dígitos y el reinicio anual. El formato del número es
+  `PREFIX-CORRELATIVO-AÑO` (`MEM-0008-2026`) y el prefijo admite de 1 a 20 letras o
+  números. **Cada plantilla lleva su propia numeración**: el prefijo es único entre las
+  plantillas vivas, así que dos plantillas nunca comparten contador ni intercalan sus
+  números. Si el prefijo queda vacío, el servidor asigna un código corto único derivado
+  del identificador de la plantilla (`A3F9`); si el prefijo ya lo usa otra plantilla, el
+  guardado se rechaza indicando a quién pertenece. El número inicial no puede bajar por
+  debajo de lo ya emitido; si se sube, el próximo documento usa ese valor. Las series se
+  consultan y ajustan con `GET /api/numbering` y `PUT /api/numbering/:prefix`.
 - El número está disponible como **variable de sistema** `{{numero_documento}}` en el
   cuerpo, la cabecera y el pie. Se inserta desde **Ajustes → Numeración** o desde la
   pestaña **Variables**, y se rellena al oficializar el documento. La clave
@@ -465,6 +478,53 @@ página. Es un recorte **solo de la miniatura**: el editor, el HTML completo, el
 DOCX no pierden contenido. La misma opción está disponible para las versiones:
 `GET /api/documents/:id/versions/:version/html?embed=1`.
 
+## Compartir y mejorar plantillas
+
+Una plantilla se puede compartir **por personas**, igual que los documentos. El propietario
+invita a quien quiera desde el botón **Compartir** del editor de plantilla (o desde el menú de
+la tarjeta en **Plantillas**) y le concede uno de dos permisos:
+
+| Permiso | Qué puede hacer |
+| --- | --- |
+| **Editor** | Usar la plantilla **y mejorarla**: cambiar el nombre, la descripción, las variables, el cuerpo, la cabecera, el pie y las instrucciones para la IA. |
+| **Lector** | Usarla para crear documentos. No puede modificarla. |
+
+Las mejoras del editor se aplican **sobre la plantilla original**, no sobre una copia: el
+dueño y el resto de usuarios ven el cambio al instante. Cada cambio genera una versión en el
+historial **firmada con el nombre de quien lo hizo**, de modo que siempre se sabe qué mejoró
+quién. El propietario puede **restaurar** cualquier versión anterior desde el panel de
+historial (el botón del reloj en la cabecera del editor).
+
+Hay dos capas de compartición, y no se confunden:
+
+- **Por personas** (`template_shares`): da acceso a personas concretas, con permiso de
+  editor o lector. Es lo que permite que otros **mejoren** la plantilla.
+- **Con todo el mundo** (`templates.is_shared`): la plantilla se puede **usar** por
+  cualquiera, pero eso **no** concede edición.
+
+Los **ajustes de propiedad** siguen siendo del propietario: la visibilidad, el estado
+(activa/inactiva), el tipo de documento y la numeración. Un editor que intenta cambiarlos
+recibe un `403` explícito, y sus mejoras no tocan la serie de correlativos del
+propietario. El administrador conserva los mismos poderes que tenía antes sobre las
+plantillas compartidas.
+
+La plantilla se sigue dibujando con el **diseño en uso de su propietario**, también cuando
+la mejora otra persona: el diseño no viaja con la plantilla.
+
+El editor de plantilla es el único punto donde se edita el cuerpo. La concurrencia se
+resuelve con `expectedVersion`: si otra sesión guardó antes, el segundo guardado recibe un
+`409` («la plantilla cambió en otra sesión») en lugar de pisar el trabajo ajeno.
+
+### API de compartición de plantillas
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/templates/:id/shares` | Lista los accesos explícitos (propietario o administrador). |
+| `POST /api/templates/:id/shares` | `{ "userId": "…", "permission": "editor" \| "viewer" }` → concede acceso. Solo el propietario. |
+| `DELETE /api/templates/:id/shares/:userId` | Retira el acceso. Solo el propietario. |
+| `GET /api/templates/:id/versions` | Historial de versiones, con el autor de cada cambio. |
+| `POST /api/templates/:id/versions/:version/restore` | Restaura una versión anterior como versión nueva. |
+
 ## Vista previa de plantillas
 
 Las plantillas usan el mismo motor de renderizado que los documentos, con **datos de
@@ -569,10 +629,16 @@ cd backend
 | `npm run db:migrate` / `db:generate` / `db:seed` | Migraciones, generación de migraciones y seed. |
 | `npm run db:migrate:fullwidth` | Migra cabeceras y pies existentes al ancho de página (idempotente, con copia de seguridad). |
 | `npm run db:migrate:numbering` | Libera el número de los borradores, rellena `documents.numbering_*` y recalcula los contadores (idempotente, con copia de seguridad). |
-| `npm run db:reconcile-counters` | Compara `document_counters` con los documentos emitidos e informa/corrige desviaciones (`--apply`). |
+| `npm run db:reconcile-counters` | Compara `document_counters` con los documentos **vivos** e informa/corrige desviaciones (`--apply`). Los documentos en la papelera no fijan el suelo: su número queda liberado. |
 | `npm run db:purge-empty-drafts` | Elimina definitivamente los borradores nunca usados (simulación por defecto; `--apply` ejecuta y deja bitácora). |
-| `npm run smoke:numbering` | Con la API levantada, verifica la numeración diferida: el borrador no consume número, el previsto no reserva, la oficialización asigna y las aprobaciones simultáneas no repiten. |
+| `npm run smoke:numbering` | Con la API levantada, verifica la numeración diferida: el borrador no consume número, el previsto no reserva, la oficialización asigna, las aprobaciones simultáneas no repiten y la papelera no bloquea la oficialización de otro documento. |
+| `npm run smoke:errors` | Comprueba que cada tipo de fallo (validación, ruta inexistente, sin sesión, content-type inválido) devuelva el estado y el mensaje correctos, en español y nombrando los campos que fallan. |
+| `npm run smoke:errors:db` | Comprueba los fallos que solo existen con PostgreSQL real: correo duplicado, clave foránea rota, uuid inválido y error inesperado (que no debe filtrar detalles internos). |
+| `npm run smoke:errors:ui` | Con la web de desarrollo levantada, comprueba en un navegador real que un 4xx sale como aviso ámbar, un 5xx como error rojo con su referencia y una caída de red con un mensaje en español (no «Failed to fetch»). |
 | `npm run smoke:campaign` | Con la API levantada, verifica el diseño en uso: encender uno apaga el anterior, las plantillas cargan el que está en uso sin tocar estructura ni variables, el documento creado guarda ese diseño y lo conserva tras cambiar el diseño en uso (limpia los datos de prueba). |
+| `npm run smoke:template-share` | Con la API levantada, verifica la compartición de plantillas: el editor mejora la original, la mejora queda firmada en el historial, el editor no puede tocar los ajustes de propiedad, el lector no puede editar y el propietario puede restaurar una versión (limpia los datos de prueba). |
+| `node scripts/template-share-flow-ui.mjs` | Verificación visual del flujo de compartición con Chrome headless: el administrador comparte una plantilla, el miembro la ve con la insignia **Editable**, la mejora y el historial la firma con su nombre (capturas en `/tmp/sirpefoffice-shots-share-flow`). Necesita `SD_MEMBER_TOKEN` (ver `dev-token.ts`). |
+| `npm run dev:token -- <correo>` | Emite un access token para un usuario. Los miembros vienen de SVA y no tienen contraseña local: es la forma de abrir su sesión en las pruebas de interfaz. |
 | `npm run admin:reset` | Alinea el email y la contraseña del administrador con los valores del seed. |
 | `npm run smoke:inbox` | Con la API levantada, prueba el flujo de bandeja: solicitud de envío, aprobación, autorización de exportación, sellado, lectura, rechazo y bloqueo de edición/borrado/exportación (crea usuarios y documentos temporales y los elimina). |
 | `node scripts/ui-smoke.mjs` | Prueba de humo de la UI con Chrome headless: previews reales de documentos y plantillas, hoja de Diseño con bandas editables y ancho de página completo, inserción de tablas y unión de celdas, creación directa de documentos, modal de diseño al crear plantilla y flujo completo (capturas en `/tmp/sirpefoffice-shots`). |

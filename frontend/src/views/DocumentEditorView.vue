@@ -46,6 +46,7 @@ import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import {
   buildAutoDescription,
@@ -657,7 +658,7 @@ async function load(): Promise<void> {
     previewHtml.value = '';
     void loadReviewMessage();
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : 'No se pudo cargar el documento';
+    loadError.value = explainError(error, 'No se pudo cargar el documento');
   } finally {
     loading.value = false;
   }
@@ -793,8 +794,7 @@ async function hydrateNewDocument(): Promise<void> {
       if (draft.version !== DRAFT_VERSION) persistLocalDraft(draftStorageKey());
     }
   } catch (error) {
-    loadError.value =
-      error instanceof Error ? error.message : 'No se pudo preparar el documento';
+    loadError.value = explainError(error, 'No se pudo preparar el documento');
   } finally {
     loading.value = false;
   }
@@ -835,7 +835,7 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
     }
     return created.id;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo crear el documento');
+    toast.failure(error, 'No se pudo crear el documento');
     return null;
   } finally {
     saving.value = false;
@@ -892,15 +892,15 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
     const apiError = error as { status?: number; code?: string; message?: string };
     if (apiError.code === 'DOCUMENT_LOCKED') {
       dirty.value = false;
-      toast.error(apiError.message ?? 'El documento fue aprobado y enviado; ahora es de solo lectura.');
+      toast.warning(apiError.message ?? 'El documento fue aprobado y enviado; ahora es de solo lectura.');
       await load();
       return;
     }
     if (apiError.status === 409) {
       conflict.value = true;
-      toast.error('Otra sesión modificó el documento. Revisa el conflicto.');
+      toast.warning('Otra sesión modificó el documento. Revisa el conflicto.');
     } else {
-      toast.error(apiError.message ?? 'No se pudo guardar el documento');
+      toast.failure(error, 'No se pudo guardar el documento');
     }
   } finally {
     saving.value = false;
@@ -1031,8 +1031,8 @@ async function overwriteConflict(): Promise<void> {
     conflict.value = false;
     dirty.value = true;
     await save();
-  } catch {
-    toast.error('No se pudo resolver el conflicto');
+  } catch (error) {
+    toast.failure(error, 'No se pudo resolver el conflicto');
   }
 }
 
@@ -1052,7 +1052,7 @@ async function updateStatus(next: DocumentStatus): Promise<void> {
     await load();
   } catch (error) {
     status.value = previous;
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
+    toast.failure(error, 'No se pudo cambiar el estado');
   }
 }
 
@@ -1078,7 +1078,7 @@ async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
     await downloadFile(`/documents/${id}/export/${format}`);
     toast.success(`Archivo ${format.toUpperCase()} generado`);
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo exportar');
+    toast.failure(error, 'No se pudo exportar');
   }
 }
 
@@ -1101,7 +1101,7 @@ async function printPreview(): Promise<void> {
     window.open(url, '_blank', 'noopener');
     window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo abrir la vista previa');
+    toast.failure(error, 'No se pudo abrir la vista previa');
   }
 }
 
@@ -1126,8 +1126,7 @@ async function generateWithAI(): Promise<void> {
       count > 0 ? `La IA rellenó ${count} campo${count === 1 ? '' : 's'}. Revísalos antes de exportar.` : 'No había campos por rellenar',
     );
   } catch (error) {
-    const apiError = error as { status?: number; message?: string };
-    toast.error(apiError.message ?? 'No se pudo generar con IA');
+    toast.failure(error, 'No se pudo generar con IA');
   } finally {
     generating.value = false;
   }
@@ -1153,7 +1152,7 @@ async function togglePreview(): Promise<void> {
     previewHtml.value = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
     previewMode.value = true;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo generar la vista previa');
+    toast.failure(error, 'No se pudo generar la vista previa');
   } finally {
     loadingPreview.value = false;
   }
@@ -1204,7 +1203,7 @@ async function saveAsTemplate(): Promise<void> {
     });
     toast.success('Plantilla creada');
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo crear la plantilla');
+    toast.failure(error, 'No se pudo crear la plantilla');
   }
 }
 

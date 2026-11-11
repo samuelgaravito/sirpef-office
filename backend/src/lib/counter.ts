@@ -18,6 +18,7 @@ import {
   ensureNumberingSeries,
   getNumberingSeries,
   lastIssuedNumber,
+  liveNumberingFloors,
   type DbExecutor,
   type NumberingSeriesRow,
 } from './numbering.js';
@@ -37,10 +38,13 @@ async function seriesForPrefix(prefix: string): Promise<NumberingSeriesRow> {
 
 /**
  * Prefijo de la serie que corresponde a un documento, o `null` si no lleva
- * número. `''` es una serie válida: números sin prefijo (`2026-0001`).
+ * número.
  *
- * - Con plantilla: usa la serie y el interruptor configurados en ella.
- * - Sin plantilla: conserva el comportamiento histórico por tipo de documento.
+ * - Con plantilla: usa la serie de esa plantilla. Cada plantilla tiene su
+ *   propio prefijo, así que su serie y su contador son exclusivos.
+ * - Sin plantilla: no hay serie. Un documento suelto no puede numerarse sin
+ *   una serie propia, y las series por tipo de documento las comparten
+ *   varias plantillas (sus números se intercalaría).
  * - Currículum y documento en blanco no llevan número.
  */
 export function numberingPrefixFor(options: {
@@ -49,15 +53,12 @@ export function numberingPrefixFor(options: {
 }): string | null {
   const { docType, template } = options;
 
-  if (template) {
-    if (!template.numberingEnabled) return null;
-    const prefix = template.numberingPrefix ?? DOC_TYPE_PREFIX[docType];
-    return prefix === undefined ? null : prefix;
-  }
+  if (!template) return null;
+  if (!template.numberingEnabled) return null;
 
-  if (DOC_TYPES_WITHOUT_NUMBER.includes(docType)) return null;
-  const prefix = DOC_TYPE_PREFIX[docType];
-  return prefix === undefined ? null : prefix;
+  // Toda plantilla activa guarda su prefijo. El respaldo por tipo solo
+  // cubre datos antiguos que aún no lo tengan.
+  return template.numberingPrefix ?? DOC_TYPE_PREFIX[docType];
 }
 
 /**
@@ -157,6 +158,11 @@ export async function numberingPreviewsFor(
   const counterByKey = new Map<string, number>();
   for (const row of counters) counterByKey.set(`${row.scope}:${row.year}`, row.counter);
 
+  // Suelo real: el mayor correlativo que ocupan los documentos vivos. Evita
+  // previsualizar un número que ya está ocupado aunque el contador esté
+  // desfasado.
+  const floors = await liveNumberingFloors(prefixes);
+
   return items.map((item) => {
     const prefix = numberingPrefixFor(item);
     if (prefix === null) return null;
@@ -168,7 +174,8 @@ export async function numberingPreviewsFor(
       includeYear: true,
     };
     const year = numberingPeriodYear(series.includeYear);
-    const lastIssued = counterByKey.get(`${prefix}:${year}`) ?? 0;
+    const key = `${prefix}:${year}`;
+    const lastIssued = Math.max(counterByKey.get(key) ?? 0, floors.get(key) ?? 0);
     return buildPreview({ ...series, lastIssued });
   });
 }

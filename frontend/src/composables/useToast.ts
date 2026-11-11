@@ -1,6 +1,8 @@
 import { ref } from 'vue';
 
-export type ToastKind = 'success' | 'error' | 'info';
+import { describeError } from '@/lib/error-message';
+
+export type ToastKind = 'success' | 'error' | 'warning' | 'info';
 
 export interface ToastItem {
   id: number;
@@ -32,6 +34,22 @@ export function useToast() {
     dismiss,
     success: (message: string) => push('success', message),
     error: (message: string) => push('error', message, 6500),
+    warning: (message: string) => push('warning', message, 6500),
     info: (message: string) => push('info', message),
+
+    /**
+     * Muestra el error que se capturó en un `catch`.
+     *
+     * Elige solo el tono: los fallos que el usuario puede corregir (validación,
+     * conflictos, permisos) salen como aviso y los del servidor como error. Si
+     * el servidor envió una referencia de rastreo, se añade al mensaje.
+     */
+    failure: (error: unknown, fallback: string) => {
+      const notice = describeError(error, fallback);
+      const message = notice.reference
+        ? `${notice.message} (ref. ${notice.reference})`
+        : notice.message;
+      return push(notice.tone, message, 6500);
+    },
   };
 }

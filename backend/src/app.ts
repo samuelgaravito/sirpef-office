@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { corsOrigins, env, isProduction } from './env.js';
 import { errorHandler } from './lib/errors.js';
+import { applySpanishZodMessages } from './lib/validation.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
 import { designRoutes } from './modules/designs/routes.js';
@@ -17,6 +18,9 @@ import { numberingRoutes } from './modules/numbering/routes.js';
 import { templateRoutes } from './modules/templates/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
+  // Los mensajes de validación de Zod llegan al formulario: en español.
+  applySpanishZodMessages();
+
   const app = Fastify({
     logger: isProduction
       ? { level: 'info' }

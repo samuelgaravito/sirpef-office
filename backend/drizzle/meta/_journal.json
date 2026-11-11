@@ -120,6 +120,20 @@
       "when": 1794333324309,
       "tag": "0016_fuzzy_scarlet_witch",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794416299162,
+      "tag": "0017_tough_meltdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794419650839,
+      "tag": "0018_flashy_forgotten_one",
+      "breakpoints": true
     }
   ]
 }

@@ -203,8 +203,8 @@ async function load(): Promise<void> {
       void refreshInbox();
       void loadPending();
     }
-  } catch {
-    toast.error('No se pudo cargar el panel de inicio');
+  } catch (error) {
+    toast.failure(error, 'No se pudo cargar el panel de inicio');
   } finally {
     shellLoading.value = false;
   }

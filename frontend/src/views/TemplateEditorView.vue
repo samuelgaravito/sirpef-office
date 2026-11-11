@@ -8,11 +8,13 @@ import {
   Copy,
   Eye,
   Hash,
+  History,
   Loader2,
   PanelTop,
   Plus,
   Save,
   Settings2,
+  Share2,
   Sparkles,
   Trash2,
   Wand2,
@@ -22,6 +24,8 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import DocumentSheet from '@/components/editor/DocumentSheet.vue';
 import EditorToolbar from '@/components/editor/EditorToolbar.vue';
+import TemplateHistoryPanel from '@/components/templates/TemplateHistoryPanel.vue';
+import TemplateShareDialog from '@/components/templates/TemplateShareDialog.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { api } from '@/api/client';
 import { useToast } from '@/composables/useToast';
@@ -54,12 +58,19 @@ import { DOC_TYPE_LABELS } from '@/lib/labels';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import { normalizeRouteId } from '@/lib/routes';
 import { VariableHighlight } from '@/lib/variable-highlight';
-import type { DesignRecord, ListResponse, TemplateDetailResponse } from '@/types';
+import type {
+  DesignRecord,
+  ListResponse,
+  ShareRecord,
+  TemplateDetailResponse,
+  TemplatePermission,
+} from '@/types';
 
 const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const auth = useAuthStore();
+const isAdmin = computed(() => auth.isAdmin);
 
 const templateId = computed(() => normalizeRouteId(route.params.id));
 const isNew = computed(() => route.name === 'template-new');
@@ -71,7 +82,8 @@ const name = ref('Nueva plantilla');
 const description = ref('');
 const docType = ref<DocType>('blank');
 const numberingEnabled = ref(false);
-const numberingPrefix = ref(DOC_TYPE_PREFIX.blank);
+const numberingPrefix = ref('');
+const numberingPrefixAuto = ref(false);
 const numberingStart = ref(1);
 const numberingPadding = ref(4);
 const numberingIncludeYear = ref(true);
@@ -86,12 +98,30 @@ const templateVersion = ref(1);
 const tab = ref<'variables' | 'settings' | 'ai'>('variables');
 /** Dueño real de la plantilla; null en una plantilla nueva. */
 const templateOwnerId = ref<string | null>(null);
+/** Permiso efectivo del usuario sobre la plantilla. */
+const permission = ref<TemplatePermission>('owner');
+/** Nombre del propietario de la plantilla. */
+const ownerName = ref<string | null>(null);
+/** Personas con acceso explícito; solo la devuelve el propietario. */
+const shares = ref<ShareRecord[]>([]);
+const shareOpen = ref(false);
+const historyOpen = ref(false);
+/** La plantilla está compartida con todo el mundo (`isShared`). */
+const templateIsShared = ref(false);
+
+/** El propietario gobierna los ajustes de la plantilla (visibilidad, estado…). */
+const isOwner = computed(() => permission.value === 'owner');
+/**
+ * El administrador también puede activar o desactivar una plantilla
+ * compartida, como antes; la compartición explícita tampoco le da ese poder
+ * sobre las plantillas privadas de otro usuario.
+ */
+const canToggleActive = computed(
+  () => isOwner.value || (isAdmin.value && templateIsShared.value),
+);
+/** Un editor puede mejorar el contenido de la plantilla de otra persona. */
 const canEdit = computed(
-  () =>
-    isNew.value ||
-    templateOwnerId.value === null ||
-    templateOwnerId.value === auth.user?.id ||
-    auth.isAdmin,
+  () => isNew.value || templateOwnerId.value === null || permission.value !== 'viewer',
 );
 
 // Se guardan en variables para no romper el parser de plantillas de Vue.
@@ -182,10 +212,22 @@ const designTokens = computed(() => effectiveDesign.value?.tokens ?? null);
 
 const normalizedNumberingPrefix = computed(() => normalizeNumberingPrefix(numberingPrefix.value));
 
+/**
+ * Serie de esta plantilla. Como el prefijo es único entre las plantillas
+ * vivas, la serie del prefijo es siempre la suya.
+ */
 const selectedNumberingSeries = computed(
   () =>
     numberingSeries.value.find((item) => item.prefix === normalizedNumberingPrefix.value) ?? null,
 );
+
+/** Serie de otra plantilla que ya usa este prefijo (no se puede repetir). */
+const prefixOwner = computed(() => {
+  const series = selectedNumberingSeries.value;
+  if (!series?.taken) return null;
+  if (series.templateId && series.templateId === templateId.value) return null;
+  return series;
+});
 
 const numberingStartChanged = computed(
   () =>
@@ -196,8 +238,15 @@ const numberingStartChanged = computed(
 const numberingPrefixError = computed(() => {
   if (!numberingEnabled.value) return '';
   const prefix = normalizedNumberingPrefix.value;
-  if (prefix && !/^[A-Z0-9]{2,10}$/.test(prefix)) {
-    return 'Usa entre 2 y 10 letras o números';
+  if (!prefix) return '';
+  if (!/^[A-Z0-9]{1,20}$/.test(prefix)) {
+    return 'Usa entre 1 y 20 letras o números';
+  }
+  const owner = prefixOwner.value;
+  if (owner) {
+    return owner.templateName
+      ? `«${owner.templateName}» ya usa el prefijo ${prefix}`
+      : `Otra plantilla ya usa el prefijo ${prefix}`;
   }
   return '';
 });
@@ -246,6 +295,7 @@ function syncNumberingFromSeries(): void {
 
 function onNumberingPrefixChange(): void {
   dirty.value = true;
+  numberingPrefixAuto.value = false;
   syncNumberingFromSeries();
 }
 
@@ -254,7 +304,11 @@ function onDocTypeChange(): void {
   if (!isNew.value) return;
   const suggested = DOC_TYPE_PREFIX[docType.value];
   numberingEnabled.value = !DOC_TYPES_WITHOUT_NUMBER.includes(docType.value);
-  numberingPrefix.value = suggested;
+  // El prefijo sugerido solo se usa si está libre: cada plantilla necesita
+  // el suyo para que sus números no se intercalen con los de otra.
+  const taken = numberingSeries.value.some((item) => item.prefix === suggested && item.taken);
+  numberingPrefix.value = taken ? '' : suggested;
+  numberingPrefixAuto.value = false;
   syncNumberingFromSeries();
 }
 
@@ -400,15 +454,20 @@ async function load(): Promise<void> {
       docType.value = template.docType;
       designId.value = template.designId;
       isShared.value = template.isShared;
+      templateIsShared.value = template.isShared;
       isActive.value = template.isActive;
       aiInstructions.value = template.aiInstructions ?? '';
       schema.value = template.schema ?? [];
       templateVersion.value = template.version;
       templateOwnerId.value = template.ownerId;
+      permission.value = response.permission ?? 'viewer';
+      ownerName.value = response.ownerName ?? null;
+      shares.value = response.shares ?? [];
       templateHeader.value = template.header ?? null;
       templateFooter.value = template.footer ?? null;
       numberingEnabled.value = template.numberingEnabled;
-      numberingPrefix.value = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
+      numberingPrefix.value = template.numberingPrefix ?? '';
+      numberingPrefixAuto.value = template.numberingPrefixAuto ?? false;
       editor.value?.commands.setContent(template.body, { emitUpdate: false });
       editor.value?.commands.setTextSelection(1);
       editor.value?.setEditable(canEdit.value);
@@ -432,9 +491,41 @@ async function load(): Promise<void> {
 
     dirty.value = false;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo cargar la plantilla');
+    toast.failure(error, 'No se pudo cargar la plantilla');
   } finally {
     loading.value = false;
+  }
+}
+
+/** Recarga la plantilla tras restaurar una versión anterior. */
+async function reloadTemplate(): Promise<void> {
+  if (isNew.value || !templateId.value) return;
+  try {
+    const response = await api.get<TemplateDetailResponse>(`/templates/${templateId.value}`);
+    const template = response.template;
+    name.value = template.name;
+    description.value = template.description;
+    schema.value = template.schema ?? [];
+    templateVersion.value = template.version;
+    templateHeader.value = template.header ?? null;
+    templateFooter.value = template.footer ?? null;
+    aiInstructions.value = template.aiInstructions ?? '';
+    editor.value?.commands.setContent(template.body, { emitUpdate: false });
+    dirty.value = false;
+    toast.success('Versión restaurada');
+  } catch (error) {
+    toast.failure(error, 'No se pudo restaurar la versión');
+  }
+}
+
+/** Recarga la lista de accesos tras conceder o retirar un permiso. */
+async function reloadShares(): Promise<void> {
+  if (isNew.value || !templateId.value) return;
+  try {
+    const data = await api.get<{ items: ShareRecord[] }>(`/templates/${templateId.value}/shares`);
+    shares.value = data.items;
+  } catch {
+    /* la lista mostrada sigue siendo válida */
   }
 }
 
@@ -512,25 +603,34 @@ async function save(): Promise<void> {
   saving.value = true;
   try {
     const body = (editor.value?.getJSON() ?? { type: 'doc', content: [] }) as JSONContent;
-    const numberingPrefixValue = normalizedNumberingPrefix.value;
+    // Prefijo vacío = el servidor asigna un código corto único.
+    const numberingPrefixValue = numberingPrefixAuto.value
+      ? ''
+      : normalizedNumberingPrefix.value;
+    // Quien solo puede mejorar la plantilla no toca los ajustes de propiedad
+    // (visibilidad, tipo, numeración): son del propietario.
     const payload = {
       name: name.value.trim(),
       description: description.value,
-      docType: docType.value,
-      designId: designId.value,
       schema: schema.value,
       body,
       header: templateHeader.value,
       footer: templateFooter.value,
       aiInstructions: aiInstructions.value || null,
-      isShared: isShared.value,
-      numbering: {
-        enabled: numberingEnabled.value,
-        prefix: numberingPrefixValue,
-        startValue: numberingStart.value,
-        padding: numberingPadding.value,
-        includeYear: numberingIncludeYear.value,
-      },
+      ...(isOwner.value
+        ? {
+            docType: docType.value,
+            designId: designId.value,
+            isShared: isShared.value,
+            numbering: {
+              enabled: numberingEnabled.value,
+              prefix: numberingPrefixValue,
+              startValue: numberingStart.value,
+              padding: numberingPadding.value,
+              includeYear: numberingIncludeYear.value,
+            },
+          }
+        : {}),
     };
 
     if (isNew.value) {
@@ -544,12 +644,14 @@ async function save(): Promise<void> {
       );
       templateVersion.value = response.template.version;
       dirty.value = false;
-      toast.success('Plantilla guardada');
+      toast.success(
+        isOwner.value ? 'Plantilla guardada' : 'Mejora guardada en la plantilla compartida',
+      );
     }
 
     await router.replace({ name: 'templates' });
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo guardar la plantilla');
+    toast.failure(error, 'No se pudo guardar la plantilla');
   } finally {
     saving.value = false;
   }
@@ -566,7 +668,7 @@ async function setActive(next: boolean): Promise<void> {
     toast.success(data.template.isActive ? 'Plantilla activada' : 'Plantilla desactivada');
   } catch (error) {
     isActive.value = !next;
-    toast.error(error instanceof Error ? error.message : 'No se pudo cambiar el estado');
+    toast.failure(error, 'No se pudo cambiar el estado');
   }
 }
 
@@ -588,7 +690,7 @@ async function togglePreview(): Promise<void> {
       footer: templateFooter.value,
       numbering: {
         enabled: numberingEnabled.value,
-        prefix: normalizedNumberingPrefix.value,
+        prefix: numberingPrefixAuto.value ? '' : normalizedNumberingPrefix.value,
         startValue: numberingStart.value,
         padding: numberingPadding.value,
         includeYear: numberingIncludeYear.value,
@@ -597,7 +699,7 @@ async function togglePreview(): Promise<void> {
     });
     previewMode.value = true;
   } catch (error) {
-    toast.error(error instanceof Error ? error.message : 'No se pudo generar la vista previa');
+    toast.failure(error, 'No se pudo generar la vista previa');
   } finally {
     previewLoading.value = false;
   }
@@ -692,6 +794,25 @@ onMounted(() => {
         <Wand2 class="size-3.5" />
         <span class="hidden sm:inline">Crear documento</span>
       </button>
+      <button
+        v-if="!isNew"
+        type="button"
+        :class="['tool-btn', historyOpen ? 'is-active' : '']"
+        title="Historial de la plantilla"
+        @click="historyOpen = !historyOpen"
+      >
+        <History class="size-4" />
+      </button>
+      <button
+        v-if="isOwner"
+        type="button"
+        class="btn btn-outline btn-sm"
+        title="Compartir con personas concretas"
+        @click="shareOpen = true"
+      >
+        <Share2 class="size-3.5" />
+        <span class="hidden sm:inline">Compartir</span>
+      </button>
       <button type="button" class="btn btn-primary btn-sm" :disabled="saving || !canEdit" @click="save">
         <component :is="saving ? Loader2 : Save" :class="['size-3.5', saving ? 'animate-spin' : '']" />
         {{ saving ? 'Guardando…' : 'Guardar' }}
@@ -699,11 +820,25 @@ onMounted(() => {
     </header>
 
     <div
+      v-if="!loading && canEdit && !isOwner"
+      class="border-b border-hairline bg-accent-soft px-4 py-2 text-[12px] text-accent"
+    >
+      <template v-if="ownerName">
+        Estás mejorando la plantilla de <strong>{{ ownerName }}</strong>. Tus cambios se aplican a la
+        plantilla original y quedan en el historial con tu nombre.
+      </template>
+      <template v-else>
+        Estás mejorando una plantilla compartida. Tus cambios se aplican a la plantilla original y
+        quedan en el historial con tu nombre.
+      </template>
+    </div>
+
+    <div
       v-if="!loading && !canEdit"
       class="border-b border-hairline bg-warning-soft px-4 py-2 text-[12px] text-warning"
     >
-      Esta plantilla pertenece a otro usuario. Puedes crear documentos y duplicarla; solo el
-      propietario o un administrador pueden editarla.
+      Esta plantilla pertenece a otro usuario. Puedes crear documentos y duplicarla; para mejorarla
+      necesitas que te la compartan con permiso de editor.
     </div>
 
     <div v-if="loading" class="grid flex-1 place-items-center">
@@ -903,18 +1038,24 @@ onMounted(() => {
 
               <div>
                 <label class="label">Tipo de documento</label>
-                <select v-model="docType" class="field" @change="onDocTypeChange">
+                <select v-model="docType" class="field" :disabled="!isOwner" @change="onDocTypeChange">
                   <option v-for="(label, value) in DOC_TYPE_LABELS" :key="value" :value="value">{{ label }}</option>
                 </select>
-                <p class="mt-1 text-[11px] text-ink-subtle">Sugiere el prefijo del correlativo (MEM, NDE, INF…).</p>
+                <p class="mt-1 text-[11px] text-ink-subtle">
+                  <template v-if="isOwner">
+                    Sugiere el prefijo del correlativo (MEM, NDE, INF…).
+                  </template>
+                  <template v-else>Solo el propietario puede cambiar el tipo de documento.</template>
+                </p>
               </div>
 
-              <div class="rounded-lg border border-hairline p-3">
+              <div class="rounded-lg border border-hairline p-3" :class="{ 'opacity-60': !isOwner }">
                 <label class="flex cursor-pointer items-start gap-2">
                   <input
                     v-model="numberingEnabled"
                     type="checkbox"
                     class="mt-0.5 accent-[var(--color-accent)]"
+                    :disabled="!isOwner"
                     @change="dirty = true"
                   />
                   <span>
@@ -928,19 +1069,23 @@ onMounted(() => {
                 <template v-if="numberingEnabled">
                   <div class="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-2">
                     <div>
-                      <label class="label">Prefijo (opcional)</label>
+                      <label class="label">Prefijo</label>
                       <input
                         v-model="numberingPrefix"
                         class="field h-8 font-mono uppercase"
-                        maxlength="10"
-                        placeholder="Sin prefijo"
+                        maxlength="20"
+                        placeholder="Automático"
+                        :disabled="!isOwner"
                         @input="onNumberingPrefixChange"
                       />
                       <p v-if="numberingPrefixError" class="mt-1 text-[11px] text-danger">
                         {{ numberingPrefixError }}
                       </p>
+                      <p v-else-if="numberingPrefixAuto" class="mt-1 text-[10.5px] text-ink-subtle">
+                        Código automático: no lo uses en otra plantilla.
+                      </p>
                       <p v-else class="mt-1 text-[10.5px] text-ink-subtle">
-                        Déjalo vacío para numerar sin prefijo.
+                        Déjalo vacío para que se asigne un código único (p. ej. A3F9).
                       </p>
                     </div>
                     <div>
@@ -951,6 +1096,7 @@ onMounted(() => {
                         min="1"
                         max="999999"
                         :class="['field h-8', numberingStartError ? 'border-danger' : '']"
+                        :disabled="!isOwner"
                         @input="dirty = true"
                       />
                     </div>
@@ -965,6 +1111,7 @@ onMounted(() => {
                         min="1"
                         max="8"
                         class="field h-8"
+                        :disabled="!isOwner"
                         @input="dirty = true"
                       />
                     </div>
@@ -979,7 +1126,7 @@ onMounted(() => {
                         v-model="numberingIncludeYear"
                         type="checkbox"
                         class="accent-[var(--color-accent)]"
-                        :disabled="Boolean(selectedNumberingSeries?.lastIssued)"
+                        :disabled="Boolean(selectedNumberingSeries?.lastIssued) || !isOwner"
                         @change="dirty = true"
                       />
                       Incluir año y reiniciar
@@ -999,12 +1146,8 @@ onMounted(() => {
                   </div>
 
                   <p class="mt-1.5 text-[10.5px] leading-snug text-ink-subtle">
-                    El prefijo identifica la serie: las plantillas que lo compartan suman la misma
-                    numeración.
-                    <template v-if="selectedNumberingSeries">
-                      Usado por {{ selectedNumberingSeries.templateCount }}
-                      plantilla{{ selectedNumberingSeries.templateCount === 1 ? '' : 's' }}.
-                    </template>
+                    Cada plantilla lleva su propia numeración: el prefijo no puede repetirse en
+                    otra plantilla, así que sus números nunca se intercalan.
                   </p>
 
                   <div class="mt-2 flex items-center justify-between gap-2 rounded-md border border-dashed border-hairline px-2.5 py-2">
@@ -1049,20 +1192,38 @@ onMounted(() => {
                 </p>
               </div>
 
-              <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-hairline p-3">
-                <input v-model="isShared" type="checkbox" class="mt-0.5 accent-[var(--color-accent)]" @change="dirty = true" />
+              <label
+                class="flex items-start gap-2 rounded-lg border border-hairline p-3"
+                :class="isOwner ? 'cursor-pointer' : 'opacity-60'"
+              >
+                <input
+                  v-model="isShared"
+                  type="checkbox"
+                  class="mt-0.5 accent-[var(--color-accent)]"
+                  :disabled="!isOwner"
+                  @change="dirty = true"
+                />
                 <span>
                   <span class="block text-[12.5px] font-medium">Compartir con el equipo</span>
-                  <span class="block text-[11px] text-ink-subtle">Todos los usuarios podrán usar esta plantilla.</span>
+                  <span class="block text-[11px] text-ink-subtle">
+                    <template v-if="isOwner">
+                      Todos los usuarios podrán usar esta plantilla. Para que alguien la mejore,
+                      invítalo con permiso de editor.
+                    </template>
+                    <template v-else>Solo el propietario puede cambiar la visibilidad.</template>
+                  </span>
                 </span>
               </label>
 
-              <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-hairline p-3">
+              <label
+                class="flex items-start gap-2 rounded-lg border border-hairline p-3"
+                :class="canToggleActive ? 'cursor-pointer' : 'opacity-60'"
+              >
                 <input
                   v-model="isActive"
                   type="checkbox"
                   class="mt-0.5 accent-[var(--color-accent)]"
-                  :disabled="isNew"
+                  :disabled="isNew || !canToggleActive"
                   @change="setActive(isActive)"
                 />
                 <span>
@@ -1070,7 +1231,9 @@ onMounted(() => {
                   <span class="block text-[11px] text-ink-subtle">
                     {{ isNew
                       ? 'La plantilla se creará activa.'
-                      : 'Solo las plantillas activas se pueden usar para crear documentos.' }}
+                      : canToggleActive
+                        ? 'Solo las plantillas activas se pueden usar para crear documentos.'
+                        : 'Solo el propietario puede activarla o desactivarla.' }}
                   </span>
                 </span>
               </label>
@@ -1129,5 +1292,24 @@ onMounted(() => {
         </div>
       </aside>
     </div>
+
+    <TemplateShareDialog
+      v-if="!isNew && templateId"
+      :open="shareOpen"
+      :template-id="templateId"
+      :shares="shares"
+      @close="shareOpen = false"
+      @changed="reloadShares"
+    />
+
+    <TemplateHistoryPanel
+      v-if="!isNew && templateId"
+      :open="historyOpen"
+      :template-id="templateId"
+      :current-version="templateVersion"
+      :can-restore="isOwner"
+      @close="historyOpen = false"
+      @restored="reloadTemplate"
+    />
   </div>
 </template>

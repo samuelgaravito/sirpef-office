@@ -46,21 +46,57 @@ function escapeRegex(value: string): string {
  * Asocia un número formateado con su serie. Se prueban primero los prefijos
  * más largos para resolver la ambigüedad de `2026-0007` (serie `2026` sin año
  * frente a serie sin prefijo con año).
+ *
+ * El formato actual es `PREFIX-CORRELATIVO-AÑO` (`MEM-0007-2026`). Los
+ * números emitidos antes del cambio de orden son `PREFIX-AÑO-CORRELATIVO`
+ * (`MEM-2026-0007`).
+ *
+ * Cuando ambos formatos son posibles (los dos últimos bloques tienen cuatro
+ * dígitos) se prefiere el actual, que es el que genera el sistema hoy. Los
+ * números antiguos solo se distinguen cuando el bloque final parece un año y
+ * el anterior no.
  */
 function parseNumber(number: string, series: SeriesRow[]): ParsedNumber | null {
   const ordered = [...series].sort((a, b) => b.prefix.length - a.prefix.length);
 
   for (const row of ordered) {
     const head = row.prefix ? `${escapeRegex(row.prefix)}-` : '';
-    const pattern = row.include_year
-      ? new RegExp(`^${head}(\\d{4})-(\\d+)$`)
-      : new RegExp(`^${head}(\\d+)$`);
-    const match = pattern.exec(number);
-    if (!match) continue;
 
-    return row.include_year
-      ? { prefix: row.prefix, year: Number(match[1]), value: Number(match[2]) }
-      : { prefix: row.prefix, year: 0, value: Number(match[1]) };
+    if (!row.include_year) {
+      const match = new RegExp(`^${head}(\\d+)$`).exec(number);
+      if (match) {
+        return { prefix: row.prefix, year: 0, value: Number(match[1]) };
+      }
+      continue;
+    }
+
+    const current = new RegExp(`^${head}(\\d+)-(\\d{4})$`).exec(number);
+    const legacy = new RegExp(`^${head}(\\d{4})-(\\d+)$`).exec(number);
+
+    // Sin ambigüedad: solo uno de los dos patrones encaja.
+    if (current && !legacy) {
+      return { prefix: row.prefix, year: Number(current[2]), value: Number(current[1]) };
+    }
+    if (legacy && !current) {
+      return { prefix: row.prefix, year: Number(legacy[1]), value: Number(legacy[2]) };
+    }
+
+    if (current && legacy) {
+      // Ambos encajan: el año es el bloque de cuatro dígitos que parece un
+      // año. El formato actual lo pone al final.
+      const currentYear = Number(current[2]);
+      const legacyYear = Number(legacy[1]);
+      const plausible = (value: number) => value >= 1990 && value <= 2999;
+
+      if (plausible(currentYear) && !plausible(legacyYear)) {
+        return { prefix: row.prefix, year: currentYear, value: Number(current[1]) };
+      }
+      if (plausible(legacyYear) && !plausible(currentYear)) {
+        return { prefix: row.prefix, year: legacyYear, value: Number(legacy[2]) };
+      }
+      // Si los dos son años plausibles, manda el formato vigente.
+      return { prefix: row.prefix, year: currentYear, value: Number(current[1]) };
+    }
   }
 
   return null;
@@ -162,6 +198,7 @@ async function main(): Promise<void> {
             end
         where doc_number is not null
           and status = 'draft'
+          and deleted_at is null
         returning id
       `;
       counts.releasedDrafts = released.length;
@@ -189,6 +226,7 @@ async function main(): Promise<void> {
                max(numbering_value) as value
         from documents
         where numbering_value is not null
+          and deleted_at is null
         group by numbering_prefix, numbering_year
       `) as unknown as Array<{ prefix: string; year: number; value: number }>;
 

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import puppeteer, { type Browser } from 'puppeteer-core';
 
 import { env } from '../env.js';
+import { unavailable } from './errors.js';
 
 let browserPromise: Promise<Browser> | null = null;
 
@@ -10,8 +11,9 @@ let browserPromise: Promise<Browser> | null = null;
 export async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     if (!existsSync(env.CHROME_PATH)) {
-      throw new Error(
-        `No se encontró Chrome en ${env.CHROME_PATH}. Configura CHROME_PATH en el .env.`,
+      throw unavailable(
+        'CHROME_MISSING',
+        `El servidor no tiene Chrome instalado en ${env.CHROME_PATH}, así que no puede medir ni exportar documentos. Avisa al soporte para que lo configure.`,
       );
     }
     browserPromise = puppeteer.launch({

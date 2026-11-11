@@ -42,10 +42,28 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public details?: unknown,
+    /** Referencia para rastrear el fallo en los logs del servidor (solo 5xx). */
+    public reference?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/**
+ * Traduce un fallo de red a un mensaje que el usuario entienda.
+ *
+ * `fetch` rechaza con un `TypeError: fetch failed` cuando no hay conexión o
+ * el servidor no responde. Sin esto, el mensaje que llegaba al aviso era
+ * «Failed to fetch», en inglés y sin explicación.
+ */
+function networkError(error: unknown): ApiError {
+  const cause = (error as { cause?: { code?: string } } | undefined)?.cause?.code;
+  const message =
+    cause === 'ECONNREFUSED'
+      ? 'El servidor no acepta conexiones en este momento. Inténtalo de nuevo en unos segundos.'
+      : 'No se pudo conectar con el servidor. Revisa tu conexión a internet e inténtalo de nuevo.';
+  return new ApiError(0, 'NETWORK_ERROR', message);
 }
 
 interface RequestOptions {
@@ -73,13 +91,20 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-  const response = await fetch(buildUrl(path, options.query), {
-    method: options.method ?? 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    credentials: 'include',
-    signal: options.signal,
-  });
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path, options.query), {
+      method: options.method ?? 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      credentials: 'include',
+      signal: options.signal,
+    });
+  } catch (error) {
+    // Sin conexión o servidor caído: se avisa con un mensaje entendible.
+    if ((error as Error).name === 'AbortError') throw error;
+    throw networkError(error);
+  }
 
   // El access token caduca mientras el usuario aprende. En vez de echarlo
   // al login, se renueva la sesión con la cookie de refresco y se repite la
@@ -98,8 +123,24 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const payload = isJson ? await response.json() : await response.text();
 
   if (!response.ok) {
-    const error = isJson ? (payload as ApiErrorShape) : { error: 'ERROR', message: String(payload) };
-    throw new ApiError(response.status, error.error ?? 'ERROR', error.message ?? 'Error inesperado', error.details);
+    if (!isJson) {
+      // Un proxy (Nginx, Caddy) puede responder con HTML en vez de JSON.
+      // Mostrar ese HTML dentro de un aviso sería un desastre: se explica
+      // el problema con el estado HTTP y ya está.
+      throw new ApiError(
+        response.status,
+        'INVALID_RESPONSE',
+        `El servidor devolvió una respuesta no válida (HTTP ${response.status}). Inténtalo de nuevo en unos minutos.`,
+      );
+    }
+    const error = payload as ApiErrorShape;
+    throw new ApiError(
+      response.status,
+      error.error ?? 'ERROR',
+      error.message ?? 'Ocurrió un error inesperado. Inténtalo de nuevo.',
+      error.details,
+      error.reference,
+    );
   }
 
   return payload as T;
@@ -120,7 +161,12 @@ export async function downloadFile(path: string): Promise<void> {
   const headers: Record<string, string> = {};
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
 
-  let response = await fetch(BASE + path, { headers, credentials: 'include' });
+  const fetchFile = () =>
+    fetch(BASE + path, { headers, credentials: 'include' }).catch((error: unknown) => {
+      throw networkError(error);
+    });
+
+  let response = await fetchFile();
 
   // La exportación genera el archivo en el servidor: si el token caducó a
   // media descarga, se renueva la sesión y se reintenta.
@@ -129,19 +175,28 @@ export async function downloadFile(path: string): Promise<void> {
     if (renewed) {
       const renewedHeaders: Record<string, string> = {};
       if (accessToken) renewedHeaders.Authorization = `Bearer ${accessToken}`;
-      response = await fetch(BASE + path, { headers: renewedHeaders, credentials: 'include' });
+      response = await fetch(BASE + path, { headers: renewedHeaders, credentials: 'include' }).catch(
+        (error: unknown) => {
+          throw networkError(error);
+        },
+      );
     }
   }
 
   if (!response.ok) {
-    let message = 'No se pudo generar el archivo';
+    let message = 'No se pudo generar el archivo. Inténtalo de nuevo.';
+    let code = 'EXPORT_FAILED';
+    let reference: string | undefined;
     try {
-      const data = await response.json();
+      const data = (await response.json()) as ApiErrorShape;
       message = data.message ?? message;
+      code = data.error ?? code;
+      reference = data.reference;
     } catch {
-      /* respuesta no JSON */
+      // Respuesta no JSON (p. ej. la página de error de un proxy).
+      message = `El servidor devolvió una respuesta no válida (HTTP ${response.status}). Inténtalo de nuevo en unos minutos.`;
     }
-    throw new ApiError(response.status, 'EXPORT_FAILED', message);
+    throw new ApiError(response.status, code, message, undefined, reference);
   }
 
   const disposition = response.headers.get('content-disposition') ?? '';
