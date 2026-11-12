@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
+import NotificationBell from '@/components/layout/NotificationBell.vue';
 import ToastHost from '@/components/ui/ToastHost.vue';
+import { useNotifications } from '@/composables/useNotifications';
 import {
   connectRealtime,
   disconnectRealtime,
@@ -11,7 +13,9 @@ import {
 import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
+const notifications = useNotifications();
 
 /**
  * El canal de eventos sigue a la sesión: se abre al iniciar sesión y se
@@ -22,11 +26,27 @@ const auth = useAuthStore();
 watch(
   () => auth.isAuthenticated,
   (authenticated) => {
-    if (authenticated) connectRealtime();
-    else disconnectRealtime();
+    if (authenticated) {
+      connectRealtime();
+    } else {
+      disconnectRealtime();
+      notifications.reset();
+    }
   },
   { immediate: true },
 );
+
+/**
+ * Los avisos de la bandeja se escuchan aquí, una sola vez, para que la
+ * campana flotante y el aviso del sistema funcionen en cualquier ruta.
+ */
+onMounted(() => {
+  notifications.start({
+    onOpenInbox: () => {
+      void router.push({ name: 'inbox' });
+    },
+  });
+});
 
 /**
  * Al volver a la pestaña se comprueba que el canal siga vivo: los móviles
@@ -55,5 +75,6 @@ const viewKey = computed(() => (route.matched[0]?.path === '/' ? '/' : route.pat
   <RouterView v-slot="{ Component }">
     <component :is="Component" :key="viewKey" />
   </RouterView>
+  <NotificationBell />
   <ToastHost />
 </template>

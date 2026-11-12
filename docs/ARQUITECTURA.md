@@ -113,11 +113,12 @@ frontend/src/
   main.ts / router/      # Rutas y guardas de sesión
   api/client.ts          # fetch con refresh automático y descarga de blobs
   stores/auth.ts         # Pinia: usuario, token, login/logout
+  composables/           # useToast, useInboxBadge, useRealtime, useNotifications, …
   views/                 # Login, Home, Documents, DocumentEditor, Templates,
                          # TemplateEditor, Designs, DesignEditor, Settings, NotFound,
                          # Inbox, InboxMessage
   components/
-    layout/AppShell.vue
+    layout/AppShell.vue | NotificationBell.vue
     documents/DocumentCard.vue | DocumentThumbnail.vue
     inbox/SendDocumentDialog.vue
     templates/TemplatePreview.vue | NewTemplateDialog.vue
@@ -853,6 +854,30 @@ Verificación: `npm run smoke:realtime` (levanta la API y comprueba handshake, a
 por destinatario y el flujo envío → aviso → aprobación → aviso) y
 `npm run smoke:realtime:proxy` (el mismo canal a través del proxy de la web).
 
+### 7.7 Campana flotante y avisos del sistema
+
+`components/layout/NotificationBell.vue`, pintada en `App.vue`, muestra un aviso flotante
+arriba a la derecha (bajo la cabecera) cuando llega un evento de la bandeja. El estado y la
+suscripción viven en `composables/useNotifications.ts`, que se engancha **una sola vez** en
+la raíz para que funcione en cualquier ruta:
+
+- La campana **agrupa**: si llegan varios avisos seguidos se queda una sola con el
+  contador y el temporizador se reinicia. **Se va sola a los 6 s**; pasar el puntero o
+  enfocar el aviso pausa la cuenta atrás.
+- Al pulsarla (o al pulsar el aviso del sistema) se abre la bandeja.
+- Si el navegador lo permite, lanza un **aviso del sistema** (`Notification`) **solo
+  cuando la pestaña no está a la vista o la ventana no tiene el foco**, con `tag` para que
+  los avisos se sustituyan en vez de apilarse. El permiso se pide con un clic —los
+  navegadores no permiten pedirlo al cargar— desde la propia campana o desde
+  **Ajustes → Avisos**, donde además se puede silenciar.
+- Requiere contexto seguro (HTTPS o `localhost`), que ya es el caso en desarrollo y
+  producción. Android Chrome no admite el constructor de `Notification` desde la página
+  (haría falta un service worker) y iOS Safari exige PWA instalada; en ambos casos queda
+  la campana dentro de la aplicación.
+
+Verificación: `npm run smoke:bell` (Chrome real: aparece, muestra el asunto, agrupa, se va
+sola y el interruptor de Ajustes cambia el estado).
+
 ---
 
 ## 8. Asistente de IA
@@ -1010,6 +1035,7 @@ diarios de PostgreSQL, rotación de claves, límite de tamaño de subida a nivel
 | Cabecera/pie | `cd backend && node scripts/chrome-smoke.mjs` | Pie visible y anclado en modo lectura, herencia documento → plantilla → diseño, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño de una plantilla y exportación. |
 | Exportación | `pdftotext` / `pdfimages` / `unzip` | Verifica datos interpolados, bandas, numeración real, imágenes embebidas y campos `PAGE`/`NUMPAGES` en DOCX. |
 | Tiempo real | `cd backend && npm run smoke:realtime` + `npm run smoke:realtime:proxy` | El handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar. |
+| Campana de avisos | `cd backend && npm run smoke:bell` | En Chrome real: la campana aparece con el asunto, agrupa con contador, se va sola a los 6 s y Ajustes permite activar o silenciar los avisos del sistema. |
 
 Las capturas de las pruebas se guardan en `/tmp/sirpefoffice-shots`, `/tmp/sirpefoffice-shots-images` y
 `/tmp/sirpefoffice-shots-chrome` (y una selección en `docs/capturas`).

@@ -11,18 +11,12 @@ import {
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
-import {
-  MENU_CATALOG,
-  isInboxRealtimeEvent,
-  type RealtimeMessage,
-} from '@sirpefoffice/shared';
+import { MENU_CATALOG } from '@sirpefoffice/shared';
 
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import CommandPalette from '@/components/layout/CommandPalette.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
-import { onRealtimeEvent } from '@/composables/useRealtime';
-import { useToast } from '@/composables/useToast';
 import { logoutFromSva, redirectToSvaLogin } from '@/lib/sva';
 import { PANEL_MODE } from '@/lib/panel';
 import type { Point } from '@/lib/motion';
@@ -32,7 +26,6 @@ const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 const { totalCount, refresh: refreshInbox } = useInboxBadge();
-const toast = useToast();
 
 /** Dentro de un panel modal el marco lo pone `ModulePanel`. */
 const embedded = inject(PANEL_MODE, false);
@@ -67,29 +60,6 @@ const initials = computed(() => {
 const FALLBACK_POLL_MS = 5 * 60_000;
 
 let pollTimer: number | undefined;
-let unsubscribeRealtime: (() => void) | undefined;
-
-/**
- * Avisa de los cambios de la bandeja que llegan por el canal de eventos.
- *
- * El evento solo dice *qué* ha cambiado; los contadores se vuelven a pedir
- * con la API de siempre para no mantener dos versiones de los datos.
- */
-async function handleRealtimeEvent(message: RealtimeMessage): Promise<void> {
-  if (!isInboxRealtimeEvent(message.type)) return;
-
-  await refreshInbox();
-
-  const payload = message.payload;
-  if (!payload) return;
-  if (message.type === 'inbox.result.approved') {
-    toast.success(
-      `Tu documento «${payload.subject}» fue aprobado por ${payload.actorName}`,
-    );
-  } else if (message.type === 'inbox.result.rejected') {
-    toast.error(`Tu documento «${payload.subject}» fue rechazado`);
-  }
-}
 
 function onGlobalKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
@@ -128,10 +98,6 @@ onMounted(() => {
   isMac.value = /Mac|iPhone|iPad/.test(navigator.platform);
   window.addEventListener('keydown', onGlobalKeydown);
 
-  unsubscribeRealtime = onRealtimeEvent((message) => {
-    void handleRealtimeEvent(message);
-  });
-
   if (!canSeeInbox.value) return;
   void refreshInbox();
   // Sondeo ligero como red de seguridad si el canal de eventos se cae.
@@ -140,7 +106,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer !== undefined) window.clearInterval(pollTimer);
-  unsubscribeRealtime?.();
   window.removeEventListener('keydown', onGlobalKeydown);
 });
 
