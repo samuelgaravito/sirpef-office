@@ -50,11 +50,6 @@ const numberingInputSchema = z.object({
   enabled: z.boolean().optional(),
   /** Prefijo de 1 a 20 caracteres; vacío = serie sin prefijo. */
   prefix: z.string().trim().max(20).nullable().optional(),
-  /**
-   * `true` = que el servidor asigne un código corto (A3F9). `false` con el
-   * prefijo vacío = serie sin prefijo (`0001-2026`).
-   */
-  prefixAuto: z.boolean().optional(),
   startValue: z.number().int().min(1).max(999_999).optional(),
   padding: z.number().int().min(1).max(8).optional(),
   includeYear: z.boolean().optional(),
@@ -186,17 +181,16 @@ async function isSharedWithOthers(templateId: string, isSharedGlobally: boolean)
 interface TemplateNumbering {
   enabled: boolean;
   prefix: string | null;
-  /** El prefijo lo asignó el servidor, no el usuario. */
-  auto: boolean;
+  /** Serie propia de la plantilla: es la dueña de su enumeración. */
+  seriesId: string | null;
 }
 
 /**
  * Resuelve la serie de numeración de una plantilla.
  *
  * Cada plantilla tiene su propia serie: su contador no se comparte con nadie
- * más, aunque otra plantilla use el mismo prefijo. El prefijo es opcional:
- * si el campo queda en blanco, la serie numera sin etiqueta (`0001-2026`);
- * si se pide el código automático, el servidor asigna uno corto (A3F9).
+ * más, aunque otra plantilla use el mismo prefijo. El prefijo es opcional: si
+ * el campo queda en blanco, la serie numera sin etiqueta (`0001-2026`).
  */
 async function resolveTemplateNumbering(options: {
   userId: string;
@@ -207,7 +201,6 @@ async function resolveTemplateNumbering(options: {
   current?: {
     numberingEnabled: boolean;
     numberingPrefix: string | null;
-    numberingPrefixAuto: boolean;
   } | null;
 }): Promise<TemplateNumbering> {
   const resolved = await resolveTemplateNumberingConfig({
@@ -221,14 +214,13 @@ async function resolveTemplateNumbering(options: {
   return {
     enabled: resolved.enabled,
     prefix: resolved.prefix,
-    auto: resolved.auto,
+    seriesId: resolved.series?.id ?? null,
   };
 }
 
 /** Número de ejemplo para la vista previa de una plantilla guardada. */
 async function templateSampleNumber(template: {
   numberingEnabled: boolean;
-  numberingPrefix: string | null;
   id: string;
   docType: DocType;
 }): Promise<string> {
@@ -240,9 +232,7 @@ async function templateSampleNumber(template: {
     if (state) return state.nextNumber;
   }
 
-  const prefix = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
-  if (prefix === null || prefix === undefined) return '';
-
+  const prefix = DOC_TYPE_PREFIX[template.docType];
   return formatDocumentNumber({
     prefix,
     value: 1,
@@ -352,12 +342,12 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isMine: sql<boolean>`${templates.ownerId} = ${user.sub}`,
         /** Permiso de este usuario: viene del acceso explícito, si lo hay. */
         sharePermission: templateShares.permission,
-        /** Numeración de la plantilla: prefijo propio o código automático. */
+        /** Numeración de la plantilla: la serie es la dueña del prefijo. */
         numberingEnabled: templates.numberingEnabled,
         /** Serie propia de la plantilla: la declara la propia serie. */
         numberingSeriesId: numberingSeries.id,
-        numberingPrefix: templates.numberingPrefix,
-        numberingPrefixAuto: templates.numberingPrefixAuto,
+        /** Etiqueta del número de la serie (vacía = serie sin prefijo). */
+        numberingPrefix: numberingSeries.prefix,
         updatedAt: templates.updatedAt,
         deletedAt: templates.deletedAt,
       })
@@ -502,8 +492,17 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(users.id, row.ownerId))
       .limit(1);
 
+    // La serie es la dueña del prefijo y de los ajustes del contador.
+    const series = await getTemplateSeries(id);
+
     return {
-      template: row,
+      template: {
+        ...row,
+        /** Serie propia de la plantilla. */
+        numberingSeriesId: series?.id ?? null,
+        /** Etiqueta del número de la serie (vacía = serie sin prefijo). */
+        numberingPrefix: series?.prefix ?? '',
+      },
       /** Permiso efectivo del usuario: 'owner' | 'editor' | 'viewer'. */
       permission,
       /** Nombre del propietario de la plantilla. */
@@ -568,8 +567,6 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions ?? null,
         isShared: body.isShared,
         numberingEnabled: numbering.enabled,
-        numberingPrefix: numbering.prefix,
-        numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
@@ -577,19 +574,25 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
 
     // Ahora que la plantilla existe, se crea su serie: la serie declara a su
     // plantilla, así que necesita su fila.
-    if (numbering.enabled) {
-      await ensureTemplateSeries({
-        templateId: created.id,
-        prefix: numbering.prefix ?? '',
-        startValue: body.numbering?.startValue,
-        padding: body.numbering?.padding,
-        includeYear: body.numbering?.includeYear,
-        createdBy: user.sub,
-      });
-    }
+    const series = numbering.enabled
+      ? await ensureTemplateSeries({
+          templateId: created.id,
+          prefix: numbering.prefix ?? '',
+          startValue: body.numbering?.startValue,
+          padding: body.numbering?.padding,
+          includeYear: body.numbering?.includeYear,
+          createdBy: user.sub,
+        })
+      : null;
 
     await logActivity(user.sub, 'template', created.id, 'created', { name: created.name });
-    return reply.status(201).send({ template: created });
+    return reply.status(201).send({
+      template: {
+        ...created,
+        numberingSeriesId: series?.id ?? null,
+        numberingPrefix: series?.prefix ?? '',
+      },
+    });
   });
 
   /** Activa o desactiva una plantilla sin crear una versión nueva. */
@@ -660,6 +663,9 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
 
     const nextVersion = row.version + 1;
     const effectiveDocType = body.docType ?? row.docType;
+    // La serie es la dueña de la enumeración: de ella sale el prefijo y los
+    // ajustes del contador.
+    const currentSeries = await getTemplateSeries(id);
     // Quien no gobierna los ajustes de propiedad conserva la numeración tal
     // como está: no se recalcula ni se toca la serie.
     const numbering = ownsSettings
@@ -671,14 +677,12 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
           input: body.numbering,
           current: {
             numberingEnabled: row.numberingEnabled,
-            numberingPrefix: row.numberingPrefix,
-            numberingPrefixAuto: row.numberingPrefixAuto,
+            numberingPrefix: currentSeries?.prefix ?? '',
           },
         })
       : {
           enabled: row.numberingEnabled,
-          prefix: row.numberingPrefix,
-          auto: row.numberingPrefixAuto,
+          prefix: currentSeries?.prefix ?? '',
         };
     // La instantánea guarda los tokens del diseño efectivo (el que está en
     // uso en el momento de la edición).
@@ -698,8 +702,6 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions === undefined ? row.aiInstructions : body.aiInstructions,
         isShared: body.isShared ?? row.isShared,
         numberingEnabled: numbering.enabled,
-        numberingPrefix: numbering.prefix,
-        numberingPrefixAuto: numbering.auto,
         version: nextVersion,
         updatedAt: new Date(),
       })
@@ -736,7 +738,16 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       version: nextVersion,
       permission,
     });
-    return { template: updated };
+    // La serie es la dueña del prefijo: se devuelve su estado para que el
+    // cliente muestre los valores reales.
+    const series = await getTemplateSeries(id);
+    return {
+      template: {
+        ...updated,
+        numberingSeriesId: series?.id ?? null,
+        numberingPrefix: series?.prefix ?? '',
+      },
+    };
   });
 
   /** Duplica una plantilla (propia o compartida) en la cuenta del usuario. */
@@ -753,6 +764,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     // su propia enumeración. Puede repetir el prefijo del original, porque
     // el prefijo es solo la etiqueta del número.
     const cloneId = randomUUID();
+    const originSeries = await getTemplateSeries(id);
     const numbering = await resolveTemplateNumbering({
       userId: user.sub,
       role: user.role,
@@ -760,7 +772,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       templateId: cloneId,
       input: {
         enabled: row.numberingEnabled,
-        prefix: row.numberingPrefix,
+        prefix: originSeries?.prefix ?? '',
       },
     });
 
@@ -781,24 +793,28 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: false,
         isActive: true,
         numberingEnabled: numbering.enabled,
-        numberingPrefix: numbering.prefix,
-        numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
     if (!created) throw internal('TEMPLATE_CLONE_FAILED', 'No se pudo duplicar la plantilla');
 
     // La copia recibe su propia serie: su enumeración empieza de cero.
-    if (numbering.enabled) {
-      await ensureTemplateSeries({
-        templateId: created.id,
-        prefix: numbering.prefix ?? '',
-        createdBy: user.sub,
-      });
-    }
+    const series = numbering.enabled
+      ? await ensureTemplateSeries({
+          templateId: created.id,
+          prefix: numbering.prefix ?? '',
+          createdBy: user.sub,
+        })
+      : null;
 
     await logActivity(user.sub, 'template', created.id, 'cloned', { from: id });
-    return reply.status(201).send({ template: created });
+    return reply.status(201).send({
+      template: {
+        ...created,
+        numberingSeriesId: series?.id ?? null,
+        numberingPrefix: series?.prefix ?? '',
+      },
+    });
   });
 
   /** Elimina (borrado lógico) una plantilla propia. Los documentos conservan la referencia. */

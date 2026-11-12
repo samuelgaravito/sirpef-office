@@ -65,8 +65,7 @@ BEGIN
   FOR t IN
     SELECT id, numbering_prefix
     FROM templates
-    WHERE numbering_enabled
-      AND numbering_prefix IS NOT NULL
+    WHERE numbering_prefix IS NOT NULL
     ORDER BY created_at, id
   LOOP
     SELECT c.cfg INTO cfg FROM _legacy_cfg c WHERE c.prefix = t.numbering_prefix;

@@ -127,8 +127,9 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   único, y `template_name` como etiqueta legible del nombre de la plantilla). Su contador
   y su suelo son exclusivos, así que dos plantillas nunca intercalan sus números. El
   prefijo es **opcional** (la serie puede numerar solo con el correlativo, `0001-2026`) y
-  **puede repetirse**; el código corto (`A3F9`) es una opción explícita
-  (`numbering.prefixAuto`). Formato y textos en `shared/src/numbering.ts`; contador en
+  **puede repetirse**. La serie es la **única fuente de verdad**: el prefijo, el número
+  inicial, los dígitos y el reinicio anual viven en `numbering_series`; en `templates`
+  solo queda `numbering_enabled`. Formato y textos en `shared/src/numbering.ts`; contador en
   `backend/src/lib/numbering.ts` + `counter.ts`. Los documentos **en la papelera liberan
   su número**: el suelo del contador lo fijan solo los documentos vivos.
 - **Diseño en uso**: una sola plantilla activa por cuenta (índice único

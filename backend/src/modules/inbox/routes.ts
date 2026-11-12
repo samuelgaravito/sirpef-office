@@ -414,7 +414,6 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         designUpdatedAt: designs.updatedAt,
         templateSchema: templates.schema,
         templateNumberingEnabled: templates.numberingEnabled,
-        templateNumberingPrefix: templates.numberingPrefix,
         templateId: templates.id,
       })
       .from(documents)
@@ -490,7 +489,6 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
               ? {
                   templateId: docRow.templateId,
                   numberingEnabled: docRow.templateNumberingEnabled,
-                  numberingPrefix: docRow.templateNumberingPrefix,
                 }
               : null,
         });
