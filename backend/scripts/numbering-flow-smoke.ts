@@ -337,8 +337,7 @@ async function main(): Promise<void> {
         schema: [],
         numbering: {
           enabled: true,
-          prefix: '',
-          prefixAuto: true,
+          prefix: 'PROP',
           startValue: 1,
           padding: 4,
           includeYear: true,
@@ -351,7 +350,7 @@ async function main(): Promise<void> {
       createdSeriesIds.push(own.body.template.numberingSeriesId);
     }
     const ownPrefix = own.body.template.numberingPrefix;
-    assert(Boolean(ownPrefix), 'La plantilla sin prefijo recibe un código automático');
+    assert(ownPrefix === 'PROP', 'La plantilla guarda el prefijo que el usuario escribió');
     assert(ownPrefix !== scope, 'La plantilla nueva no repite el prefijo de otra');
 
     const ownDraft = await call<DocumentPayload>('/documents', token, 'POST', {
@@ -387,12 +386,12 @@ async function main(): Promise<void> {
       'La serie guarda el nombre de su plantilla',
     );
 
-    /* 10. El código automático es estable al volver a guardar. */
+    /* 10. El prefijo se conserva al volver a guardar. */
     const ownDetail = await call<{
       template: { id: string; version: number; numberingPrefix: string | null };
     }>(`/templates/${own.body.template.id}`, token);
     const ownAgain = await call<{
-      template: { numberingPrefix: string | null; numberingPrefixAuto: boolean };
+      template: { numberingPrefix: string | null };
     }>(
       `/templates/${own.body.template.id}`,
       token,
@@ -405,8 +404,7 @@ async function main(): Promise<void> {
         expectedVersion: ownDetail.body.template.version,
         numbering: {
           enabled: true,
-          prefix: '',
-          prefixAuto: true,
+          prefix: ownPrefix,
           startValue: 1,
           padding: 4,
           includeYear: true,
@@ -415,7 +413,7 @@ async function main(): Promise<void> {
     );
     assert(
       ownAgain.body.template.numberingPrefix === ownPrefix,
-      'El código automático no cambia al volver a guardar la plantilla',
+      'El prefijo no cambia al volver a guardar la plantilla',
     );
 
     /* 11. Restaurar una plantilla conserva su serie y su enumeración. */
@@ -532,7 +530,6 @@ async function main(): Promise<void> {
       numbering: {
         enabled: true,
         prefix: '',
-        prefixAuto: false,
         startValue: 1,
         padding: 4,
         includeYear: true,

@@ -7,8 +7,7 @@
  * 1. el panel ofrece un prefijo de hasta 20 caracteres;
  * 2. el prefijo es opcional: en blanco, la serie numera sin etiqueta
  *    (`0001-2026`) y el panel lo explica;
- * 3. la casilla «Código automático» deshabilita el campo y deja que el
- *    servidor elija una etiqueta corta (A3F9);
+ * 3. no hay «código automático»: el prefijo es del usuario o ninguno;
  * 4. al escribir un prefijo que ya usa otra plantilla se explica en el acto
  *    que cada plantilla lleva su propia enumeración;
  * 5. el botón de guardar no se bloquea por un prefijo repetido: solo un
@@ -122,19 +121,6 @@ async function main() {
 
     await new Promise((r) => setTimeout(r, 800));
 
-    // Si la plantilla usa el código automático, el campo de prefijo está
-    // deshabilitado: se desmarca para poder escribir en él.
-    const uncheckedAuto = await page.evaluate(() => {
-      const labels = [...document.querySelectorAll('label')];
-      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
-      const input = label?.querySelector('input[type="checkbox"]');
-      if (!input) return false;
-      if (input.checked) input.click();
-      return true;
-    });
-    assert(uncheckedAuto, 'Se puede trabajar con el prefijo propio');
-    await new Promise((r) => setTimeout(r, 500));
-
     await page.waitForSelector('input[maxlength="20"]', { timeout: 20000 });
     const prefixInput = await page.$('input[maxlength="20"]');
     assert(prefixInput, 'El campo de prefijo admite 20 caracteres');
@@ -178,46 +164,15 @@ async function main() {
 
     await page.screenshot({ path: `${SHOTS}/02-sin-prefijo.png`, fullPage: true });
 
-    // Marcar «Código automático»: el campo se deshabilita y lo elige el
-    // servidor (A3F9).
-    const autoChecked = await page.evaluate(() => {
-      const labels = [...document.querySelectorAll('label')];
-      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
-      const input = label?.querySelector('input[type="checkbox"]');
-      if (!input) return false;
-      if (!input.checked) input.click();
-      return true;
-    });
-    assert(autoChecked, 'Se puede pedir el código automático');
+    // El panel no ofrece «código automático»: el prefijo es del usuario o
+    // ninguno.
+    const autoControl = await page.$$eval('label', (nodes) =>
+      nodes.some((n) => /Código automático/i.test(n.textContent ?? '')),
+    );
+    assert(!autoControl, 'El panel no ofrece el código automático');
 
-    await new Promise((r) => setTimeout(r, 600));
-    const autoState = await page.evaluate(() => {
-      const input = document.querySelector('input[maxlength="20"]');
-      const labels = [...document.querySelectorAll('label')];
-      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
-      const box = label?.querySelector('input[type="checkbox"]');
-      return {
-        value: input?.value ?? '',
-        disabled: Boolean(input?.disabled),
-        checked: Boolean(box?.checked),
-      };
-    });
-    assert(autoState.checked, 'La casilla de código automático queda marcada');
-    assert(autoState.disabled, 'El campo de prefijo se deshabilita con el código automático');
-    assert(autoState.value === '', 'El campo de prefijo queda en blanco con el código automático');
-
-    await page.screenshot({ path: `${SHOTS}/03-codigo-automatico.png`, fullPage: true });
-
-    // Desmarcarla y escribir el prefijo de otra plantilla: se explica que cada
-    // una lleva su propia enumeración, pero no bloquea el guardado.
-    await page.evaluate(() => {
-      const labels = [...document.querySelectorAll('label')];
-      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
-      const input = label?.querySelector('input[type="checkbox"]');
-      if (input?.checked) input.click();
-    });
-    await new Promise((r) => setTimeout(r, 400));
-
+    // Escribir el prefijo de otra plantilla: se explica que cada una lleva
+    // su propia enumeración, pero no bloquea el guardado.
     const otherPrefix = await page.evaluate(async (base, currentId) => {
       const response = await fetch(`${base}/templates?pageSize=20`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('sirpefoffice.token')}` },

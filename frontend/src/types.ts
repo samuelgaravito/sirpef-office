@@ -70,10 +70,8 @@ export interface TemplateRecord {
   numberingEnabled: boolean;
   /** Serie propia de la plantilla: es la dueña de su enumeración. */
   numberingSeriesId?: string | null;
-  /** Prefijo visible del número (la etiqueta de la serie). */
+  /** Etiqueta del número de la serie (vacía = serie sin prefijo). */
   numberingPrefix: string | null;
-  /** El prefijo lo asignó el servidor en lugar del usuario. */
-  numberingPrefixAuto?: boolean;
   version: number;
   createdAt: string;
   updatedAt: string;

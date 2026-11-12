@@ -162,16 +162,6 @@ export const templates = pgTable(
     designId: uuid('design_id').references(() => designs.id, { onDelete: 'set null' }),
     /** Si la plantilla asigna número correlativo al crear documentos. */
     numberingEnabled: boolean('numbering_enabled').notNull().default(true),
-    /**
-     * Prefijo visible del número. Copia de `numbering_series.prefix`: se
-     * guarda aquí para no tener que unir con la serie en cada lectura.
-     */
-    numberingPrefix: text('numbering_prefix'),
-    /**
-     * El prefijo lo asignó el servidor (plantilla sin prefijo propio). Si el
-     * usuario lo edita, pasa a ser manual.
-     */
-    numberingPrefixAuto: boolean('numbering_prefix_auto').notNull().default(false),
     name: text('name').notNull(),
     docType: docTypeEnum('doc_type').notNull().default('blank'),
     description: text('description').notNull().default(''),
@@ -207,11 +197,15 @@ export const templates = pgTable(
  * `template_name`, una copia legible del nombre de esa plantilla, para que la
  * tabla se lea de un vistazo sin unir con `templates`.
  *
- * El prefijo es solo la etiqueta visible del número (`MEM-0007-2026`) y **puede
- * repetirse** entre series —incluso puede estar vacío, si la plantilla
- * numera sin prefijo—: dos plantillas con el mismo prefijo enumeran por
- * separado, con su propio contador y su propio suelo, así que sus números
- * nunca se intercalan.
+ * La serie es la **única fuente de verdad** de la enumeración: el prefijo (la
+ * etiqueta visible del número), el número inicial, los dígitos y el reinicio
+ * anual viven aquí. En `templates` solo queda el interruptor
+ * `numbering_enabled`.
+ *
+ * El prefijo es **opcional** (puede estar vacío si la plantilla numera sin
+ * etiqueta) y **puede repetirse** entre series: dos plantillas con el mismo
+ * prefijo enumeran por separado, con su propio contador y su propio suelo, así
+ * que sus números nunca se intercalan.
  */
 export const numberingSeries = pgTable(
   'numbering_series',
@@ -223,8 +217,8 @@ export const numberingSeries = pgTable(
       .references(() => templates.id, { onDelete: 'cascade' }),
     /** Copia legible del nombre de la plantilla (se actualiza al renombrarla). */
     templateName: text('template_name').notNull(),
-    /** Etiqueta visible del número. No es única: cada serie tiene la suya. */
-    prefix: text('prefix').notNull(),
+    /** Etiqueta visible del número. Vacía = serie sin prefijo. */
+    prefix: text('prefix').notNull().default(''),
     /** Primer número de la serie y de cada año nuevo. */
     startValue: integer('start_value').notNull().default(1),
     padding: integer('padding').notNull().default(4),

@@ -129,7 +129,6 @@ async function seed(): Promise<void> {
         aiInstructions: template.aiInstructions,
         isShared: true,
         numberingEnabled,
-        numberingPrefix: prefix,
       })
       .returning({ id: templates.id });
 

@@ -1,14 +1,12 @@
 import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 
 import {
-  autoNumberingPrefix,
   DOC_TYPES_WITHOUT_NUMBER,
   formatDocumentNumber,
   minimumStartValue,
   nextNumberValue,
   normalizeNumberingPrefix,
   numberingPeriodYear,
-  NUMBERING_AUTO_PREFIX_LENGTH,
   NUMBERING_MAX_PADDING,
   NUMBERING_MAX_PREFIX_LENGTH,
   NUMBERING_MAX_START,
@@ -65,10 +63,11 @@ export interface SeriesOwner {
 /**
  * Valida y normaliza un prefijo de serie.
  *
- * El prefijo es opcional: una serie puede numerar sin etiqueta (`0007-2026`).
- * Cuando no está vacío, solo es la etiqueta visible del número: **no tiene
- * que ser único**. Cada plantilla tiene su propia enumeración, así que dos
- * plantillas pueden usar el mismo prefijo sin compartir contador.
+ * El prefijo es **opcional**: una serie puede numerar sin etiqueta
+ * (`0007-2026`). Cuando no está vacío, es solo la etiqueta visible del
+ * número: **no tiene que ser único**. Cada plantilla tiene su propia
+ * enumeración, así que dos plantillas pueden usar el mismo prefijo sin
+ * compartir contador.
  */
 export function parseNumberingPrefix(raw: string): string {
   const prefix = normalizeNumberingPrefix(raw);
@@ -159,16 +158,16 @@ export async function templatesUsingPrefix(
   excludeTemplateId?: string,
 ): Promise<Array<{ id: string; name: string }>> {
   if (prefix === '') return [];
-  return db
-    .select({ id: templates.id, name: templates.name })
-    .from(templates)
+  const rows = await db
+    .select({ id: numberingSeries.templateId, name: numberingSeries.templateName })
+    .from(numberingSeries)
     .where(
       and(
-        eq(templates.numberingPrefix, prefix),
-        isNull(templates.deletedAt),
-        excludeTemplateId ? ne(templates.id, excludeTemplateId) : undefined,
+        eq(numberingSeries.prefix, prefix),
+        excludeTemplateId ? ne(numberingSeries.templateId, excludeTemplateId) : undefined,
       ),
     );
+  return rows.map((row) => ({ id: row.id, name: row.name }));
 }
 
 /** ¿Alguna plantilla viva usa ya ese prefijo? */
@@ -176,31 +175,16 @@ export async function prefixInUse(prefix: string, excludeTemplateId?: string): P
   // Una serie sin prefijo no comparte etiqueta con nadie.
   if (prefix === '') return false;
   const [row] = await db
-    .select({ id: templates.id })
-    .from(templates)
+    .select({ id: numberingSeries.id })
+    .from(numberingSeries)
     .where(
       and(
-        eq(templates.numberingPrefix, prefix),
-        isNull(templates.deletedAt),
-        excludeTemplateId ? ne(templates.id, excludeTemplateId) : undefined,
+        eq(numberingSeries.prefix, prefix),
+        excludeTemplateId ? ne(numberingSeries.templateId, excludeTemplateId) : undefined,
       ),
     )
     .limit(1);
   return Boolean(row);
-}
-
-/**
- * Código corto y único para una plantilla sin prefijo propio.
- *
- * Se deriva del identificador de la plantilla (estable aunque se renombre) y
- * se alarga si el resultado ya lo usa otra plantilla.
- */
-export async function generateAutoPrefix(templateId: string): Promise<string> {
-  for (let length = NUMBERING_AUTO_PREFIX_LENGTH; length <= NUMBERING_MAX_PREFIX_LENGTH; length += 1) {
-    const candidate = autoNumberingPrefix(templateId, length);
-    if (!(await prefixInUse(candidate, templateId))) return candidate;
-  }
-  throw badRequest('No se pudo asignar un prefijo automático. Escribe un prefijo propio.');
 }
 
 /**
@@ -635,11 +619,6 @@ export interface TemplateNumberingInput {
   enabled?: boolean;
   /** Prefijo de 1 a 20 caracteres; vacío = serie sin prefijo. */
   prefix?: string | null;
-  /**
-   * `true` = que el servidor asigne un código corto (A3F9). `false` con el
-   * prefijo vacío = serie sin prefijo.
-   */
-  prefixAuto?: boolean;
   startValue?: number;
   padding?: number;
   includeYear?: boolean;
@@ -648,31 +627,28 @@ export interface TemplateNumberingInput {
 /** Configuración de numeración vigente de una plantilla. */
 export interface TemplateNumberingCurrent {
   numberingEnabled: boolean;
+  /** Prefijo de la serie de la plantilla; vacío = serie sin prefijo. */
   numberingPrefix: string | null;
-  numberingPrefixAuto: boolean;
 }
 
 /** Resultado de resolver la numeración de una plantilla. */
 export interface TemplateNumberingResult {
   enabled: boolean;
   prefix: string | null;
-  auto: boolean;
   series: NumberingSeriesRow | null;
 }
 
 /**
  * Resuelve la numeración de una plantilla y deja su serie lista.
  *
- * El prefijo tiene tres estados:
- * - **propio**: el usuario escribe uno (`MEM`);
- * - **automático**: el servidor asigna un código corto (`A3F9`);
- * - **ninguno**: la serie numera sin etiqueta (`0007-2026`).
+ * El prefijo tiene dos estados: **propio** (el usuario escribe uno, `MEM`) o
+ * **ninguno** (el campo en blanco → la serie numera sin etiqueta, `0007-2026`).
  *
  * El prefijo **puede repetirse** entre plantillas: cada una lleva su propia
  * serie, así que sus números no se intercalan con los de otra aunque
- * compartan etiqueta. Con la numeración apagada la plantilla no lleva
- * número, pero conserva su serie (y su contador) para recuperarlo al volver
- * a encenderla.
+ * compartan etiqueta. Con la numeración apagada la plantilla no lleva número,
+ * pero conserva su serie (y su contador) para recuperarlo al volver a
+ * encenderla.
  */
 export async function resolveTemplateNumbering(options: {
   templateId: string;
@@ -690,36 +666,12 @@ export async function resolveTemplateNumbering(options: {
 
   const existing = await getTemplateSeries(templateId);
 
-  // `undefined` = conservar el prefijo actual; `''` = sin prefijo o código
-  // automático (según `prefixAuto`).
+  // `undefined` = conservar el prefijo actual; `''` = serie sin prefijo.
   const requested = input?.prefix;
-  const normalized =
+  const prefix =
     requested === undefined
-      ? normalizeNumberingPrefix(current?.numberingPrefix ?? '')
+      ? (current?.numberingPrefix ?? '')
       : normalizeNumberingPrefix(requested ?? '');
-
-  // Si el cliente no dice nada, se conserva la intención anterior.
-  const wantsAuto =
-    input?.prefixAuto ??
-    (requested === undefined ? (current?.numberingPrefixAuto ?? false) : false);
-
-  let prefix: string;
-  let auto: boolean;
-
-  if (normalized !== '') {
-    // Prefijo propio.
-    prefix = normalized;
-    auto = requested === undefined ? (current?.numberingPrefixAuto ?? false) : false;
-  } else if (wantsAuto) {
-    // Código automático: se conserva el propio si ya lo tenía.
-    const keepAuto = Boolean(existing) && Boolean(current?.numberingPrefixAuto);
-    prefix = keepAuto && existing ? existing.prefix : await generateAutoPrefix(templateId);
-    auto = true;
-  } else {
-    // Serie sin prefijo: el número es solo el correlativo.
-    prefix = '';
-    auto = false;
-  }
 
   if (!enabled) {
     // La numeración está apagada: la plantilla no lleva número, pero su serie
@@ -729,9 +681,9 @@ export async function resolveTemplateNumbering(options: {
         existing.prefix === prefix
           ? existing
           : await ensureTemplateSeries({ templateId, prefix, createdBy: user.sub });
-      return { enabled: false, prefix: series.prefix, auto, series };
+      return { enabled: false, prefix: series.prefix, series };
     }
-    return { enabled: false, prefix: null, auto, series: null };
+    return { enabled: false, prefix: prefix === '' ? null : prefix, series: null };
   }
 
   // La serie se crea cuando la plantilla ya existe: una plantilla nueva
@@ -742,7 +694,7 @@ export async function resolveTemplateNumbering(options: {
     .where(eq(templates.id, templateId))
     .limit(1);
   if (!template) {
-    return { enabled: true, prefix, auto, series: null };
+    return { enabled: true, prefix, series: null };
   }
 
   const series = await ensureTemplateSeries({
@@ -754,7 +706,7 @@ export async function resolveTemplateNumbering(options: {
     createdBy: user.sub,
   });
 
-  return { enabled: true, prefix: series.prefix, auto, series };
+  return { enabled: true, prefix: series.prefix, series };
 }
 
 /**
