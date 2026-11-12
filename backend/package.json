@@ -40,6 +40,7 @@
     "smoke:template-share": "tsx scripts/template-share-smoke.ts",
     "smoke:campaign": "tsx scripts/design-campaign-smoke.ts",
     "smoke:realtime": "tsx scripts/realtime-smoke.ts",
+    "smoke:realtime:proxy": "node scripts/realtime-proxy-smoke.mjs",
     "demo:inbox": "tsx scripts/inbox-demo.ts",
     "demo:inbox:notify": "tsx scripts/inbox-demo.ts --notify",
     "demo:review": "tsx scripts/review-demo.ts",
