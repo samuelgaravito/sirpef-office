@@ -1,4 +1,4 @@
-import { eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import {
   DOC_TYPE_PREFIX,
@@ -12,11 +12,12 @@ import {
 } from '@sirpefoffice/shared';
 
 import { db } from '../db/index.js';
-import { documentCounters, documents, numberingSeries, templates } from '../db/schema.js';
+import { documentCounters, documents, templates } from '../db/schema.js';
 import {
   assignDocumentNumber,
   ensureTemplateSeries,
-  getNumberingSeries,
+  getTemplateSeries,
+  getTemplateSeriesMap,
   lastIssuedNumber,
   liveNumberingFloors,
   type DbExecutor,
@@ -29,8 +30,6 @@ export interface TemplateNumbering {
   templateId: string | null;
   numberingEnabled: boolean;
   numberingPrefix: string | null;
-  /** Serie propia de la plantilla; `null` si aún no se ha creado. */
-  numberingSeriesId: string | null;
 }
 
 /**
@@ -42,13 +41,11 @@ export function templateNumberingFrom(row: {
   id: string;
   numberingEnabled: boolean;
   numberingPrefix: string | null;
-  numberingSeriesId: string | null;
 }): TemplateNumbering {
   return {
     templateId: row.id,
     numberingEnabled: row.numberingEnabled,
     numberingPrefix: row.numberingPrefix,
-    numberingSeriesId: row.numberingSeriesId,
   };
 }
 
@@ -89,16 +86,15 @@ export async function seriesForDocument(options: {
 
   if (!template) return null;
   if (!template.numberingEnabled) return null;
+  if (!template.templateId) return null;
 
-  if (template.numberingSeriesId) {
-    const series = await getNumberingSeries(template.numberingSeriesId);
-    if (series) return series;
-  }
+  const series = await getTemplateSeries(template.templateId);
+  if (series) return series;
 
   // La plantilla todavía no tiene serie (datos antiguos): se le crea la suya
   // con el prefijo que le corresponde.
   const prefix = numberingPrefixFor({ docType, template });
-  if (!prefix || !template.templateId) return null;
+  if (!prefix) return null;
   return ensureTemplateSeries({ templateId: template.templateId, prefix });
 }
 
@@ -145,12 +141,12 @@ export async function previewDocumentNumber(options: {
   if (prefix === null) return null;
 
   const template = options.template;
-  const series = template?.numberingSeriesId
-    ? await getNumberingSeries(template.numberingSeriesId)
+  const series = template?.templateId
+    ? await getTemplateSeries(template.templateId)
     : null;
 
   const config = series ?? {
-    id: template?.numberingSeriesId ?? '',
+    id: '',
     prefix,
     startValue: 1,
     padding: 4,
@@ -171,19 +167,16 @@ export async function numberingPreviewsFor(
 ): Promise<Array<NumberingPreview | null>> {
   if (items.length === 0) return [];
 
-  const seriesIds = [
+  const templateIds = [
     ...new Set(
       items
-        .map((item) => item.template?.numberingSeriesId)
+        .map((item) => item.template?.templateId)
         .filter((id): id is string => typeof id === 'string' && id.length > 0),
     ),
   ];
 
-  const seriesRows =
-    seriesIds.length > 0
-      ? await db.select().from(numberingSeries).where(inArray(numberingSeries.id, seriesIds))
-      : [];
-  const seriesById = new Map(seriesRows.map((row) => [row.id, row]));
+  const seriesByTemplate = await getTemplateSeriesMap(templateIds);
+  const seriesIds = [...seriesByTemplate.values()].map((row) => row.id);
 
   const counters = await db.select().from(documentCounters);
   const counterByKey = new Map<string, number>();
@@ -199,12 +192,10 @@ export async function numberingPreviewsFor(
     if (prefix === null) return null;
 
     const template = item.template;
-    const series = template?.numberingSeriesId
-      ? seriesById.get(template.numberingSeriesId)
-      : undefined;
+    const series = template?.templateId ? seriesByTemplate.get(template.templateId) : undefined;
 
     const config = series ?? {
-      id: template?.numberingSeriesId ?? '',
+      id: '',
       prefix,
       startValue: 1,
       padding: 4,
@@ -239,7 +230,6 @@ export async function pendingNumberForDocument(document: {
         id: templates.id,
         numberingEnabled: templates.numberingEnabled,
         numberingPrefix: templates.numberingPrefix,
-        numberingSeriesId: templates.numberingSeriesId,
       })
       .from(templates)
       .where(eq(templates.id, document.templateId))
@@ -286,7 +276,6 @@ export async function numberDocumentInTx(
         id: templates.id,
         numberingEnabled: templates.numberingEnabled,
         numberingPrefix: templates.numberingPrefix,
-        numberingSeriesId: templates.numberingSeriesId,
       })
       .from(templates)
       .where(eq(templates.id, locked.templateId))

@@ -5,11 +5,13 @@
  *
  * Comprueba que:
  * 1. el panel ofrece un prefijo de hasta 20 caracteres;
- * 2. una plantilla sin prefijo muestra un código automático y un próximo
- *    número con el formato `PREFIJO-CORRELATIVO-AÑO`;
- * 3. al escribir un prefijo que ya usa otra plantilla se explica en el acto
+ * 2. el prefijo es opcional: en blanco, la serie numera sin etiqueta
+ *    (`0001-2026`) y el panel lo explica;
+ * 3. la casilla «Código automático» deshabilita el campo y deja que el
+ *    servidor elija una etiqueta corta (A3F9);
+ * 4. al escribir un prefijo que ya usa otra plantilla se explica en el acto
  *    que cada plantilla lleva su propia enumeración;
- * 4. el botón de guardar no se bloquea por un prefijo repetido: solo un
+ * 5. el botón de guardar no se bloquea por un prefijo repetido: solo un
  *    prefijo con formato inválido lo impide.
  *
  * Variables de entorno:
@@ -118,6 +120,21 @@ async function main() {
     });
     assert(enabled, 'Se puede encender la numeración automática');
 
+    await new Promise((r) => setTimeout(r, 800));
+
+    // Si la plantilla usa el código automático, el campo de prefijo está
+    // deshabilitado: se desmarca para poder escribir en él.
+    const uncheckedAuto = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('label')];
+      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
+      const input = label?.querySelector('input[type="checkbox"]');
+      if (!input) return false;
+      if (input.checked) input.click();
+      return true;
+    });
+    assert(uncheckedAuto, 'Se puede trabajar con el prefijo propio');
+    await new Promise((r) => setTimeout(r, 500));
+
     await page.waitForSelector('input[maxlength="20"]', { timeout: 20000 });
     const prefixInput = await page.$('input[maxlength="20"]');
     assert(prefixInput, 'El campo de prefijo admite 20 caracteres');
@@ -146,7 +163,7 @@ async function main() {
       'El prefijo admite letras, números y guiones (que se normalizan al guardar)',
     );
 
-    // Vaciar el prefijo: el servidor asignará un código automático
+    // Vaciar el prefijo: la plantilla queda sin etiqueta (0001-2026).
     await page.click('input[maxlength="20"]', { clickCount: 3 });
     await page.keyboard.press('Backspace');
     await new Promise((r) => setTimeout(r, 600));
@@ -155,14 +172,52 @@ async function main() {
       .$eval('input[maxlength="20"] ~ p', (el) => el.textContent?.trim() ?? '')
       .catch(() => '');
     assert(
-      /único|automátic/i.test(hint),
-      'El campo vacío explica que se asignará un código único',
+      /sin prefijo|no llevan prefijo/i.test(hint),
+      'El campo vacío explica que la serie puede numerar sin prefijo',
     );
 
-    await page.screenshot({ path: `${SHOTS}/02-codigo-automatico.png`, fullPage: true });
+    await page.screenshot({ path: `${SHOTS}/02-sin-prefijo.png`, fullPage: true });
 
-    // Escribir el prefijo de otra plantilla: se explica que cada una lleva
-    // su propia enumeración, pero no bloquea el guardado.
+    // Marcar «Código automático»: el campo se deshabilita y lo elige el
+    // servidor (A3F9).
+    const autoChecked = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('label')];
+      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
+      const input = label?.querySelector('input[type="checkbox"]');
+      if (!input) return false;
+      if (!input.checked) input.click();
+      return true;
+    });
+    assert(autoChecked, 'Se puede pedir el código automático');
+
+    await new Promise((r) => setTimeout(r, 600));
+    const autoState = await page.evaluate(() => {
+      const input = document.querySelector('input[maxlength="20"]');
+      const labels = [...document.querySelectorAll('label')];
+      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
+      const box = label?.querySelector('input[type="checkbox"]');
+      return {
+        value: input?.value ?? '',
+        disabled: Boolean(input?.disabled),
+        checked: Boolean(box?.checked),
+      };
+    });
+    assert(autoState.checked, 'La casilla de código automático queda marcada');
+    assert(autoState.disabled, 'El campo de prefijo se deshabilita con el código automático');
+    assert(autoState.value === '', 'El campo de prefijo queda en blanco con el código automático');
+
+    await page.screenshot({ path: `${SHOTS}/03-codigo-automatico.png`, fullPage: true });
+
+    // Desmarcarla y escribir el prefijo de otra plantilla: se explica que cada
+    // una lleva su propia enumeración, pero no bloquea el guardado.
+    await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('label')];
+      const label = labels.find((l) => /Código automático/i.test(l.textContent ?? ''));
+      const input = label?.querySelector('input[type="checkbox"]');
+      if (input?.checked) input.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+
     const otherPrefix = await page.evaluate(async (base, currentId) => {
       const response = await fetch(`${base}/templates?pageSize=20`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('sirpefoffice.token')}` },
@@ -194,7 +249,7 @@ async function main() {
       );
       assert(!blocked, 'El prefijo repetido no bloquea el guardado');
 
-      await page.screenshot({ path: `${SHOTS}/03-prefijo-compartido.png`, fullPage: true });
+      await page.screenshot({ path: `${SHOTS}/04-prefijo-compartido.png`, fullPage: true });
     } else {
       console.log('· No hay otra plantilla con prefijo para probar el prefijo compartido');
     }
