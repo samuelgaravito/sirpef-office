@@ -14,7 +14,11 @@ const updateSchema = z.object({
   includeYear: z.boolean().optional(),
 });
 
-const paramsSchema = z.object({ prefix: z.string().trim().min(1).max(20) });
+/**
+ * La serie se identifica por su id y no por el prefijo: el prefijo es la
+ * etiqueta del número y puede repetirse entre plantillas.
+ */
+const paramsSchema = z.object({ seriesId: z.uuid() });
 
 export async function numberingRoutes(app: FastifyInstance): Promise<void> {
   /** Lista las series con su próximo número. */
@@ -24,16 +28,16 @@ export async function numberingRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Ajusta el número inicial, el relleno o el uso del año de una serie. */
-  app.put('/:prefix', async (request) => {
+  app.put('/:seriesId', async (request) => {
     const user = await authenticate(request);
-    const { prefix } = paramsSchema.parse(request.params);
+    const { seriesId } = paramsSchema.parse(request.params);
     const body = updateSchema.parse(request.body ?? {});
 
     // Cada serie pertenece a una plantilla: solo su propietario puede
     // cambiar sus ajustes.
-    await assertCanEditSeries(prefix, { sub: user.sub, role: user.role });
+    await assertCanEditSeries(seriesId, { sub: user.sub, role: user.role });
 
-    const series = await updateNumberingSeries(prefix, body, user.sub);
+    const series = await updateNumberingSeries(seriesId, body, user.sub);
     return { series };
   });
 }

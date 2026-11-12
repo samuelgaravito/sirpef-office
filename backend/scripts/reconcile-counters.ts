@@ -10,6 +10,9 @@
  * correlativo, así que su número puede volver a emitirse y no debe fijar el
  * suelo del contador.
  *
+ * El contador es **por serie**: dos plantillas pueden usar el mismo prefijo y
+ * cada una lleva su propia enumeración.
+ *
  * Uso:
  *   npx tsx scripts/reconcile-counters.ts          # solo informa
  *   npx tsx scripts/reconcile-counters.ts --apply  # corrige
@@ -19,13 +22,13 @@ import postgres from 'postgres';
 import { env } from '../src/env.js';
 
 interface CounterRow {
-  scope: string;
+  series_id: string;
   year: number;
   counter: number;
 }
 
 interface MaxRow {
-  prefix: string;
+  series_id: string;
   year: number;
   value: number;
 }
@@ -36,21 +39,22 @@ async function main(): Promise<void> {
 
   try {
     const counters = (await sql`
-      select scope, year, counter from document_counters
+      select series_id, year, counter from document_counters
     `) as unknown as CounterRow[];
 
     const maxima = (await sql`
-      select numbering_prefix as prefix,
+      select numbering_series_id as series_id,
              numbering_year as year,
              max(numbering_value) as value
       from documents
       where numbering_value is not null
         and deleted_at is null
-      group by numbering_prefix, numbering_year
+        and numbering_series_id is not null
+      group by numbering_series_id, numbering_year
     `) as unknown as MaxRow[];
 
     const maxByKey = new Map<string, number>();
-    for (const row of maxima) maxByKey.set(`${row.prefix}:${row.year}`, Number(row.value));
+    for (const row of maxima) maxByKey.set(`${row.series_id}:${row.year}`, Number(row.value));
 
     const orphan = (await sql`
       select id, doc_number
@@ -60,17 +64,26 @@ async function main(): Promise<void> {
       limit 100
     `) as unknown as Array<{ id: string; doc_number: string }>;
 
-
-    const pending: Array<{ scope: string; year: number; current: number; expected: number }> = [];
+    const pending: Array<{
+      series_id: string;
+      year: number;
+      current: number;
+      expected: number;
+      prefix: string;
+    }> = [];
 
     for (const row of counters) {
-      const expected = maxByKey.get(`${row.scope}:${row.year}`) ?? 0;
+      const expected = maxByKey.get(`${row.series_id}:${row.year}`) ?? 0;
       if (Number(row.counter) !== expected) {
+        const [series] = (await sql`
+          select prefix from numbering_series where id = ${row.series_id}
+        `) as unknown as Array<{ prefix: string }>;
         pending.push({
-          scope: row.scope,
+          series_id: row.series_id,
           year: Number(row.year),
           current: Number(row.counter),
           expected,
+          prefix: series?.prefix ?? '(sin prefijo)',
         });
       }
     }
@@ -93,7 +106,7 @@ async function main(): Promise<void> {
     console.log('Desviaciones encontradas:\n');
     for (const row of pending) {
       console.log(
-        `  serie "${row.scope || '(sin prefijo)'}" · período ${row.year}: ` +
+        `  serie "${row.prefix}" · período ${row.year}: ` +
           `contador ${row.current} → debería ser ${row.expected}`,
       );
     }
@@ -110,14 +123,14 @@ async function main(): Promise<void> {
           // la fila para que la próxima reserva arranque desde `start_value`.
           await tx`
             delete from document_counters
-            where scope = ${row.scope} and year = ${row.year}
+            where series_id = ${row.series_id} and year = ${row.year}
           `;
           continue;
         }
         await tx`
           update document_counters
           set counter = ${row.expected}
-          where scope = ${row.scope} and year = ${row.year}
+          where series_id = ${row.series_id} and year = ${row.year}
         `;
       }
     });

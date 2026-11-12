@@ -9,7 +9,9 @@
  * 5. dos oficializaciones simultáneas no repiten número;
  * 6. un documento en la papelera no bloquea la oficialización de otro y
  *    restaurarlo nunca falla por su número;
- * 7. guardar el mismo contenido no incrementa la versión.
+ * 7. guardar el mismo contenido no incrementa la versión;
+ * 8. cada plantilla lleva su propia enumeración: dos plantillas pueden usar
+ *    el mismo prefijo y sus contadores no se intercalan.
  *
  * Requiere la API en marcha y un administrador activo.
  * Uso: npm run smoke:numbering
@@ -109,11 +111,15 @@ async function main(): Promise<void> {
 
   const createdIds: string[] = [];
   const createdTemplateIds: string[] = [];
+  /** Series creadas por las plantillas de prueba (se borran al terminar). */
+  const createdSeriesIds: string[] = [];
   const scope = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
+  const seriesId = template.numberingSeriesId;
+  if (!seriesId) throw new Error('La plantilla no tiene serie de numeración propia');
   const [series] = await db
     .select()
     .from(numberingSeries)
-    .where(eq(numberingSeries.prefix, scope))
+    .where(eq(numberingSeries.id, seriesId))
     .limit(1);
   if (!series) throw new Error(`No existe la serie de numeración "${scope}"`);
   const year = series.includeYear ? new Date().getFullYear() : 0;
@@ -121,7 +127,7 @@ async function main(): Promise<void> {
   const [counterBefore] = await db
     .select()
     .from(documentCounters)
-    .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)))
+    .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)))
     .limit(1);
 
   async function createDraft(): Promise<DocumentPayload['document']> {
@@ -152,7 +158,7 @@ async function main(): Promise<void> {
     const [row] = await db
       .select()
       .from(documentCounters)
-      .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)))
+      .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)))
       .limit(1);
     return row?.counter ?? 0;
   }
@@ -270,7 +276,7 @@ async function main(): Promise<void> {
     await db
       .update(documentCounters)
       .set({ counter: counterBefore?.counter ?? 0 })
-      .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)));
+      .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)));
 
     const afterTrash = await createDraft();
     const officialized = await call(`/documents/${afterTrash.id}`, token, 'PATCH', {
@@ -282,13 +288,15 @@ async function main(): Promise<void> {
     );
 
     const live = await db
-      .select({ docNumber: documents.docNumber })
+      .select({ docNumber: documents.docNumber, seriesId: documents.numberingSeriesId })
       .from(documents)
       .where(and(isNull(documents.deletedAt), isNotNull(documents.docNumber)));
-    const liveNumbers = live.map((row) => row.docNumber);
+    // El número es único **dentro de su serie**: dos series distintas pueden
+    // mostrar el mismo texto si comparten prefijo.
+    const liveNumbers = live.map((row) => `${row.seriesId ?? ''}:${row.docNumber}`);
     assert(
       new Set(liveNumbers).size === liveNumbers.length,
-      'Ningún documento vivo comparte número con otro',
+      'Ningún documento vivo comparte número con otro de su misma serie',
     );
 
     /* 7. Restaurar un documento de la papelera nunca falla por su número. */
@@ -316,7 +324,9 @@ async function main(): Promise<void> {
     );
 
     /* 9. Cada plantilla lleva su propia enumeración. */
-    const own = await call<{ template: { id: string; numberingPrefix: string | null } }>(
+    const own = await call<{
+      template: { id: string; numberingPrefix: string | null; numberingSeriesId: string | null };
+    }>(
       '/templates',
       token,
       'POST',
@@ -330,6 +340,9 @@ async function main(): Promise<void> {
     );
     assert(own.status === 201, 'Se crea una plantilla con numeración automática');
     createdTemplateIds.push(own.body.template.id);
+    if (own.body.template.numberingSeriesId) {
+      createdSeriesIds.push(own.body.template.numberingSeriesId);
+    }
     const ownPrefix = own.body.template.numberingPrefix;
     assert(Boolean(ownPrefix), 'La plantilla sin prefijo recibe un código automático');
     assert(ownPrefix !== scope, 'La plantilla nueva no repite el prefijo de otra');
@@ -379,7 +392,7 @@ async function main(): Promise<void> {
       'El código automático no cambia al volver a guardar la plantilla',
     );
 
-    /* 11. Restaurar una plantilla cuyo prefijo fue ocupado recibe otro. */
+    /* 11. Restaurar una plantilla conserva su serie y su enumeración. */
     const removedTemplate = await call<{ ok: boolean }>(
       `/templates/${own.body.template.id}`,
       token,
@@ -387,15 +400,29 @@ async function main(): Promise<void> {
     );
     assert(removedTemplate.status === 200, 'Se elimina la plantilla con numeración propia');
 
-    const thief = await call<{ template: { id: string } }>('/templates', token, 'POST', {
-      name: `Prefijo tomado ${Date.now()}`,
-      docType: template.docType,
-      body: { type: 'doc', content: [{ type: 'paragraph' }] },
-      schema: [],
-      numbering: { enabled: true, prefix: ownPrefix, startValue: 1, padding: 4, includeYear: true },
-    });
-    assert(thief.status === 201, 'Otra plantilla ocupa el prefijo liberado');
+    const thief = await call<{ template: { id: string; numberingSeriesId: string | null } }>(
+      '/templates',
+      token,
+      'POST',
+      {
+        name: `Prefijo tomado ${Date.now()}`,
+        docType: template.docType,
+        body: { type: 'doc', content: [{ type: 'paragraph' }] },
+        schema: [],
+        numbering: {
+          enabled: true,
+          prefix: ownPrefix,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+        },
+      },
+    );
+    assert(thief.status === 201, 'Otra plantilla puede ocupar el prefijo liberado');
     createdTemplateIds.push(thief.body.template.id);
+    if (thief.body.template.numberingSeriesId) {
+      createdSeriesIds.push(thief.body.template.numberingSeriesId);
+    }
 
     const restoreTemplate = await call<{ ok: boolean }>(
       `/templates/${own.body.template.id}/restore`,
@@ -407,17 +434,22 @@ async function main(): Promise<void> {
       'La plantilla se restaura aunque su prefijo esté ocupado',
     );
 
-    const ownRestored = await call<{ template: { numberingPrefix: string | null } }>(
-      `/templates/${own.body.template.id}`,
-      token,
+    const ownRestored = await call<{
+      template: { numberingPrefix: string | null; numberingSeriesId: string | null };
+    }>(`/templates/${own.body.template.id}`, token);
+    assert(
+      ownRestored.body.template.numberingPrefix === ownPrefix,
+      'La plantilla restaurada conserva su prefijo',
     );
     assert(
-      ownRestored.body.template.numberingPrefix !== ownPrefix,
-      'La plantilla restaurada recibe un prefijo propio en lugar de compartir serie',
+      ownRestored.body.template.numberingSeriesId === own.body.template.numberingSeriesId,
+      'La plantilla restaurada conserva su serie y su enumeración',
     );
 
-    /* 12. Dos plantillas no pueden compartir prefijo. */
-    const duplicated = await call<{ error?: string }>('/templates', token, 'POST', {
+    /* 12. Dos plantillas pueden compartir prefijo: cada una con su serie. */
+    const duplicated = await call<{
+      template?: { id: string; numberingSeriesId: string | null; numberingPrefix: string | null };
+    }>('/templates', token, 'POST', {
       name: `Prefijo duplicado ${Date.now()}`,
       docType: template.docType,
       body: { type: 'doc', content: [{ type: 'paragraph' }] },
@@ -425,28 +457,67 @@ async function main(): Promise<void> {
       numbering: { enabled: true, prefix: scope, startValue: 1, padding: 4, includeYear: true },
     });
     assert(
-      duplicated.status === 409,
-      'Guardar un prefijo que ya usa otra plantilla se rechaza',
+      duplicated.status === 201,
+      'Se puede guardar un prefijo que ya usa otra plantilla',
+    );
+    createdTemplateIds.push(duplicated.body.template!.id);
+    if (duplicated.body.template!.numberingSeriesId) {
+      createdSeriesIds.push(duplicated.body.template!.numberingSeriesId);
+    }
+    assert(
+      duplicated.body.template!.numberingPrefix === scope,
+      'La segunda plantilla conserva el prefijo repetido',
+    );
+    assert(
+      duplicated.body.template!.numberingSeriesId !== seriesId,
+      'La segunda plantilla tiene su propia serie',
+    );
+
+    /* 12b. Las dos enumeraciones son independientes. */
+    const twinDraft = await call<DocumentPayload>('/documents', token, 'POST', {
+      templateId: duplicated.body.template!.id,
+      content: { type: 'doc', content: [{ type: 'paragraph' }] },
+    });
+    assert(twinDraft.status === 201, 'Se crea un borrador con la plantilla gemela');
+    createdIds.push(twinDraft.body.document.id);
+
+    await call(`/documents/${twinDraft.body.document.id}`, token, 'PATCH', { status: 'final' });
+    const twinNumbered = await call<DocumentPayload>(
+      `/documents/${twinDraft.body.document.id}`,
+      token,
+    );
+    assert(
+      numericSuffix(twinNumbered.body.document.docNumber) === 1,
+      'La plantilla gemela empieza su enumeración en 1, sin intercalarse con la otra',
+    );
+    assert(
+      (twinNumbered.body.document.docNumber ?? '').startsWith(`${scope}-`),
+      'El número gemelo lleva el prefijo repetido',
     );
   } finally {
-    // Limpieza: se borran los documentos y las plantillas de prueba y se
-    // restaura el contador.
+    // Limpieza: se borran los documentos, las plantillas de prueba y las
+    // series que estas crearon (con su contador), y se restaura el contador
+    // de la serie original.
     for (const id of createdIds) {
       await db.delete(documents).where(eq(documents.id, id));
     }
     for (const id of createdTemplateIds) {
       await db.delete(templates).where(eq(templates.id, id));
     }
+    for (const id of createdSeriesIds) {
+      await db.delete(documentCounters).where(eq(documentCounters.seriesId, id));
+      await db.delete(numberingSeries).where(eq(numberingSeries.id, id));
+    }
 
     if (counterBefore) {
       await db
         .update(documentCounters)
         .set({ counter: counterBefore.counter })
-        .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)));
+        .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)));
     } else {
       await db
         .delete(documentCounters)
-        .where(and(eq(documentCounters.scope, scope), eq(documentCounters.year, year)));
+        .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)));
     }
 
     await sql.end({ timeout: 5 });

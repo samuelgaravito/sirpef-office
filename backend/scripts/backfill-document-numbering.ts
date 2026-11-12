@@ -1,13 +1,19 @@
 /**
- * Migra los correlativos existentes al modelo de numeración diferida.
+ * Migra los correlativos existentes al modelo de numeración por plantilla.
  *
  * Hace tres cosas, de forma idempotente (se registra en `app_migrations`):
  *
  * 1. Libera el número de los documentos que siguen en borrador: un borrador
  *    no debe consumir la secuencia.
- * 2. Rellena `numbering_prefix/year/value` de los documentos ya oficiales para
- *    poder recalcular los contadores sin parsear el texto formateado.
+ * 2. Rellena la identidad de numeración de los documentos ya oficiales
+ *    (`numbering_prefix/year/value` y `numbering_series_id`) para poder
+ *    recalcular `document_counters` sin parsear el texto formateado.
  * 3. Recalcula `document_counters` desde los documentos realmente emitidos.
+ *
+ * Cada serie pertenece a una plantilla, así que el documento se asocia a la
+ * serie de su plantilla (si el prefijo coincide) y no a una serie suelta
+ * elegida por el prefijo: dos plantillas pueden compartir prefijo y cada una
+ * lleva su propia enumeración.
  *
  * Antes de tocar nada guarda una copia JSON de `documents` y
  * `document_counters` en `data/backups/`. Si algún documento con número no
@@ -26,6 +32,7 @@ import { env } from '../src/env.js';
 const MIGRATION_ID = 'numbering-backfill-v1';
 
 interface SeriesRow {
+  id: string;
   prefix: string;
   start_value: number;
   padding: number;
@@ -123,22 +130,37 @@ async function main(): Promise<void> {
     }
 
     const series = (await sql`
-      select prefix, start_value, padding, include_year from numbering_series
+      select id, prefix, start_value, padding, include_year from numbering_series
     `) as unknown as SeriesRow[];
 
     const numbered = (await sql`
-      select id, doc_number, status, data
-      from documents
-      where doc_number is not null
-      order by created_at
+      select d.id, d.doc_number, d.status, d.data, d.template_id,
+             t.numbering_series_id as template_series_id,
+             s.prefix as template_series_prefix
+      from documents d
+      left join templates t on t.id = d.template_id
+      left join numbering_series s on s.id = t.numbering_series_id
+      where d.doc_number is not null
+      order by d.created_at
     `) as unknown as Array<{
       id: string;
       doc_number: string;
       status: string;
       data: Record<string, unknown> | null;
+      template_id: string | null;
+      template_series_id: string | null;
+      template_series_prefix: string | null;
     }>;
 
-    const parsed = new Map<string, ParsedNumber>();
+    interface Resolved {
+      id: string;
+      seriesId: string | null;
+      prefix: string;
+      year: number;
+      value: number;
+    }
+
+    const parsed = new Map<string, Resolved>();
     const unmatched: Array<{ id: string; docNumber: string }> = [];
 
     for (const row of numbered) {
@@ -147,7 +169,26 @@ async function main(): Promise<void> {
         unmatched.push({ id: row.id, docNumber: row.doc_number });
         continue;
       }
-      parsed.set(row.id, match);
+
+      // La serie del documento es la de su plantilla (si el prefijo coincide);
+      // si no, la serie huérfana que lleva ese prefijo.
+      let seriesId: string | null = null;
+      if (row.template_series_id && row.template_series_prefix === match.prefix) {
+        seriesId = row.template_series_id;
+      } else {
+        const [orphan] = (await sql`
+          select s.id from numbering_series s
+          where s.prefix = ${match.prefix}
+            and not exists (
+              select 1 from templates t where t.numbering_series_id = s.id
+            )
+          order by s.created_at
+          limit 1
+        `) as unknown as Array<{ id: string }>;
+        seriesId = orphan?.id ?? null;
+      }
+
+      parsed.set(row.id, { id: row.id, seriesId, ...match });
     }
 
     if (unmatched.length > 0) {
@@ -192,6 +233,7 @@ async function main(): Promise<void> {
             numbering_prefix = null,
             numbering_year = null,
             numbering_value = null,
+            numbering_series_id = null,
             data = case
               when data ? 'numero' then data - 'numero'
               else data
@@ -213,7 +255,8 @@ async function main(): Promise<void> {
           update documents
           set numbering_prefix = ${match.prefix},
               numbering_year = ${match.year},
-              numbering_value = ${match.value}
+              numbering_value = ${match.value},
+              numbering_series_id = ${match.seriesId}
           where id = ${row.id}
         `;
         counts.numbered += 1;
@@ -221,20 +264,21 @@ async function main(): Promise<void> {
 
       /* 3. Recalcular contadores desde los documentos emitidos. */
       const maxima = (await tx`
-        select numbering_prefix as prefix,
+        select numbering_series_id as series_id,
                numbering_year as year,
                max(numbering_value) as value
         from documents
         where numbering_value is not null
           and deleted_at is null
-        group by numbering_prefix, numbering_year
-      `) as unknown as Array<{ prefix: string; year: number; value: number }>;
+          and numbering_series_id is not null
+        group by numbering_series_id, numbering_year
+      `) as unknown as Array<{ series_id: string; year: number; value: number }>;
 
       for (const row of maxima) {
         await tx`
-          insert into document_counters (scope, year, counter)
-          values (${row.prefix}, ${row.year}, ${row.value})
-          on conflict (scope, year)
+          insert into document_counters (series_id, year, counter)
+          values (${row.series_id}, ${row.year}, ${row.value})
+          on conflict (series_id, year)
           do update set counter = ${row.value}
         `;
         counts.countersUpdated += 1;
@@ -248,17 +292,17 @@ async function main(): Promise<void> {
       for (const row of series) {
         const year = row.include_year ? new Date().getFullYear() : 0;
         const hasOfficial = maxima.some(
-          (item) => item.prefix === row.prefix && Number(item.year) === year,
+          (item) => item.series_id === row.id && Number(item.year) === year,
         );
         if (hasOfficial) continue;
 
         const updated = await tx`
           update document_counters
           set counter = ${row.start_value - 1}
-          where scope = ${row.prefix}
+          where series_id = ${row.id}
             and year = ${year}
             and counter >= ${row.start_value}
-          returning scope
+          returning series_id
         `;
         counts.countersUpdated += updated.length;
         counts.countersKept += 1;

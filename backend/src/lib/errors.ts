@@ -86,10 +86,11 @@ function fromUniqueViolation(error: PgError): AppError | null {
 
   switch (constraint) {
     case 'documents_doc_number_idx':
+    case 'documents_doc_number_series_idx':
       return new AppError(
         409,
         'DOC_NUMBER_CONFLICT',
-        'Ese número de documento ya está en uso por otro documento. Vuelve a intentarlo: se asignará el siguiente correlativo libre.',
+        'Ese número de documento ya está en uso por otro documento de la misma serie. Vuelve a intentarlo: se asignará el siguiente correlativo libre.',
       );
     case 'users_email_lower_idx':
       return new AppError(409, 'EMAIL_TAKEN', 'Ya existe una cuenta con ese correo.');

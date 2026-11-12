@@ -15,7 +15,7 @@ import { db } from '../db/index.js';
 import { documentCounters, documents, numberingSeries, templates } from '../db/schema.js';
 import {
   assignDocumentNumber,
-  ensureNumberingSeries,
+  ensureTemplateSeries,
   getNumberingSeries,
   lastIssuedNumber,
   liveNumberingFloors,
@@ -25,15 +25,31 @@ import {
 
 /** Configuración de numeración de la plantilla que originó el documento. */
 export interface TemplateNumbering {
+  /** Plantilla que la origina; `null` si el documento no tiene ninguna. */
+  templateId: string | null;
   numberingEnabled: boolean;
   numberingPrefix: string | null;
+  /** Serie propia de la plantilla; `null` si aún no se ha creado. */
+  numberingSeriesId: string | null;
 }
 
-/** Crea la serie con los valores predeterminados si todavía no existe. */
-async function seriesForPrefix(prefix: string): Promise<NumberingSeriesRow> {
-  const existing = await getNumberingSeries(prefix);
-  if (existing) return existing;
-  return ensureNumberingSeries({ prefix, startValue: 1, padding: 4, includeYear: true });
+/**
+ * Convierte la fila de una plantilla en su configuración de numeración.
+ *
+ * Evita repetir el mismo mapeo en cada ruta que necesita el número previsto.
+ */
+export function templateNumberingFrom(row: {
+  id: string;
+  numberingEnabled: boolean;
+  numberingPrefix: string | null;
+  numberingSeriesId: string | null;
+}): TemplateNumbering {
+  return {
+    templateId: row.id,
+    numberingEnabled: row.numberingEnabled,
+    numberingPrefix: row.numberingPrefix,
+    numberingSeriesId: row.numberingSeriesId,
+  };
 }
 
 /**
@@ -41,10 +57,10 @@ async function seriesForPrefix(prefix: string): Promise<NumberingSeriesRow> {
  * número.
  *
  * - Con plantilla: usa la serie de esa plantilla. Cada plantilla tiene su
- *   propio prefijo, así que su serie y su contador son exclusivos.
+ *   propio prefijo y su propia enumeración, así que sus números no se
+ *   intercalan con los de otra aunque compartan etiqueta.
  * - Sin plantilla: no hay serie. Un documento suelto no puede numerarse sin
- *   una serie propia, y las series por tipo de documento las comparten
- *   varias plantillas (sus números se intercalaría).
+ *   una serie propia.
  * - Currículum y documento en blanco no llevan número.
  */
 export function numberingPrefixFor(options: {
@@ -63,15 +79,27 @@ export function numberingPrefixFor(options: {
 
 /**
  * Serie de numeración que corresponde a un documento. La crea con valores
- * predeterminados si todavía no existe.
+ * predeterminados si la plantilla todavía no tiene ninguna.
  */
 export async function seriesForDocument(options: {
   docType: DocType;
   template?: TemplateNumbering | null;
 }): Promise<NumberingSeriesRow | null> {
-  const prefix = numberingPrefixFor(options);
-  if (prefix === null) return null;
-  return seriesForPrefix(prefix);
+  const { docType, template } = options;
+
+  if (!template) return null;
+  if (!template.numberingEnabled) return null;
+
+  if (template.numberingSeriesId) {
+    const series = await getNumberingSeries(template.numberingSeriesId);
+    if (series) return series;
+  }
+
+  // La plantilla todavía no tiene serie (datos antiguos): se le crea la suya
+  // con el prefijo que le corresponde.
+  const prefix = numberingPrefixFor({ docType, template });
+  if (!prefix || !template.templateId) return null;
+  return ensureTemplateSeries({ templateId: template.templateId, prefix });
 }
 
 /**
@@ -79,6 +107,7 @@ export async function seriesForDocument(options: {
  * resuelta y del último valor emitido. Función pura: no consulta la base.
  */
 function buildPreview(options: {
+  id: string;
   prefix: string;
   startValue: number;
   padding: number;
@@ -97,6 +126,7 @@ function buildPreview(options: {
     }),
     prefix: options.prefix,
     seriesLabel: numberingSeriesLabel(options.prefix),
+    seriesId: options.id,
     nextValue,
     includeYear: options.includeYear,
     year,
@@ -114,17 +144,20 @@ export async function previewDocumentNumber(options: {
   const prefix = numberingPrefixFor(options);
   if (prefix === null) return null;
 
-  const series = await getNumberingSeries(prefix);
+  const template = options.template;
+  const series = template?.numberingSeriesId
+    ? await getNumberingSeries(template.numberingSeriesId)
+    : null;
+
   const config = series ?? {
+    id: template?.numberingSeriesId ?? '',
     prefix,
     startValue: 1,
     padding: 4,
     includeYear: true,
   };
 
-  const lastIssued = series
-    ? await lastIssuedNumber(series.prefix, series.includeYear)
-    : 0;
+  const lastIssued = series ? await lastIssuedNumber(series.id, series.includeYear) : 0;
 
   return buildPreview({ ...config, lastIssued });
 }
@@ -138,45 +171,53 @@ export async function numberingPreviewsFor(
 ): Promise<Array<NumberingPreview | null>> {
   if (items.length === 0) return [];
 
-  const prefixes = [
+  const seriesIds = [
     ...new Set(
       items
-        .map((item) => numberingPrefixFor(item))
-        .filter((prefix): prefix is string => prefix !== null),
+        .map((item) => item.template?.numberingSeriesId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
     ),
   ];
 
-  if (prefixes.length === 0) return items.map(() => null);
-
-  const seriesRows = await db
-    .select()
-    .from(numberingSeries)
-    .where(inArray(numberingSeries.prefix, prefixes));
-  const seriesByPrefix = new Map(seriesRows.map((row) => [row.prefix, row]));
+  const seriesRows =
+    seriesIds.length > 0
+      ? await db.select().from(numberingSeries).where(inArray(numberingSeries.id, seriesIds))
+      : [];
+  const seriesById = new Map(seriesRows.map((row) => [row.id, row]));
 
   const counters = await db.select().from(documentCounters);
   const counterByKey = new Map<string, number>();
-  for (const row of counters) counterByKey.set(`${row.scope}:${row.year}`, row.counter);
+  for (const row of counters) counterByKey.set(`${row.seriesId}:${row.year}`, row.counter);
 
   // Suelo real: el mayor correlativo que ocupan los documentos vivos. Evita
   // previsualizar un número que ya está ocupado aunque el contador esté
-  // desfasado.
-  const floors = await liveNumberingFloors(prefixes);
+  // desfasado. Cada serie cuenta solo con sus propios documentos.
+  const floors = await liveNumberingFloors(seriesIds);
 
   return items.map((item) => {
     const prefix = numberingPrefixFor(item);
     if (prefix === null) return null;
 
-    const series = seriesByPrefix.get(prefix) ?? {
+    const template = item.template;
+    const series = template?.numberingSeriesId
+      ? seriesById.get(template.numberingSeriesId)
+      : undefined;
+
+    const config = series ?? {
+      id: template?.numberingSeriesId ?? '',
       prefix,
       startValue: 1,
       padding: 4,
       includeYear: true,
     };
-    const year = numberingPeriodYear(series.includeYear);
-    const key = `${prefix}:${year}`;
-    const lastIssued = Math.max(counterByKey.get(key) ?? 0, floors.get(key) ?? 0);
-    return buildPreview({ ...series, lastIssued });
+
+    const year = numberingPeriodYear(config.includeYear);
+    const key = `${config.id}:${year}`;
+    const lastIssued =
+      config.id === ''
+        ? 0
+        : Math.max(counterByKey.get(key) ?? 0, floors.get(key) ?? 0);
+    return buildPreview({ ...config, lastIssued });
   });
 }
 
@@ -195,13 +236,15 @@ export async function pendingNumberForDocument(document: {
   if (document.templateId) {
     const [row] = await db
       .select({
+        id: templates.id,
         numberingEnabled: templates.numberingEnabled,
         numberingPrefix: templates.numberingPrefix,
+        numberingSeriesId: templates.numberingSeriesId,
       })
       .from(templates)
       .where(eq(templates.id, document.templateId))
       .limit(1);
-    template = row ?? null;
+    template = row ? templateNumberingFrom(row) : null;
   }
 
   const preview = await previewDocumentNumber({ docType: document.docType, template });
@@ -240,13 +283,15 @@ export async function numberDocumentInTx(
   if (locked.templateId) {
     const [row] = await tx
       .select({
+        id: templates.id,
         numberingEnabled: templates.numberingEnabled,
         numberingPrefix: templates.numberingPrefix,
+        numberingSeriesId: templates.numberingSeriesId,
       })
       .from(templates)
       .where(eq(templates.id, locked.templateId))
       .limit(1);
-    template = row ?? null;
+    template = row ? templateNumberingFrom(row) : null;
   }
 
   const series = await seriesForDocument({ docType: locked.docType, template });

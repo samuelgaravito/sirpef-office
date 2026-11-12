@@ -89,6 +89,7 @@ backend/src/
     inbox/               # bandeja, envíos, aprobación y bloqueo
     templates/           # CRUD, clonado, versiones de plantilla
     designs/             # CRUD, clonado
+    numbering/           # Series por plantilla y contador
     ai/                  # providers, service, routes
     exports/             # /export/:format
   lib/
@@ -97,7 +98,7 @@ backend/src/
     password.ts          # scrypt
     access.ts            # assertDocument(userId, id, 'viewer'|'editor')
     counter.ts           # Resuelve el número de un documento nuevo
-    numbering.ts         # Series por prefijo, contadores y validación del número inicial
+    numbering.ts         # Series por plantilla, contadores y validación del número inicial
     active-design.ts       # Diseño en uso: resuelve el que dibujan las plantillas y el interruptor
     render.ts            # Interpolación + datos de muestra + CSS + HTML + bandas
     errors.ts            # AppError + helpers (notFound, conflict, forbidden…)
@@ -146,8 +147,8 @@ users ─┬─< refresh_tokens
        │      ├─< comments
        │      └─< activities
        └─< app_settings (key/value JSONB, IA)
-numbering_series (prefix) → configuración de la serie
-document_counters (scope = prefix, year) → secuencia emitida al oficializar
+numbering_series (id) → configuración de la serie (la dueño es una plantilla)
+document_counters (series_id, year) → secuencia emitida al oficializar
 ```
 
 | Tabla | Campos relevantes | Notas |
@@ -155,17 +156,17 @@ document_counters (scope = prefix, year) → secuencia emitida al oficializar
 | `users` | `email` único, `password_hash`, `name`, `role`, `avatar_url` | `role` ∈ `admin`/`member`. |
 | `refresh_tokens` | `token_hash`, `user_id`, `expires_at`, `revoked_at`, `user_agent`, `ip` | Rotación: al refrescar se revoca el anterior y se inserta uno nuevo. |
 | `designs` | `tokens` JSONB, `is_shared`, `owner_id`, `is_current` | Los tokens siguen `DesignTokens`. El diseño conserva su formato histórico de encabezado/pie; se adapta a `ChromeConfig` al resolver. `is_current` marca el **diseño en uso** de la cuenta: es el que dibujan todas sus plantillas. Índice único parcial `(owner_id) WHERE is_current`: solo uno por cuenta. Los documentos guardan el diseño concreto y quedan congelados. |
-| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled`, `numbering_prefix` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y referencia una serie por prefijo. |
+| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled`, `numbering_series_id`, `numbering_prefix` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y la plantilla es la **dueña de su serie** (`numbering_series_id`); `numbering_prefix` es la copia legible del prefijo de esa serie. |
 | `template_versions` | `body`, `schema`, `header`, `footer`, `version`, `note` | Historial de plantillas; la instantánea incluye las bandas. |
-| `documents` | `content` JSONB, `data` JSONB, `doc_number`, `numbering_prefix/year/value`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado real (un guardado idéntico no escribe). `doc_number` queda `NULL` mientras el documento es borrador y se asigna al oficializarlo. `numbering_*` guarda la identidad de la serie emitida. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
+| `documents` | `content` JSONB, `data` JSONB, `doc_number`, `numbering_series_id`, `numbering_prefix/year/value`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado real (un guardado idéntico no escribe). `doc_number` queda `NULL` mientras el documento es borrador y se asigna al oficializarlo. `numbering_*` guarda la identidad de la serie emisora. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
 | `document_versions` | `version`, `content`, `data`, `header`, `footer`, `kind`, `created_by`, `note` | `kind` ∈ `auto/manual/ai/export/restore`; la instantánea permite restaurar las bandas. |
 | `document_shares` | `document_id`, `user_id`, `permission` | Único por par documento/usuario. |
 | `document_messages` | `document_id`, `sender_id`, `subject`, `body`, `status`, `document_version`, `approved_by_id`, `sent_at`, `sender_read_at`, `allow_sender_edit`, `allow_sender_export` | Envío o solicitud de aprobación de la bandeja. `status` ∈ `pending_approval/sent/rejected/cancelled`. `sender_read_at` marca cuándo el remitente vio el resultado; `allow_sender_edit` indica si puede corregir tras un rechazo; `allow_sender_export` si puede exportar tras la aprobación. Índice único parcial: un solo pendiente por documento. |
 | `document_message_recipients` | `message_id`, `user_id`, `read_at`, `archived_at` | Destinatarios y estado de lectura. `archived_at` se conserva por compatibilidad y ya no se usa en la bandeja. |
 | `comments` | `document_id`, `author_id`, `body`, `anchor`, `resolved_at` | Reservada para la UI de comentarios. |
 | `activities` | `actor_id`, `entity_type`, `entity_id`, `action`, `metadata` | Auditoría funcional. |
-| `numbering_series` | `prefix` PK, `start_value`, `padding`, `include_year` | Serie identificada por el prefijo. El prefijo es **único entre las plantillas vivas** (índice parcial `templates_numbering_prefix_unique_idx`), así que cada plantilla tiene su propia serie y su propio contador. Las plantillas sin numeración no ocupan serie. |
-| `document_counters` | `scope` (= prefijo), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
+| `numbering_series` | `id` PK, `prefix`, `start_value`, `padding`, `include_year` | Serie identificada por su `id`, **no por el prefijo**: la serie pertenece a una plantilla (`templates.numbering_series_id`, índice único parcial `templates_numbering_series_unique_idx`) y por tanto su contador y su suelo son exclusivos. El prefijo es la etiqueta visible del número y **puede repetirse** entre series. Las plantillas sin numeración no ocupan serie. |
+| `document_counters` | `series_id` (FK), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
 
 Índices destacados: búsqueda por título (`ILIKE`), filtros por `owner_id`, `status`,
@@ -212,22 +213,28 @@ document_counters (scope = prefix, year) → secuencia emitida al oficializar
 
 ### Numeración
 
-- **Cada plantilla lleva su propia serie.** El prefijo es único entre las
-  plantillas vivas (`templates_numbering_prefix_unique_idx`), de modo que dos
-  plantillas nunca comparten contador y sus números no se intercalan. Una
-  plantilla sin prefijo recibe un código corto único derivado de su
-  identificador (`A3F9`, `7B5C…`); si el prefijo ya lo usa otra plantilla, el
-  guardado se rechaza con un `409`.
+- **Cada plantilla lleva su propia enumeración.** La serie pertenece a la
+  plantilla (`templates.numbering_series_id`), así que su contador y su suelo
+  son exclusivos: dos plantillas nunca intercalan sus números. El prefijo es
+  solo la etiqueta visible del número y **puede repetirse** entre plantillas;
+  el panel de numeración avisa de que otra plantilla lo usa y explica que las
+  enumeraciones son independientes. Una plantilla sin prefijo recibe un código
+  corto único derivado de su identificador (`A3F9`, `7B5C…`).
 - El formato del número es `PREFIX-CORRELATIVO-AÑO` (`MEM-0008-2026`); sin
   año de reinicio, `MEM-0008`. El prefijo admite de 1 a 20 letras o números.
 - El número se asigna la primera vez que el documento alcanza un estado oficial
   (`sent`, `approved`, `final`, `archived`), nunca al crear el borrador.
-- `documents.numbering_prefix/year/value` guardan la identidad de la serie con la
-  que se emitió el documento, de modo que `document_counters` se puede recalcular
-  sin parsear `doc_number`.
+- `documents.numbering_series_id` y `documents.numbering_prefix/year/value`
+  guardan la identidad de la serie con la que se emitió el documento, de modo
+  que `document_counters` se puede recalcular sin parsear `doc_number`.
+- El número emitido es único **dentro de su serie**
+  (`documents_doc_number_series_idx`, único parcial por
+  `(numbering_series_id, doc_number)`): dos series que compartan prefijo
+  pueden mostrar el mismo texto, pero sus contadores siguen siendo
+  independientes.
 - El número previsto se calcula en lectura (`nextNumberValue` + el último emitido)
-  y se expone como `numberingPreview` (`{ number, prefix, seriesLabel, nextValue,
-  includeYear, year }`); no modifica `document_counters`. Se calcula en lote para el
+  y se expone como `numberingPreview` (`{ number, prefix, seriesLabel, seriesId,
+  nextValue, includeYear, year }`); no modifica `document_counters`. Se calcula en lote para el
   listado (`numberingPreviewsFor`) y también lo devuelve `GET /api/templates/:id`
   para el modo «documento nuevo».
 - La interfaz lo explica en el editor (`MEM-0008-2026 · se asigna al aprobar`), en
@@ -872,8 +879,8 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
 | `GET/POST` | `/templates` | Listado y creación (acepta `header`/`footer` y `numbering`). |
 | `GET/PATCH/DELETE` | `/templates/:id` | Detalle con `chrome`/`inheritedChrome` y edición de bandas y numeración. |
-| `GET` | `/numbering` | Series de numeración con su último emitido y próximo número. |
-| `PUT` | `/numbering/:prefix` | Ajusta el número inicial, los dígitos o el reinicio anual; no permite bajar del último emitido. |
+| `GET` | `/numbering` | Series de numeración con su último emitido y próximo número (la serie se identifica por su `id`). |
+| `PUT` | `/numbering/:seriesId` | Ajusta el número inicial, los dígitos o el reinicio anual; no permite bajar del último emitido. |
 | `GET` | `/templates/:id/preview?designId=<uuid\|none>&embed=1` | Vista previa HTML con datos de muestra y diseño opcional. |
 | `POST` | `/templates/preview` | Vista previa HTML de un borrador del editor, sin guardar. |
 | `POST` | `/templates/:id/clone` | Duplicar. |

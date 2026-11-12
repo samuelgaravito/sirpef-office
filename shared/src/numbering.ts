@@ -22,8 +22,9 @@ export const DOC_TYPES_WITHOUT_NUMBER: readonly DocType[] = ['resume', 'blank'];
 /**
  * Prefijo de una serie: de 1 a 20 letras o números en mayúsculas.
  *
- * El prefijo identifica la serie y es único por plantilla: dos plantillas no
- * pueden numerar con el mismo prefijo porque sus números se repetirían.
+ * El prefijo es la etiqueta visible del número. **No es único**: cada
+ * plantilla tiene su propia serie y puede repetir prefijo, porque su
+ * enumeración (su contador) es propia.
  */
 export const NUMBERING_PREFIX_PATTERN = /^[A-Z0-9]{1,20}$/;
 export const NUMBERING_MIN_PREFIX_LENGTH = 1;
@@ -64,8 +65,9 @@ export function withDocumentNumber(
   return { ...values, [DOCUMENT_NUMBER_VARIABLE]: value };
 }
 
-/** Configuración de una serie de numeración (identificada por su prefijo). */
+/** Configuración de una serie de numeración (identificada por su `id`). */
 export interface NumberingSeriesConfig {
+  /** Etiqueta visible del número. Puede repetirse entre series. */
   prefix: string;
   /** Primer número de la serie y de cada año nuevo. */
   startValue: number;
@@ -86,6 +88,8 @@ export interface NumberingPreview {
   prefix: string;
   /** Etiqueta legible de la serie, p. ej. `Serie MEM`. */
   seriesLabel: string;
+  /** Serie a la que pertenece el número (la de la plantilla). */
+  seriesId: string;
   /** Valor correlativo que se usará. */
   nextValue: number;
   includeYear: boolean;
@@ -126,18 +130,20 @@ export function pendingNumberText(number: string): string {
 
 /** Estado calculado de una serie para mostrarlo en la interfaz. */
 export interface NumberingSeriesState extends NumberingSeriesConfig {
+  /** Identificador de la serie: es lo que la identifica, no el prefijo. */
+  id: string;
   /** Último número emitido en el período vigente (0 si aún no hay). */
   lastIssued: number;
   /** Valor que tendrá el próximo documento. */
   nextValue: number;
   /** Número formateado que verá el próximo documento. */
   nextNumber: string;
-  /** Alguna plantilla viva usa esta serie. */
-  taken: boolean;
   /** Plantilla que usa esta serie, si el usuario puede verla. */
   templateId: string | null;
   /** Nombre de esa plantilla, si el usuario puede verla. */
   templateName: string | null;
+  /** Otra serie usa el mismo prefijo (cada una con su enumeración). */
+  prefixShared: boolean;
 }
 
 /** Normaliza el prefijo: mayúsculas, sin espacios y sin guiones. */
@@ -153,7 +159,7 @@ export function normalizeNumberingPrefix(value: string): string {
  *
  * Se deriva del identificador de la plantilla, así que es estable aunque se
  * renombre la plantilla y es único porque el UUID lo es. El servidor alarga el
- * código si encuentra uno ya ocupado.
+ * código si encuentra otro que ya esté en uso.
  */
 export function autoNumberingPrefix(templateId: string, length = NUMBERING_AUTO_PREFIX_LENGTH): string {
   return templateId.replace(/-/g, '').toUpperCase().slice(0, length);
