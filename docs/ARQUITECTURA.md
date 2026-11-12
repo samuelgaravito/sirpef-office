@@ -147,7 +147,7 @@ users ─┬─< refresh_tokens
        │      ├─< comments
        │      └─< activities
        └─< app_settings (key/value JSONB, IA)
-numbering_series (id, template_id, template_name) → configuración de la serie (la dueña es una plantilla)
+numbering_series (id, template_id, template_name) → la enumeración y su configuración (la dueña es una plantilla)
 document_counters (series_id, year) → secuencia emitida al oficializar
 ```
 
@@ -156,7 +156,7 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 | `users` | `email` único, `password_hash`, `name`, `role`, `avatar_url` | `role` ∈ `admin`/`member`. |
 | `refresh_tokens` | `token_hash`, `user_id`, `expires_at`, `revoked_at`, `user_agent`, `ip` | Rotación: al refrescar se revoca el anterior y se inserta uno nuevo. |
 | `designs` | `tokens` JSONB, `is_shared`, `owner_id`, `is_current` | Los tokens siguen `DesignTokens`. El diseño conserva su formato histórico de encabezado/pie; se adapta a `ChromeConfig` al resolver. `is_current` marca el **diseño en uso** de la cuenta: es el que dibujan todas sus plantillas. Índice único parcial `(owner_id) WHERE is_current`: solo uno por cuenta. Los documentos guardan el diseño concreto y quedan congelados. |
-| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled`, `numbering_prefix`, `numbering_prefix_auto` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla; su serie la declara la propia serie (`numbering_series.template_id`). `numbering_prefix` es la copia legible del prefijo de esa serie (`''` = serie sin prefijo). |
+| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y su serie la declara la propia serie (`numbering_series.template_id`). De la numeración solo queda aquí el interruptor: el prefijo, el número inicial, los dígitos y el reinicio anual viven en la serie. |
 | `template_versions` | `body`, `schema`, `header`, `footer`, `version`, `note` | Historial de plantillas; la instantánea incluye las bandas. |
 | `documents` | `content` JSONB, `data` JSONB, `doc_number`, `numbering_series_id`, `numbering_prefix/year/value`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado real (un guardado idéntico no escribe). `doc_number` queda `NULL` mientras el documento es borrador y se asigna al oficializarlo. `numbering_*` guarda la identidad de la serie emisora. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
 | `document_versions` | `version`, `content`, `data`, `header`, `footer`, `kind`, `created_by`, `note` | `kind` ∈ `auto/manual/ai/export/restore`; la instantánea permite restaurar las bandas. |
@@ -165,7 +165,7 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 | `document_message_recipients` | `message_id`, `user_id`, `read_at`, `archived_at` | Destinatarios y estado de lectura. `archived_at` se conserva por compatibilidad y ya no se usa en la bandeja. |
 | `comments` | `document_id`, `author_id`, `body`, `anchor`, `resolved_at` | Reservada para la UI de comentarios. |
 | `activities` | `actor_id`, `entity_type`, `entity_id`, `action`, `metadata` | Auditoría funcional. |
-| `numbering_series` | `id` PK, `template_id` (FK, único), `template_name`, `prefix`, `start_value`, `padding`, `include_year` | Serie identificada por su `id`, **no por el prefijo**: declara a su plantilla con `template_id` (índice único `numbering_series_template_id_unique_idx` → una enumeración por plantilla) y guarda su nombre en `template_name` como etiqueta legible, que se actualiza al renombrar la plantilla. Su contador y su suelo son exclusivos. El prefijo es la etiqueta visible del número, **puede repetirse** entre series y puede estar vacío (serie sin prefijo). Las plantillas sin numeración no ocupan serie. |
+| `numbering_series` | `id` PK, `template_id` (FK, único), `template_name`, `prefix`, `start_value`, `padding`, `include_year` | **Única fuente de verdad de la enumeración.** Declara a su plantilla con `template_id` (índice único `numbering_series_template_id_unique_idx` → una enumeración por plantilla) y guarda su nombre en `template_name` como etiqueta legible, que se actualiza al renombrar la plantilla. Su contador y su suelo son exclusivos. El prefijo es la etiqueta visible del número, **puede repetirse** entre series y puede estar vacío (serie sin prefijo). Las plantillas sin numeración no ocupan serie. |
 | `document_counters` | `series_id` (FK), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
 
@@ -220,15 +220,16 @@ document_counters (series_id, year) → secuencia emitida al oficializar
   contador y su suelo son exclusivos: dos plantillas nunca intercalan sus
   números. El vínculo antiguo (`templates.numbering_series_id`) ya no existe:
   queda un solo sitio donde vive, así que no puede desincronizarse.
+- **La serie es la única fuente de verdad.** El prefijo, el número inicial,
+  los dígitos y el reinicio anual viven en `numbering_series`; en `templates`
+  solo queda el interruptor `numbering_enabled`. Por eso el panel de ajustes
+  muestra siempre los valores reales de la serie de esa plantilla.
 - El prefijo es **opcional** y **puede repetirse** entre plantillas: es solo la
   etiqueta visible del número. El panel de numeración avisa de que otra
   plantilla lo usa y explica que las enumeraciones son independientes. Hay
-  tres estados:
-  - **prefijo propio**: el usuario escribe la etiqueta (`MEM`);
-  - **código automático** (`numbering.prefixAuto`): el servidor asigna una
-    etiqueta corta derivada del identificador (`A3F9`, `7B5C…`);
-  - **sin prefijo**: el campo en blanco y sin código automático → la serie
-    numera solo con el correlativo (`0008-2026`).
+  dos estados: **prefijo propio** (el usuario escribe la etiqueta, `MEM`) y
+  **sin prefijo** (el campo en blanco → la serie numera solo con el
+  correlativo, `0008-2026`).
 - El formato del número es `PREFIX-CORRELATIVO-AÑO` (`MEM-0008-2026`); sin
   prefijo, `0008-2026`; sin año de reinicio, `MEM-0008`. El prefijo admite de
   1 a 20 letras o números.

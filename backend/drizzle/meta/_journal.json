@@ -148,6 +148,13 @@
       "when": 1794502592051,
       "tag": "0020_dusty_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794506190463,
+      "tag": "0021_nifty_scarlet_witch",
+      "breakpoints": true
     }
   ]
 }

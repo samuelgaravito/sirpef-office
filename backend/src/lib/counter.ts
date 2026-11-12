@@ -24,12 +24,16 @@ import {
   type NumberingSeriesRow,
 } from './numbering.js';
 
-/** Configuración de numeración de la plantilla que originó el documento. */
+/**
+ * Configuración de numeración de la plantilla que originó el documento.
+ *
+ * El prefijo y los ajustes del contador **no** vienen aquí: viven en la serie
+ * de la plantilla, que es la única fuente de verdad.
+ */
 export interface TemplateNumbering {
   /** Plantilla que la origina; `null` si el documento no tiene ninguna. */
   templateId: string | null;
   numberingEnabled: boolean;
-  numberingPrefix: string | null;
 }
 
 /**
@@ -40,12 +44,10 @@ export interface TemplateNumbering {
 export function templateNumberingFrom(row: {
   id: string;
   numberingEnabled: boolean;
-  numberingPrefix: string | null;
 }): TemplateNumbering {
   return {
     templateId: row.id,
     numberingEnabled: row.numberingEnabled,
-    numberingPrefix: row.numberingPrefix,
   };
 }
 
@@ -69,9 +71,9 @@ export function numberingPrefixFor(options: {
   if (!template) return null;
   if (!template.numberingEnabled) return null;
 
-  // Toda plantilla activa guarda su prefijo. El respaldo por tipo solo
-  // cubre datos antiguos que aún no lo tengan.
-  return template.numberingPrefix ?? DOC_TYPE_PREFIX[docType];
+  // El prefijo vive en la serie; aquí solo el respaldo para una plantilla
+  // que todavía no tiene ninguna.
+  return DOC_TYPE_PREFIX[docType];
 }
 
 /**
@@ -229,7 +231,6 @@ export async function pendingNumberForDocument(document: {
       .select({
         id: templates.id,
         numberingEnabled: templates.numberingEnabled,
-        numberingPrefix: templates.numberingPrefix,
       })
       .from(templates)
       .where(eq(templates.id, document.templateId))
@@ -275,7 +276,6 @@ export async function numberDocumentInTx(
       .select({
         id: templates.id,
         numberingEnabled: templates.numberingEnabled,
-        numberingPrefix: templates.numberingPrefix,
       })
       .from(templates)
       .where(eq(templates.id, locked.templateId))

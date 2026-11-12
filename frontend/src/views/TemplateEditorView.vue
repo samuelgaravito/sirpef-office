@@ -84,7 +84,6 @@ const description = ref('');
 const docType = ref<DocType>('blank');
 const numberingEnabled = ref(false);
 const numberingPrefix = ref('');
-const numberingPrefixAuto = ref(false);
 const numberingStart = ref(1);
 const numberingPadding = ref(4);
 const numberingIncludeYear = ref(true);
@@ -243,18 +242,6 @@ const sharedPrefixSeries = computed(() => {
   );
 });
 
-/**
- * Modo del prefijo.
- *
- * - con texto → prefijo propio;
- * - con la casilla marcada → código automático (A3F9);
- * - sin nada → serie sin prefijo (0001-2026).
- */
-const numberingPrefixMode = computed<'own' | 'auto' | 'none'>(() => {
-  if (numberingPrefixAuto.value) return 'auto';
-  return normalizedNumberingPrefix.value ? 'own' : 'none';
-});
-
 const numberingStartChanged = computed(
   () =>
     !selectedNumberingSeries.value ||
@@ -321,16 +308,9 @@ function syncNumberingFromSeries(): void {
   numberingIncludeYear.value = series.includeYear;
 }
 
-/** Escribir un prefijo propio desmarca el código automático. */
+/** El prefijo es opcional: en blanco, la serie numera sin etiqueta. */
 function onNumberingPrefixChange(): void {
   dirty.value = true;
-  numberingPrefixAuto.value = false;
-}
-
-/** Marcar el código automático deja el campo en blanco: lo elige el servidor. */
-function onNumberingPrefixAutoChange(): void {
-  dirty.value = true;
-  if (numberingPrefixAuto.value) numberingPrefix.value = '';
 }
 
 function onDocTypeChange(): void {
@@ -339,7 +319,6 @@ function onDocTypeChange(): void {
   const suggested = DOC_TYPE_PREFIX[docType.value];
   numberingEnabled.value = !DOC_TYPES_WITHOUT_NUMBER.includes(docType.value);
   numberingPrefix.value = suggested;
-  numberingPrefixAuto.value = false;
   syncNumberingFromSeries();
 }
 
@@ -498,7 +477,6 @@ async function load(): Promise<void> {
       templateFooter.value = template.footer ?? null;
       numberingEnabled.value = template.numberingEnabled;
       numberingPrefix.value = template.numberingPrefix ?? '';
-      numberingPrefixAuto.value = template.numberingPrefixAuto ?? false;
       numberingSeriesId.value = template.numberingSeriesId ?? null;
       editor.value?.commands.setContent(template.body, { emitUpdate: false });
       editor.value?.commands.setTextSelection(1);
@@ -635,11 +613,9 @@ async function save(): Promise<void> {
   saving.value = true;
   try {
     const body = (editor.value?.getJSON() ?? { type: 'doc', content: [] }) as JSONContent;
-    // El prefijo es opcional: vacío y sin código automático = serie sin
-    // prefijo (0001-2026).
-    const numberingPrefixValue = numberingPrefixAuto.value
-      ? ''
-      : normalizedNumberingPrefix.value;
+    // El prefijo es opcional: en blanco, la serie numera sin etiqueta
+    // (0001-2026).
+    const numberingPrefixValue = normalizedNumberingPrefix.value;
     // Quien solo puede mejorar la plantilla no toca los ajustes de propiedad
     // (visibilidad, tipo, numeración): son del propietario.
     const payload = {
@@ -658,7 +634,6 @@ async function save(): Promise<void> {
             numbering: {
               enabled: numberingEnabled.value,
               prefix: numberingPrefixValue,
-              prefixAuto: numberingPrefixAuto.value,
               startValue: numberingStart.value,
               padding: numberingPadding.value,
               includeYear: numberingIncludeYear.value,
@@ -724,8 +699,7 @@ async function togglePreview(): Promise<void> {
       footer: templateFooter.value,
       numbering: {
         enabled: numberingEnabled.value,
-        prefix: numberingPrefixAuto.value ? '' : normalizedNumberingPrefix.value,
-        prefixAuto: numberingPrefixAuto.value,
+        prefix: normalizedNumberingPrefix.value,
         startValue: numberingStart.value,
         padding: numberingPadding.value,
         includeYear: numberingIncludeYear.value,
@@ -1102,24 +1076,6 @@ onMounted(() => {
                 </label>
 
                 <template v-if="numberingEnabled">
-                  <label class="mt-3 flex cursor-pointer items-start gap-2">
-                    <input
-                      v-model="numberingPrefixAuto"
-                      type="checkbox"
-                      class="mt-0.5 accent-[var(--color-accent)]"
-                      :disabled="!isOwner"
-                      @change="onNumberingPrefixAutoChange"
-                    />
-                    <span>
-                      <span class="block text-[12.5px] font-medium">
-                        {{ NUMBERING_MESSAGES.prefixAuto }}
-                      </span>
-                      <span class="block text-[11px] text-ink-subtle">
-                        El servidor elige una etiqueta corta para esta plantilla (p. ej. A3F9).
-                      </span>
-                    </span>
-                  </label>
-
                   <div class="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-2">
                     <div>
                       <label class="label">Prefijo</label>
@@ -1128,7 +1084,7 @@ onMounted(() => {
                         class="field h-8 font-mono uppercase"
                         maxlength="20"
                         placeholder="Sin prefijo"
-                        :disabled="!isOwner || numberingPrefixAuto"
+                        :disabled="!isOwner"
                         @input="onNumberingPrefixChange"
                       />
                       <p v-if="numberingPrefixError" class="mt-1 text-[11px] text-danger">
@@ -1136,9 +1092,6 @@ onMounted(() => {
                       </p>
                       <p v-else-if="numberingPrefixHint" class="mt-1 text-[10.5px] text-ink-muted">
                         {{ numberingPrefixHint }}
-                      </p>
-                      <p v-else-if="numberingPrefixAuto" class="mt-1 text-[10.5px] text-ink-subtle">
-                        {{ NUMBERING_MESSAGES.prefixAutoHint }}
                       </p>
                       <p v-else-if="!normalizedNumberingPrefix" class="mt-1 text-[10.5px] text-ink-subtle">
                         {{ NUMBERING_MESSAGES.prefixNoneHint }}

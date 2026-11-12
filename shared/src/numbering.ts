@@ -33,9 +33,6 @@ export const NUMBERING_MAX_PREFIX_LENGTH = 20;
 export const NUMBERING_MAX_START = 999_999;
 export const NUMBERING_MAX_PADDING = 8;
 
-/** Longitud del código corto que recibe la plantilla sin prefijo propio. */
-export const NUMBERING_AUTO_PREFIX_LENGTH = 4;
-
 /** Clave reservada de la variable que muestra el número del documento. */
 export const DOCUMENT_NUMBER_VARIABLE = 'numero_documento';
 
@@ -117,14 +114,9 @@ export const NUMBERING_MESSAGES = {
   approvedAs: (number: string) => `Aprobado y enviado como ${number}`,
   changedFrom: (number: string, previous: string) =>
     `Se asignó ${number} (el previsto era ${previous})`,
-  /** Prefijo propio: el usuario escribe la etiqueta del número. */
-  prefixOwn: 'Prefijo propio',
-  /** Código corto elegido por el servidor (A3F9). */
-  prefixAuto: 'Código automático',
   /** Serie sin etiqueta: el número es solo el correlativo. */
   prefixNone: 'Sin prefijo',
   prefixNoneHint: 'Los números no llevan prefijo: 0001-2026, 0002-2026…',
-  prefixAutoHint: 'El servidor elige una etiqueta corta para esta plantilla (p. ej. A3F9).',
 } as const;
 
 /** Etiqueta legible de una serie a partir de su prefijo. */
@@ -161,17 +153,6 @@ export function normalizeNumberingPrefix(value: string): string {
     .trim()
     .toUpperCase()
     .replace(/[\s-]+/g, '');
-}
-
-/**
- * Código corto que recibe una plantilla sin prefijo propio.
- *
- * Se deriva del identificador de la plantilla, así que es estable aunque se
- * renombre la plantilla y es único porque el UUID lo es. El servidor alarga el
- * código si encuentra otro que ya esté en uso.
- */
-export function autoNumberingPrefix(templateId: string, length = NUMBERING_AUTO_PREFIX_LENGTH): string {
-  return templateId.replace(/-/g, '').toUpperCase().slice(0, length);
 }
 
 /** Año que usa el contador; 0 cuando la serie es continua y no muestra año. */
