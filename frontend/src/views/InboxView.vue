@@ -7,8 +7,10 @@ import {
   Search,
   Send,
 } from 'lucide-vue-next';
-import { computed, onMounted, ref, watch, type Component } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRouter } from 'vue-router';
+
+import { isInboxRealtimeEvent } from '@sirpefoffice/shared';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import InboxStatusChip from '@/components/inbox/InboxStatusChip.vue';
@@ -18,6 +20,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { relativeTime, type InboxStatusContext } from '@/lib/labels';
 import { useAuthStore } from '@/stores/auth';
@@ -47,6 +50,7 @@ const scope = ref<Scope>('received');
 const statusFilter = ref<StatusFilter>('all');
 
 let searchTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
 
 const tabs: { value: Scope; label: string; icon: Component }[] = [
   { value: 'received', label: 'Recibidos', icon: Inbox },
@@ -223,6 +227,15 @@ watch(search, () => {
 onMounted(() => {
   void refreshInbox();
   void load();
+  // Un mensaje nuevo o un resultado pueden llegar con la bandeja abierta:
+  // se vuelve a pedir la lista para que no falte ninguno.
+  unsubscribeRealtime = onRealtimeEvent((message) => {
+    if (isInboxRealtimeEvent(message.type)) void load();
+  });
+});
+
+onUnmounted(() => {
+  unsubscribeRealtime?.();
 });
 </script>
 
