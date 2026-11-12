@@ -22,6 +22,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3101',
         changeOrigin: true,
+        // El canal de eventos en tiempo real (WebSocket) viaja por la misma
+        // ruta que la API: sin esto el proxy no deja pasar el upgrade.
+        ws: true,
       },
     },
   },
