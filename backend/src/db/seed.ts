@@ -8,7 +8,7 @@ import {
 import { env } from '../env.js';
 import { hashPassword } from '../lib/password.js';
 import { db } from './index.js';
-import { designs, templates, users } from './schema.js';
+import { designs, numberingSeries, templates, users } from './schema.js';
 import { seedDesigns, seedTemplates } from './template-seeds.js';
 
 /**
@@ -110,9 +110,28 @@ async function seed(): Promise<void> {
       continue;
     }
 
-    // Cada plantilla tiene su propia serie: el prefijo es único entre
-    // plantillas vivas. Las que no llevan numeración no ocupan serie.
+    // Cada plantilla tiene su propia serie: su enumeración (su contador) no
+    // se comparte con ninguna otra. El prefijo es solo la etiqueta del
+    // número y puede repetirse. Las que no llevan numeración no ocupan serie.
     const numberingEnabled = !DOC_TYPES_WITHOUT_NUMBER.includes(template.docType);
+    const prefix = numberingEnabled ? DOC_TYPE_PREFIX[template.docType] : null;
+
+    let seriesId: string | null = null;
+    if (prefix) {
+      const [series] = await db
+        .insert(numberingSeries)
+        .values({
+          prefix,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+          createdBy: admin.id,
+          updatedBy: admin.id,
+        })
+        .returning({ id: numberingSeries.id });
+      seriesId = series?.id ?? null;
+    }
+
     await db.insert(templates).values({
       ownerId: admin.id,
       designId: designIds[template.designIndex] ?? null,
@@ -124,7 +143,8 @@ async function seed(): Promise<void> {
       aiInstructions: template.aiInstructions,
       isShared: true,
       numberingEnabled,
-      numberingPrefix: numberingEnabled ? DOC_TYPE_PREFIX[template.docType] : null,
+      numberingSeriesId: seriesId,
+      numberingPrefix: prefix,
     });
 
     console.log(`  ✓ Plantilla creada: ${template.name}`);

@@ -68,7 +68,9 @@ export interface TemplateRecord {
   isActive: boolean;
   /** Si la plantilla asigna número correlativo al crear documentos. */
   numberingEnabled: boolean;
-  /** Serie de numeración (prefijo) o null si no lleva número. */
+  /** Serie propia de la plantilla: es la dueña de su enumeración. */
+  numberingSeriesId?: string | null;
+  /** Prefijo visible del número (la etiqueta de la serie). */
   numberingPrefix: string | null;
   /** El prefijo lo asignó el servidor en lugar del usuario. */
   numberingPrefixAuto?: boolean;

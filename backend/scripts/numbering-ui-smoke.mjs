@@ -7,9 +7,10 @@
  * 1. el panel ofrece un prefijo de hasta 20 caracteres;
  * 2. una plantilla sin prefijo muestra un código automático y un próximo
  *    número con el formato `PREFIJO-CORRELATIVO-AÑO`;
- * 3. al escribir un prefijo que ya usa otra plantilla se avisa en el acto;
- * 4. el botón de guardar queda bloqueado mientras el prefijo esté en
- *    conflicto.
+ * 3. al escribir un prefijo que ya usa otra plantilla se explica en el acto
+ *    que cada plantilla lleva su propia enumeración;
+ * 4. el botón de guardar no se bloquea por un prefijo repetido: solo un
+ *    prefijo con formato inválido lo impide.
  *
  * Variables de entorno:
  *   SD_ADMIN_EMAIL / SD_ADMIN_PASSWORD  Credenciales del administrador.
@@ -102,6 +103,10 @@ async function main() {
     });
     assert(settingsTab, 'Se abre la pestaña de ajustes de la plantilla');
 
+    // El cambio de pestaña se repinta de forma asíncrona: se espera a que el
+    // panel aparezca antes de buscar sus campos.
+    await new Promise((r) => setTimeout(r, 800));
+
     // Encender la numeración automática para que aparezcan sus campos.
     const enabled = await page.evaluate(() => {
       const labels = [...document.querySelectorAll('label')];
@@ -156,34 +161,42 @@ async function main() {
 
     await page.screenshot({ path: `${SHOTS}/02-codigo-automatico.png`, fullPage: true });
 
-    // Escribir el prefijo de otra plantilla: debe avisar en el acto.
-    const otherPrefix = await page.evaluate(async (base) => {
+    // Escribir el prefijo de otra plantilla: se explica que cada una lleva
+    // su propia enumeración, pero no bloquea el guardado.
+    const otherPrefix = await page.evaluate(async (base, currentId) => {
       const response = await fetch(`${base}/templates?pageSize=20`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('sirpefoffice.token')}` },
       });
       const data = await response.json();
-      const other = data.items?.find((item) => item.numberingPrefix);
+      const other = data.items?.find(
+        (item) => item.numberingPrefix && item.id !== currentId,
+      );
       return other?.numberingPrefix ?? null;
-    }, apiBase);
+    }, apiBase, templateId);
 
     if (otherPrefix) {
       await page.click('input[maxlength="20"]', { clickCount: 3 });
       await page.type('input[maxlength="20"]', otherPrefix);
       await new Promise((r) => setTimeout(r, 700));
 
-      const warning = await page.$$eval('p', (nodes) =>
+      const notice = await page.$$eval('p', (nodes) =>
         nodes
           .map((n) => (n.textContent ?? '').trim())
-          .find((t) => /ya usa|ya lo usa/i.test(t)) ?? '',
+          .find((t) => /propia enumeración|ya lo usa|ya usa/i.test(t)) ?? '',
       );
       assert(
-        warning.length > 0,
-        `El panel avisa cuando el prefijo ${otherPrefix} ya lo usa otra plantilla`,
+        notice.length > 0,
+        `El panel explica que el prefijo ${otherPrefix} puede repetirse sin mezclar las enumeraciones`,
       );
 
-      await page.screenshot({ path: `${SHOTS}/03-conflicto.png`, fullPage: true });
+      const blocked = await page.$$eval('button', (nodes) =>
+        nodes.some((n) => /guardar/i.test(n.textContent ?? '') && n.hasAttribute('disabled')),
+      );
+      assert(!blocked, 'El prefijo repetido no bloquea el guardado');
+
+      await page.screenshot({ path: `${SHOTS}/03-prefijo-compartido.png`, fullPage: true });
     } else {
-      console.log('· No hay otra plantilla con prefijo para probar el conflicto');
+      console.log('· No hay otra plantilla con prefijo para probar el prefijo compartido');
     }
 
     console.log(`\nCapturas en ${SHOTS}`);

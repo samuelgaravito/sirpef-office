@@ -415,6 +415,8 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         templateSchema: templates.schema,
         templateNumberingEnabled: templates.numberingEnabled,
         templateNumberingPrefix: templates.numberingPrefix,
+        templateNumberingSeriesId: templates.numberingSeriesId,
+        templateId: templates.id,
       })
       .from(documents)
       .innerJoin(users, eq(users.id, documents.ownerId))
@@ -487,8 +489,10 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
           template:
             docRow.doc.templateId && docRow.templateNumberingEnabled !== null
               ? {
+                  templateId: docRow.templateId,
                   numberingEnabled: docRow.templateNumberingEnabled,
                   numberingPrefix: docRow.templateNumberingPrefix,
+                  numberingSeriesId: docRow.templateNumberingSeriesId,
                 }
               : null,
         });

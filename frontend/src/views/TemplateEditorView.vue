@@ -87,6 +87,8 @@ const numberingPrefixAuto = ref(false);
 const numberingStart = ref(1);
 const numberingPadding = ref(4);
 const numberingIncludeYear = ref(true);
+/** Serie propia de la plantilla: es la que lleva su enumeración. */
+const numberingSeriesId = ref<string | null>(null);
 const numberingSeries = ref<NumberingSeriesState[]>([]);
 const designId = ref<string | null>(null);
 const isShared = ref(false);
@@ -213,20 +215,31 @@ const designTokens = computed(() => effectiveDesign.value?.tokens ?? null);
 const normalizedNumberingPrefix = computed(() => normalizeNumberingPrefix(numberingPrefix.value));
 
 /**
- * Serie de esta plantilla. Como el prefijo es único entre las plantillas
- * vivas, la serie del prefijo es siempre la suya.
+ * Serie de esta plantilla.
+ *
+ * Cada plantilla tiene su propia serie: su enumeración (su contador) no se
+ * comparte con nadie. El prefijo es solo la etiqueta del número y puede
+ * repetirse entre plantillas.
  */
 const selectedNumberingSeries = computed(
-  () =>
-    numberingSeries.value.find((item) => item.prefix === normalizedNumberingPrefix.value) ?? null,
+  () => numberingSeries.value.find((item) => item.id === numberingSeriesId.value) ?? null,
 );
 
-/** Serie de otra plantilla que ya usa este prefijo (no se puede repetir). */
-const prefixOwner = computed(() => {
-  const series = selectedNumberingSeries.value;
-  if (!series?.taken) return null;
-  if (series.templateId && series.templateId === templateId.value) return null;
-  return series;
+/**
+ * Otra serie que usa el mismo prefijo.
+ *
+ * No es un conflicto: cada serie lleva su propia enumeración. Se avisa para
+ * que el usuario sepa que el número se verá igual en dos plantillas.
+ */
+const sharedPrefixSeries = computed(() => {
+  const prefix = normalizedNumberingPrefix.value;
+  if (!prefix) return null;
+  const own = selectedNumberingSeries.value;
+  return (
+    numberingSeries.value.find(
+      (item) => item.prefix === prefix && item.id !== (own?.id ?? ''),
+    ) ?? null
+  );
 });
 
 const numberingStartChanged = computed(
@@ -242,13 +255,15 @@ const numberingPrefixError = computed(() => {
   if (!/^[A-Z0-9]{1,20}$/.test(prefix)) {
     return 'Usa entre 1 y 20 letras o números';
   }
-  const owner = prefixOwner.value;
-  if (owner) {
-    return owner.templateName
-      ? `«${owner.templateName}» ya usa el prefijo ${prefix}`
-      : `Otra plantilla ya usa el prefijo ${prefix}`;
-  }
   return '';
+});
+
+/** Aviso (no error) cuando otra plantilla usa el mismo prefijo. */
+const numberingPrefixHint = computed(() => {
+  const other = sharedPrefixSeries.value;
+  if (!other) return '';
+  const owner = other.templateName ? `«${other.templateName}»` : 'otra plantilla';
+  return `${owner} usa el prefijo ${normalizedNumberingPrefix.value}. Cada plantilla lleva su propia enumeración, así que sus números no se mezclan.`;
 });
 
 const numberingStartError = computed(() => {
@@ -284,7 +299,7 @@ const numberingPreview = computed(() => {
   });
 });
 
-/** Al elegir un prefijo existente, carga la configuración de su serie. */
+/** Carga la configuración de la serie propia de la plantilla. */
 function syncNumberingFromSeries(): void {
   const series = selectedNumberingSeries.value;
   if (!series) return;
@@ -296,7 +311,6 @@ function syncNumberingFromSeries(): void {
 function onNumberingPrefixChange(): void {
   dirty.value = true;
   numberingPrefixAuto.value = false;
-  syncNumberingFromSeries();
 }
 
 function onDocTypeChange(): void {
@@ -304,10 +318,7 @@ function onDocTypeChange(): void {
   if (!isNew.value) return;
   const suggested = DOC_TYPE_PREFIX[docType.value];
   numberingEnabled.value = !DOC_TYPES_WITHOUT_NUMBER.includes(docType.value);
-  // El prefijo sugerido solo se usa si está libre: cada plantilla necesita
-  // el suyo para que sus números no se intercalen con los de otra.
-  const taken = numberingSeries.value.some((item) => item.prefix === suggested && item.taken);
-  numberingPrefix.value = taken ? '' : suggested;
+  numberingPrefix.value = suggested;
   numberingPrefixAuto.value = false;
   syncNumberingFromSeries();
 }
@@ -468,6 +479,7 @@ async function load(): Promise<void> {
       numberingEnabled.value = template.numberingEnabled;
       numberingPrefix.value = template.numberingPrefix ?? '';
       numberingPrefixAuto.value = template.numberingPrefixAuto ?? false;
+      numberingSeriesId.value = template.numberingSeriesId ?? null;
       editor.value?.commands.setContent(template.body, { emitUpdate: false });
       editor.value?.commands.setTextSelection(1);
       editor.value?.setEditable(canEdit.value);
@@ -1081,8 +1093,11 @@ onMounted(() => {
                       <p v-if="numberingPrefixError" class="mt-1 text-[11px] text-danger">
                         {{ numberingPrefixError }}
                       </p>
+                      <p v-else-if="numberingPrefixHint" class="mt-1 text-[10.5px] text-ink-muted">
+                        {{ numberingPrefixHint }}
+                      </p>
                       <p v-else-if="numberingPrefixAuto" class="mt-1 text-[10.5px] text-ink-subtle">
-                        Código automático: no lo uses en otra plantilla.
+                        Código automático: el servidor lo eligió para esta plantilla.
                       </p>
                       <p v-else class="mt-1 text-[10.5px] text-ink-subtle">
                         Déjalo vacío para que se asigne un código único (p. ej. A3F9).
@@ -1146,8 +1161,8 @@ onMounted(() => {
                   </div>
 
                   <p class="mt-1.5 text-[10.5px] leading-snug text-ink-subtle">
-                    Cada plantilla lleva su propia numeración: el prefijo no puede repetirse en
-                    otra plantilla, así que sus números nunca se intercalan.
+                    Cada plantilla lleva su propia enumeración: su contador no se comparte con
+                    ninguna otra, aunque dos plantillas usen el mismo prefijo.
                   </p>
 
                   <div class="mt-2 flex items-center justify-between gap-2 rounded-md border border-dashed border-hairline px-2.5 py-2">

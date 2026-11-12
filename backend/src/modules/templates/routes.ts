@@ -25,14 +25,11 @@ import {
 } from '../../db/schema.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { logActivity } from '../../lib/activity.js';
-import { previewDocumentNumber } from '../../lib/counter.js';
+import { previewDocumentNumber, templateNumberingFrom } from '../../lib/counter.js';
 import { getActiveDesigns, resolveTemplateDesign } from '../../lib/active-design.js';
 import { getTemplateAccess, type Permission } from '../../lib/access.js';
 import { AppError, badRequest, forbidden, internal, notFound } from '../../lib/errors.js';
 import {
-  ensureNumberingSeries,
-  findSeriesOwner,
-  generateAutoPrefix,
   getNumberingState,
   resolveTemplateNumbering as resolveTemplateNumberingConfig,
 } from '../../lib/numbering.js';
@@ -180,6 +177,8 @@ async function isSharedWithOthers(templateId: string, isSharedGlobally: boolean)
 interface TemplateNumbering {
   enabled: boolean;
   prefix: string | null;
+  /** Serie de la plantilla: es la dueña de su enumeración. */
+  seriesId: string | null;
   /** El prefijo lo asignó el servidor, no el usuario. */
   auto: boolean;
 }
@@ -187,10 +186,9 @@ interface TemplateNumbering {
 /**
  * Resuelve la serie de numeración de una plantilla.
  *
- * Cada plantilla tiene su propia serie: el prefijo es único entre las
- * plantillas vivas, de modo que su contador no se comparte con nadie más. Si
- * el usuario deja el prefijo vacío, el servidor le asigna un código corto
- * único.
+ * Cada plantilla tiene su propia serie: su contador no se comparte con nadie
+ * más, aunque otra plantilla use el mismo prefijo. Si el usuario deja el
+ * prefijo vacío, el servidor le asigna un código corto único.
  */
 async function resolveTemplateNumbering(options: {
   userId: string;
@@ -202,6 +200,7 @@ async function resolveTemplateNumbering(options: {
     numberingEnabled: boolean;
     numberingPrefix: string | null;
     numberingPrefixAuto: boolean;
+    numberingSeriesId: string | null;
   } | null;
 }): Promise<TemplateNumbering> {
   const resolved = await resolveTemplateNumberingConfig({
@@ -215,6 +214,7 @@ async function resolveTemplateNumbering(options: {
   return {
     enabled: resolved.enabled,
     prefix: resolved.prefix,
+    seriesId: resolved.series?.id ?? null,
     auto: resolved.auto,
   };
 }
@@ -223,14 +223,17 @@ async function resolveTemplateNumbering(options: {
 async function templateSampleNumber(template: {
   numberingEnabled: boolean;
   numberingPrefix: string | null;
+  numberingSeriesId: string | null;
   docType: DocType;
 }): Promise<string> {
   if (!template.numberingEnabled) return '';
+  if (template.numberingSeriesId) {
+    const state = await getNumberingState(template.numberingSeriesId);
+    if (state) return state.nextNumber;
+  }
+
   const prefix = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
   if (prefix === null || prefix === undefined) return '';
-
-  const state = await getNumberingState(prefix);
-  if (state) return state.nextNumber;
 
   return formatDocumentNumber({
     prefix,
@@ -343,6 +346,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         sharePermission: templateShares.permission,
         /** Numeración de la plantilla: prefijo propio o código automático. */
         numberingEnabled: templates.numberingEnabled,
+        numberingSeriesId: templates.numberingSeriesId,
         numberingPrefix: templates.numberingPrefix,
         numberingPrefixAuto: templates.numberingPrefixAuto,
         updatedAt: templates.updatedAt,
@@ -502,7 +506,10 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       inheritedChrome: resolveChrome({ template: null, design: resolved.tokens }),
       // Número que tendría un documento creado con esta plantilla. Es solo una
       // lectura: no reserva el correlativo.
-      numberingPreview: await previewDocumentNumber({ docType: row.docType, template: row }),
+      numberingPreview: await previewDocumentNumber({
+        docType: row.docType,
+        template: templateNumberingFrom(row),
+      }),
       shares,
     };
   });
@@ -551,6 +558,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions ?? null,
         isShared: body.isShared,
         numberingEnabled: numbering.enabled,
+        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
       })
@@ -643,11 +651,13 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
             numberingEnabled: row.numberingEnabled,
             numberingPrefix: row.numberingPrefix,
             numberingPrefixAuto: row.numberingPrefixAuto,
+            numberingSeriesId: row.numberingSeriesId,
           },
         })
       : {
           enabled: row.numberingEnabled,
           prefix: row.numberingPrefix,
+          seriesId: row.numberingSeriesId,
           auto: row.numberingPrefixAuto,
         };
     // La instantánea guarda los tokens del diseño efectivo (el que está en
@@ -668,6 +678,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions === undefined ? row.aiInstructions : body.aiInstructions,
         isShared: body.isShared ?? row.isShared,
         numberingEnabled: numbering.enabled,
+        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
         version: nextVersion,
@@ -713,8 +724,9 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
 
     const design = await visibleDesign(user.sub, row.designId);
 
-    // La copia no puede heredar el prefijo: el original sigue usándolo.
-    // Recibe su propio código corto.
+    // La copia es una plantilla nueva: recibe su propia serie y, con ella,
+    // su propia enumeración. Puede repetir el prefijo del original, porque
+    // el prefijo es solo la etiqueta del número.
     const cloneId = randomUUID();
     const numbering = await resolveTemplateNumbering({
       userId: user.sub,
@@ -723,7 +735,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       templateId: cloneId,
       input: {
         enabled: row.numberingEnabled,
-        prefix: row.numberingEnabled ? '' : row.numberingPrefix,
+        prefix: row.numberingPrefix,
       },
     });
 
@@ -744,6 +756,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: false,
         isActive: true,
         numberingEnabled: numbering.enabled,
+        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
       })
@@ -783,29 +796,11 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
     if (!row || !row.deletedAt) throw notFound('Plantilla no encontrada');
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede restaurar esta plantilla');
 
-    // Mientras la plantilla estuvo en la papelera, otra pudo ocupar su
-    // prefijo. En ese caso recibe un código propio para no compartir serie.
-    let prefix = row.numberingPrefix;
-    let auto = row.numberingPrefixAuto;
-    if (prefix) {
-      const owner = await findSeriesOwner(prefix, id);
-      if (owner) {
-        prefix = await generateAutoPrefix(id);
-        auto = true;
-        // La serie del código nuevo debe existir antes de referenciarla.
-        await ensureNumberingSeries({
-          prefix,
-          startValue: 1,
-          padding: 4,
-          includeYear: true,
-          createdBy: user.sub,
-        });
-      }
-    }
-
+    // La plantilla conserva su serie y su enumeración: restaurar no reinicia
+    // sus números ni los mezcla con los de otra plantilla.
     await db
       .update(templates)
-      .set({ deletedAt: null, numberingPrefix: prefix, numberingPrefixAuto: auto, updatedAt: new Date() })
+      .set({ deletedAt: null, updatedAt: new Date() })
       .where(eq(templates.id, id));
 
     await logActivity(user.sub, 'template', id, 'restored', { name: row.name });
