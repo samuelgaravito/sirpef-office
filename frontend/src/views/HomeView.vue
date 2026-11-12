@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import {
-  ArrowUpRight,
-  FileText,
-  Inbox,
-  LayoutTemplate,
-  Loader2,
-  Palette,
-  Plus,
-  Search,
-} from 'lucide-vue-next';
+import { FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
+import ModuleDock from '@/components/home/ModuleDock.vue';
+import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
@@ -241,136 +234,133 @@ onUnmounted(() => {
 
 <template>
   <AppShell>
-    <div
-      class="cockpit mx-auto w-full max-w-[1280px] px-4 pb-16 pt-5 sm:px-6 sm:pt-7"
-      :class="{ 'cockpit-pushed': overlayOpen }"
-    >
+    <div class="cockpit pb-16" :class="{ 'cockpit-pushed': overlayOpen }">
       <!-- Hero -->
-      <section
-        class="hero relative overflow-hidden rounded-2xl border border-navy/20 px-5 py-7 text-white sm:px-8 sm:py-9"
-      >
-        <div class="orb orb-a pointer-events-none absolute -right-24 -top-28 size-72 rounded-full bg-mint/20 blur-3xl" />
-        <div class="orb orb-b pointer-events-none absolute -bottom-32 right-24 size-64 rounded-full bg-accent/30 blur-3xl" />
+      <section class="hero relative overflow-hidden text-white">
+        <div
+          class="hero-chevrons hero-chevrons--left pointer-events-none absolute inset-y-0 left-0 w-[28%]"
+          aria-hidden="true"
+        />
+        <div
+          class="hero-chevrons hero-chevrons--right pointer-events-none absolute inset-y-0 right-0 w-[52%]"
+          aria-hidden="true"
+        />
 
-        <div class="relative">
-          <div class="flex flex-wrap items-start justify-between gap-5">
+        <div
+          class="relative mx-auto w-full max-w-[1280px] px-4 pb-28 pt-10 sm:px-6 sm:pb-32 sm:pt-14 lg:px-8 lg:pb-36 lg:pt-16"
+        >
+          <div class="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_380px]">
             <div class="min-w-0">
-              <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/55">
-                Panel de trabajo
-              </p>
-              <h1 class="mt-2 text-[27px] font-semibold leading-tight tracking-tight sm:text-[32px]">
+              <div class="flex flex-wrap items-center gap-3">
+                <span
+                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white"
+                >
+                  SIRPEF
+                </span>
+                <span class="text-[10.5px] font-semibold uppercase tracking-[0.18em] text-white/55">
+                  Panel de trabajo
+                </span>
+              </div>
+
+              <h1
+                class="mt-5 max-w-[16ch] text-[34px] font-semibold leading-[1.06] tracking-[-0.03em] text-white sm:text-[42px] lg:text-[48px]"
+              >
                 {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
               </h1>
-              <p class="mt-1.5 max-w-lg text-[13.5px] leading-relaxed text-white/70">
+
+              <p class="mt-4 max-w-lg text-[13.5px] leading-relaxed text-white/65 sm:text-[14.5px]">
                 <template v-if="canSeeDocuments">
                   {{ displayedDocuments }} documento{{ displayedDocuments === 1 ? '' : 's' }} en tu
                   espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
                 </template>
                 Accede a tus módulos desde aquí.
               </p>
+
+              <div v-if="canSeeDocuments" class="mt-6 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  class="btn bg-white text-navy hover:bg-white/90"
+                  :disabled="creating !== null"
+                  @click="createDocument()"
+                >
+                  <component
+                    :is="creating === 'blank' ? Loader2 : Plus"
+                    :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
+                  />
+                  {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
+                  @click="openModule('documents')"
+                >
+                  <Search class="size-4" />
+                  Buscar
+                </button>
+              </div>
+
+              <div v-if="canSeeDocuments" class="mt-5 flex flex-wrap gap-2 lg:hidden">
+                <span class="hero-stat">
+                  <strong>{{ displayedDocuments }}</strong> documentos
+                </span>
+                <span v-if="drafts" class="hero-stat">
+                  <strong>{{ drafts }}</strong> en borrador
+                </span>
+              </div>
+
+              <ActivityFocus
+                v-if="canSeeInbox"
+                :items="pendingItems"
+                :total="totalCount"
+                :pending="pendingCount"
+                :loading="pendingLoading"
+                :updated-at="pendingUpdatedAt"
+                class="max-w-[720px]"
+                @open="openMessage"
+                @open-inbox="openModule('inbox')"
+              />
             </div>
 
-            <div v-if="canSeeDocuments" class="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                class="btn bg-white text-navy hover:bg-white/90"
-                :disabled="creating !== null"
-                @click="createDocument()"
-              >
-                <component
-                  :is="creating === 'blank' ? Loader2 : Plus"
-                  :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
-                />
-                {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
-              </button>
-              <button
-                type="button"
-                class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
-                @click="openModule('documents')"
-              >
-                <Search class="size-4" />
-                Buscar
-              </button>
+            <div
+              v-if="canSeeDocuments || canSeeTemplates || canSeeDesigns"
+              class="hidden w-full max-w-[400px] lg:block lg:justify-self-end"
+            >
+              <WorkspaceGauge
+                :documents="counts.documents"
+                :drafts="counts.drafts"
+                :templates="counts.templates"
+                :designs="counts.designs"
+                :loading="shellLoading"
+              />
             </div>
           </div>
-
-          <ActivityFocus
-            v-if="canSeeInbox"
-            :items="pendingItems"
-            :total="totalCount"
-            :pending="pendingCount"
-            :loading="pendingLoading"
-            :updated-at="pendingUpdatedAt"
-            @open="openMessage"
-            @open-inbox="openModule('inbox')"
-          />
         </div>
 
         <span :key="totalCount" class="hero-sweep" aria-hidden="true" />
       </section>
 
       <!-- Accesos a módulos -->
-      <section v-if="tiles.length > 0" class="mt-7">
-        <div class="mb-3 flex items-end justify-between gap-3">
-          <div>
-            <p class="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-subtle">
-              Módulos
-            </p>
-            <h2 class="mt-0.5 text-[16px] font-semibold tracking-tight">¿A dónde quieres ir?</h2>
-          </div>
-          <span class="hidden text-[11.5px] text-ink-subtle sm:block">
+      <section
+        v-if="tiles.length > 0"
+        class="relative z-10 mx-auto -mt-16 w-full max-w-[1280px] px-4 sm:px-6 lg:-mt-20 lg:px-8"
+      >
+        <ModuleDock
+          :tiles="tiles"
+          @open="openModule"
+          @origin="rememberOrigin"
+        />
+
+        <div
+          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[11.5px] text-ink-subtle"
+        >
+          <span>Accede a tus módulos desde aquí.</span>
+          <span class="hidden sm:block">
             También puedes pulsar <kbd class="kbd">Ctrl</kbd> + <kbd class="kbd">K</kbd>
           </span>
         </div>
-
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <button
-            v-for="(tile, index) in tiles"
-            :key="tile.key"
-            type="button"
-            class="tile group relative overflow-hidden rounded-card border border-hairline bg-surface p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/50 hover:shadow-pop"
-            :style="{ animationDelay: `${index * 45}ms` }"
-            @pointerdown="rememberOrigin"
-            @click="openModule(tile.route)"
-          >
-            <span
-              class="pointer-events-none absolute inset-x-0 top-0 h-0.5 origin-left scale-x-0 bg-gradient-to-r from-accent to-mint transition-transform duration-300 group-hover:scale-x-100"
-            />
-            <div class="flex items-start justify-between gap-2">
-              <span
-                class="grid size-10 place-items-center rounded-lg bg-accent-soft text-accent transition-colors group-hover:bg-accent group-hover:text-white"
-              >
-                <component :is="tile.icon" class="size-5" />
-              </span>
-              <span
-                class="grid size-7 place-items-center rounded-full border border-hairline text-ink-subtle transition-colors group-hover:border-accent/40 group-hover:text-accent"
-              >
-                <ArrowUpRight class="size-3.5" />
-              </span>
-            </div>
-
-            <p class="mt-3.5 text-[13.5px] font-semibold text-ink">{{ tile.label }}</p>
-            <p class="mt-0.5 line-clamp-2 min-h-[32px] text-[11.5px] leading-snug text-ink-muted">
-              {{ tile.description }}
-            </p>
-
-            <div class="mt-3 flex items-baseline gap-1.5 border-t border-hairline pt-2.5">
-              <span class="text-[19px] font-semibold leading-none tracking-tight text-ink">
-                {{ tile.value }}
-              </span>
-              <span class="truncate text-[11px] text-ink-subtle">{{ tile.caption }}</span>
-              <span
-                v-if="tile.badge"
-                class="ml-auto grid min-w-[18px] place-items-center rounded-full bg-accent px-1 py-0.5 text-[9.5px] font-bold leading-none text-white"
-              >
-                {{ tile.badge > 99 ? '99+' : tile.badge }}
-              </span>
-            </div>
-          </button>
-        </div>
       </section>
 
-      <section v-else-if="!shellLoading" class="card mt-7 p-8 text-center">
+      <section v-else-if="!shellLoading" class="card mx-auto mt-8 max-w-[1280px] p-8 text-center">
         <FileText class="mx-auto size-8 text-ink-subtle" />
         <h2 class="mt-3 text-[15px] font-semibold">Tu menú está vacío</h2>
         <p class="mt-1 text-[13px] text-ink-muted">
@@ -398,26 +388,54 @@ onUnmounted(() => {
 <style scoped>
 .hero {
   background:
-    radial-gradient(120% 160% at 100% 0%, rgb(78 133 200 / 0.42) 0%, transparent 55%),
-    linear-gradient(135deg, #041e42 0%, #0a2a55 55%, #1b3a66 100%);
+    radial-gradient(70% 110% at 92% 6%, rgb(78 133 200 / 0.3) 0%, transparent 58%),
+    radial-gradient(50% 75% at 0% 100%, rgb(6 227 189 / 0.08) 0%, transparent 62%),
+    linear-gradient(135deg, var(--color-navy-deep) 0%, var(--color-navy) 48%, #0a2a55 100%);
 }
 
-.orb {
-  animation: drift 18s ease-in-out infinite alternate;
+.hero::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.18), transparent);
 }
 
-.orb-b {
-  animation-duration: 24s;
-  animation-delay: -6s;
+.hero-chevrons {
+  background-image: repeating-linear-gradient(
+    118deg,
+    transparent 0 16px,
+    rgb(255 255 255 / 0.055) 16px 19px
+  );
 }
 
-@keyframes drift {
-  from {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  to {
-    transform: translate3d(-14px, 12px, 0) scale(1.08);
-  }
+.hero-chevrons--left {
+  opacity: 0.9;
+  mask-image: linear-gradient(to right, #000 0%, transparent 100%);
+}
+
+.hero-chevrons--right {
+  opacity: 0.8;
+  mask-image: radial-gradient(ellipse 80% 72% at 100% 45%, #000 0%, transparent 78%);
+}
+
+.hero-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.06);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: rgb(255 255 255 / 0.62);
+}
+
+.hero-stat strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
 }
 
 /* Barrido que se reinicia cuando cambian los contadores de la bandeja. */
@@ -444,18 +462,6 @@ onUnmounted(() => {
   }
 }
 
-.tile {
-  animation: tile-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  transition:
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 180ms ease,
-    box-shadow 180ms ease;
-}
-
-.tile:active {
-  transform: scale(0.985);
-}
-
 /* El cockpit se hunde ligeramente cuando hay un panel abierto encima. */
 .cockpit {
   transform-origin: top center;
@@ -466,23 +472,7 @@ onUnmounted(() => {
   transform: scale(0.994);
 }
 
-@keyframes tile-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .orb,
-  .tile {
-    animation: none;
-  }
-
   .hero-sweep {
     display: none;
   }

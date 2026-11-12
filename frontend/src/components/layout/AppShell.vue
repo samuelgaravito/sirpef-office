@@ -137,7 +137,7 @@ async function signOut(): Promise<void> {
   <div v-else class="flex h-full min-h-0 flex-col bg-canvas">
     <!-- Barra superior -->
     <header
-      class="app-header sticky top-0 z-30 shrink-0 border-b border-hairline bg-surface/85 backdrop-blur-md"
+      class="app-header sticky top-0 z-30 shrink-0 border-b border-white/10 bg-navy/95 shadow-[0_1px_0_rgb(255_255_255/0.04)] backdrop-blur-md"
     >
       <div class="mx-auto flex h-16 w-full max-w-[1280px] items-center gap-3 px-4 sm:px-6">
         <!-- Marca -->
@@ -147,32 +147,32 @@ async function signOut(): Promise<void> {
           aria-label="SirpefOffice, ir al panel"
         >
           <span
-            class="relative grid size-9 place-items-center rounded-[10px] bg-gradient-to-br from-navy to-navy-soft text-[15px] font-bold text-white shadow-[0_2px_6px_rgb(4_30_66/0.25)] transition-transform group-hover:-translate-y-px"
+            class="relative grid size-9 place-items-center rounded-[10px] border border-white/15 bg-white/10 text-[15px] font-bold text-white transition-transform group-hover:-translate-y-px group-hover:bg-white/15"
           >
             S
             <span
-              class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-mint ring-2 ring-surface"
+              class="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-mint ring-2 ring-navy"
             />
           </span>
           <span class="hidden flex-col leading-none sm:flex">
-            <span class="text-[15px] font-semibold tracking-tight text-ink">SirpefOffice</span>
-            <span class="mt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-ink-subtle">
+            <span class="text-[15px] font-semibold tracking-tight text-white">SirpefOffice</span>
+            <span class="mt-1 text-[10px] font-medium uppercase tracking-[0.12em] text-white/50">
               Gestión documental
             </span>
           </span>
         </RouterLink>
 
-        <span class="mx-1 hidden h-6 w-px bg-hairline lg:block" />
+        <span class="mx-1 hidden h-6 w-px bg-white/15 lg:block" />
 
         <div class="hidden min-w-0 items-center gap-1.5 text-[12.5px] lg:flex">
           <RouterLink
             :to="{ name: 'home' }"
-            class="rounded px-1.5 py-1 font-medium text-ink-subtle transition-colors hover:bg-surface-hover hover:text-ink"
+            class="rounded px-1.5 py-1 font-medium text-white/60 transition-colors hover:bg-white/10 hover:text-white"
           >
             Inicio
           </RouterLink>
-          <span class="text-ink-subtle/60">/</span>
-          <span class="truncate rounded bg-surface-muted px-1.5 py-1 font-medium text-ink-muted">
+          <span class="text-white/30">/</span>
+          <span class="truncate rounded bg-white/10 px-1.5 py-1 font-medium text-white/80">
             {{ sectionLabel }}
           </span>
         </div>
@@ -182,13 +182,13 @@ async function signOut(): Promise<void> {
         <!-- Buscador / paleta -->
         <button
           type="button"
-          class="hidden h-9 items-center gap-2 rounded-field border border-hairline bg-surface-muted/70 pl-2.5 pr-2 text-[12.5px] text-ink-subtle transition-colors hover:border-hairline-strong hover:bg-surface sm:flex sm:w-56 lg:w-64"
+          class="hidden h-9 items-center gap-2 rounded-field border border-white/15 bg-white/[0.07] pl-2.5 pr-2 text-[12.5px] text-white/65 transition-colors hover:border-white/25 hover:bg-white/10 hover:text-white sm:flex sm:w-56 lg:w-64"
           @click="openPalette"
         >
           <Search class="size-3.5 shrink-0" />
           <span class="flex-1 truncate text-left">Buscar o ir a…</span>
           <kbd
-            class="flex items-center gap-0.5 rounded border border-hairline bg-surface px-1 py-0.5 text-[10px] font-semibold text-ink-muted"
+            class="flex items-center gap-0.5 rounded border border-white/15 bg-white/10 px-1 py-0.5 text-[10px] font-semibold text-white/70"
           >
             <Command v-if="isMac" class="size-2.5" />
             <span v-else>Ctrl</span>
@@ -198,7 +198,7 @@ async function signOut(): Promise<void> {
 
         <button
           type="button"
-          class="grid size-9 place-items-center rounded-field border border-hairline bg-surface text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink sm:hidden"
+          class="grid size-9 place-items-center rounded-field border border-white/15 bg-white/[0.07] text-white/75 transition-colors hover:bg-white/10 hover:text-white sm:hidden"
           aria-label="Buscar"
           @click="openPalette"
         >
@@ -209,14 +209,14 @@ async function signOut(): Promise<void> {
         <button
           v-if="canSeeInbox"
           type="button"
-          class="relative grid size-9 place-items-center rounded-field border border-hairline bg-surface text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
+          class="relative grid size-9 place-items-center rounded-field border border-white/15 bg-white/[0.07] text-white/75 transition-colors hover:bg-white/10 hover:text-white"
           aria-label="Abrir bandeja"
           @click="router.push({ name: 'inbox' })"
         >
           <Inbox class="size-4" />
           <span
             v-if="totalCount > 0"
-            class="absolute -right-1.5 -top-1.5 grid min-w-[18px] place-items-center rounded-full bg-accent px-1 py-0.5 text-[10px] font-bold leading-none text-white ring-2 ring-surface"
+            class="absolute -right-1.5 -top-1.5 grid min-w-[18px] place-items-center rounded-full bg-mint px-1 py-0.5 text-[10px] font-bold leading-none text-navy ring-2 ring-navy"
           >
             {{ totalCount > 99 ? '99+' : totalCount }}
           </span>
@@ -227,14 +227,19 @@ async function signOut(): Promise<void> {
           <template #trigger>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-field border border-transparent pl-1 pr-1.5 transition-colors hover:border-hairline hover:bg-surface-muted/70"
+              class="flex h-9 items-center gap-2 rounded-field border border-transparent pl-1 pr-1.5 transition-colors hover:border-white/15 hover:bg-white/10"
               aria-label="Menú de usuario"
             >
-              <UserAvatar :name="auth.user?.name" :src="auth.user?.avatarUrl" size="sm" />
-              <span class="hidden max-w-[120px] truncate text-[12.5px] font-semibold text-ink lg:block">
+              <UserAvatar
+                :name="auth.user?.name"
+                :src="auth.user?.avatarUrl"
+                size="sm"
+                class="ring-1 ring-white/25"
+              />
+              <span class="hidden max-w-[120px] truncate text-[12.5px] font-semibold text-white lg:block">
                 {{ auth.user?.name }}
               </span>
-              <ChevronDown class="hidden size-3.5 shrink-0 text-ink-subtle lg:block" />
+              <ChevronDown class="hidden size-3.5 shrink-0 text-white/60 lg:block" />
             </button>
           </template>
           <template #content>

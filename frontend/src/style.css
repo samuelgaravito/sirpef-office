@@ -19,6 +19,7 @@
   --color-accent-soft: #e9f1fa;
   --color-accent-ink: #ffffff;
   --color-navy: #041e42;
+  --color-navy-deep: #02152e;
   --color-navy-soft: #1b3a66;
   --color-mint: #06e3bd;
 
@@ -930,7 +931,7 @@
 /* ── Materiales y contraste según preferencias del sistema ────────────── */
 @media (prefers-reduced-transparency: reduce) {
   .app-header {
-    background: var(--color-surface) !important;
+    background: var(--color-navy) !important;
     backdrop-filter: none !important;
   }
 
@@ -943,7 +944,7 @@
 
 @media (prefers-contrast: more) {
   .app-header {
-    border-bottom-color: var(--color-ink) !important;
+    border-bottom-color: rgb(255 255 255 / 0.4) !important;
   }
 
   .card,
