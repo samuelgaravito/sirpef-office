@@ -219,7 +219,7 @@ export async function ensureTemplateSeries(
       return updateNumberingSeries(
         existing.id,
         { startValue, padding, includeYear },
-        options.createdBy ?? existing.updatedBy ?? '',
+        options.createdBy ?? existing.updatedBy,
       );
     }
 
@@ -262,10 +262,31 @@ export async function ensureTemplateSeries(
     throw internal('NUMBERING_SERIES_CREATE_FAILED', 'No se pudo crear la serie de numeración');
   }
 
-  await db
+  // La serie se enlaza con la plantilla solo si sigue sin serie: dos
+  // peticiones simultáneas no pueden dejarle dos enumeraciones.
+  const [linked] = await db
     .update(templates)
     .set({ numberingSeriesId: created.id, updatedAt: new Date() })
-    .where(eq(templates.id, options.templateId));
+    .where(and(eq(templates.id, options.templateId), isNull(templates.numberingSeriesId)))
+    .returning({ id: templates.id });
+
+  if (!linked) {
+    // La plantilla puede todavía no existir (una plantilla nueva resuelve su
+    // serie antes de insertarse: el enlace se hace al insertarla).
+    const [template] = await db
+      .select({ id: templates.id })
+      .from(templates)
+      .where(eq(templates.id, options.templateId))
+      .limit(1);
+    if (!template) return created;
+
+    // Otra petición enlazó antes su propia serie: se usa esa y se retira la
+    // que se acaba de crear, para no dejar series huérfanas.
+    await db.delete(numberingSeries).where(eq(numberingSeries.id, created.id));
+    const current = await getTemplateSeries(options.templateId);
+    if (current) return current;
+    throw internal('NUMBERING_SERIES_CREATE_FAILED', 'No se pudo crear la serie de numeración');
+  }
 
   return created;
 }
@@ -387,7 +408,7 @@ export async function listNumberingStates(user?: NumberingUser): Promise<Numberi
 export async function updateNumberingSeries(
   seriesId: string,
   patch: NumberingSeriesPatch,
-  userId: string,
+  userId: string | null,
 ): Promise<NumberingSeriesRow> {
   const series = await getNumberingSeries(seriesId);
   if (!series) throw notFound('Serie de numeración no encontrada');
@@ -635,9 +656,11 @@ export async function resolveTemplateNumbering(options: {
   const existing = await getTemplateSeries(templateId);
 
   // `undefined` = conservar el prefijo actual; `''` = quiero uno automático.
-  const requested =
-    input?.prefix === undefined ? (current?.numberingPrefix ?? '') : input.prefix;
-  const normalized = normalizeNumberingPrefix(requested ?? '');
+  const requested = input?.prefix;
+  const normalized =
+    requested === undefined
+      ? normalizeNumberingPrefix(current?.numberingPrefix ?? '')
+      : normalizeNumberingPrefix(requested ?? '');
 
   let prefix: string;
   let auto: boolean;
@@ -650,7 +673,8 @@ export async function resolveTemplateNumbering(options: {
     auto = true;
   } else {
     prefix = normalized;
-    auto = false;
+    // Si el cliente no toca el prefijo, se conserva su carácter automático.
+    auto = requested === undefined ? (current?.numberingPrefixAuto ?? false) : false;
   }
 
   if (!enabled) {
