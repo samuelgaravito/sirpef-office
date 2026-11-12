@@ -111,6 +111,8 @@ async function main(): Promise<void> {
 
   const createdIds: string[] = [];
   const createdTemplateIds: string[] = [];
+  /** Series creadas por las plantillas de prueba (se borran al terminar). */
+  const createdSeriesIds: string[] = [];
   const scope = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
   const seriesId = template.numberingSeriesId;
   if (!seriesId) throw new Error('La plantilla no tiene serie de numeración propia');
@@ -322,7 +324,9 @@ async function main(): Promise<void> {
     );
 
     /* 9. Cada plantilla lleva su propia enumeración. */
-    const own = await call<{ template: { id: string; numberingPrefix: string | null } }>(
+    const own = await call<{
+      template: { id: string; numberingPrefix: string | null; numberingSeriesId: string | null };
+    }>(
       '/templates',
       token,
       'POST',
@@ -336,6 +340,9 @@ async function main(): Promise<void> {
     );
     assert(own.status === 201, 'Se crea una plantilla con numeración automática');
     createdTemplateIds.push(own.body.template.id);
+    if (own.body.template.numberingSeriesId) {
+      createdSeriesIds.push(own.body.template.numberingSeriesId);
+    }
     const ownPrefix = own.body.template.numberingPrefix;
     assert(Boolean(ownPrefix), 'La plantilla sin prefijo recibe un código automático');
     assert(ownPrefix !== scope, 'La plantilla nueva no repite el prefijo de otra');
@@ -393,15 +400,29 @@ async function main(): Promise<void> {
     );
     assert(removedTemplate.status === 200, 'Se elimina la plantilla con numeración propia');
 
-    const thief = await call<{ template: { id: string } }>('/templates', token, 'POST', {
-      name: `Prefijo tomado ${Date.now()}`,
-      docType: template.docType,
-      body: { type: 'doc', content: [{ type: 'paragraph' }] },
-      schema: [],
-      numbering: { enabled: true, prefix: ownPrefix, startValue: 1, padding: 4, includeYear: true },
-    });
+    const thief = await call<{ template: { id: string; numberingSeriesId: string | null } }>(
+      '/templates',
+      token,
+      'POST',
+      {
+        name: `Prefijo tomado ${Date.now()}`,
+        docType: template.docType,
+        body: { type: 'doc', content: [{ type: 'paragraph' }] },
+        schema: [],
+        numbering: {
+          enabled: true,
+          prefix: ownPrefix,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+        },
+      },
+    );
     assert(thief.status === 201, 'Otra plantilla puede ocupar el prefijo liberado');
     createdTemplateIds.push(thief.body.template.id);
+    if (thief.body.template.numberingSeriesId) {
+      createdSeriesIds.push(thief.body.template.numberingSeriesId);
+    }
 
     const restoreTemplate = await call<{ ok: boolean }>(
       `/templates/${own.body.template.id}/restore`,
@@ -440,6 +461,9 @@ async function main(): Promise<void> {
       'Se puede guardar un prefijo que ya usa otra plantilla',
     );
     createdTemplateIds.push(duplicated.body.template!.id);
+    if (duplicated.body.template!.numberingSeriesId) {
+      createdSeriesIds.push(duplicated.body.template!.numberingSeriesId);
+    }
     assert(
       duplicated.body.template!.numberingPrefix === scope,
       'La segunda plantilla conserva el prefijo repetido',
@@ -471,13 +495,18 @@ async function main(): Promise<void> {
       'El número gemelo lleva el prefijo repetido',
     );
   } finally {
-    // Limpieza: se borran los documentos y las plantillas de prueba y se
-    // restaura el contador.
+    // Limpieza: se borran los documentos, las plantillas de prueba y las
+    // series que estas crearon (con su contador), y se restaura el contador
+    // de la serie original.
     for (const id of createdIds) {
       await db.delete(documents).where(eq(documents.id, id));
     }
     for (const id of createdTemplateIds) {
       await db.delete(templates).where(eq(templates.id, id));
+    }
+    for (const id of createdSeriesIds) {
+      await db.delete(documentCounters).where(eq(documentCounters.seriesId, id));
+      await db.delete(numberingSeries).where(eq(numberingSeries.id, id));
     }
 
     if (counterBefore) {
