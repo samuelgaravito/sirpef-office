@@ -1,10 +1,45 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 
 import ToastHost from '@/components/ui/ToastHost.vue';
+import {
+  connectRealtime,
+  disconnectRealtime,
+  reconnectRealtime,
+} from '@/composables/useRealtime';
+import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const auth = useAuthStore();
+
+/**
+ * El canal de eventos sigue a la sesión: se abre al iniciar sesión y se
+ * cierra al cerrarla. Vive en el componente raíz y no en `AppShell` porque
+ * aquel se remonta en cada ruta y se salta cuando la vista se abre como
+ * panel dentro del módulo.
+ */
+watch(
+  () => auth.isAuthenticated,
+  (authenticated) => {
+    if (authenticated) connectRealtime();
+    else disconnectRealtime();
+  },
+  { immediate: true },
+);
+
+/**
+ * Al volver a la pestaña se comprueba que el canal siga vivo: los móviles
+ * suspenden las conexiones en segundo plano.
+ */
+function onVisibilityChange(): void {
+  if (document.visibilityState === 'visible' && auth.isAuthenticated) {
+    reconnectRealtime();
+  }
+}
+
+onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange));
+onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange));
 
 /**
  * Los módulos (`/templates`, `/documents`, …) son rutas hijas de `/`, así que

@@ -25,6 +25,7 @@ import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
 import { saveVersion, toSummary } from '../documents/routes.js';
+import { publishInboxEvent } from '../realtime/events.js';
 
 /* ───────────────────────────── Esquemas ───────────────────────────── */
 
@@ -564,6 +565,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     let messageId = '';
     let assignedDocNumber: string | null = null;
     const direct = user.role === 'admin';
+    let adminIds: string[] = [];
 
     await db.transaction(async (tx) => {
       const [message] = await tx
@@ -615,7 +617,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
           .set({ status: 'in_review', updatedAt: now })
           .where(eq(documents.id, document.id));
 
-        const adminIds = await activeAdminIds();
+        adminIds = await activeAdminIds();
         if (adminIds.length > 0) {
           await tx
             .insert(documentShares)
@@ -638,6 +640,16 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         recipientIds,
         direct: true,
       });
+      await publishInboxEvent({
+        type: 'inbox.message.created',
+        userIds: recipientIds,
+        messageId,
+        documentId: document.id,
+        documentTitle: document.title,
+        subject: body.subject,
+        actorName: user.name,
+        status: 'sent',
+      });
     } else {
       await logActivity(user.sub, 'document', document.id, 'submitted', {
         messageId,
@@ -646,6 +658,17 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       // Guarda la versión exacta que se envió a revisión para poder compararla
       // con los cambios posteriores desde el editor.
       await saveVersion(document.id, user.sub, 'manual', 'Enviado a aprobación');
+      // El aviso va a los administradores: son los que pueden aprobarlo.
+      await publishInboxEvent({
+        type: 'inbox.message.pending',
+        userIds: adminIds,
+        messageId,
+        documentId: document.id,
+        documentTitle: document.title,
+        subject: body.subject,
+        actorName: user.name,
+        status: 'pending_approval',
+      });
     }
 
     return reply.status(201).send({
@@ -693,6 +716,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
 
     const now = new Date();
     let assignedDocNumber: string | null = null;
+    let currentRecipients: string[] = [];
 
     await db.transaction(async (tx) => {
       if (recipientIds) {
@@ -704,7 +728,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
           .values(recipientIds.map((userId) => ({ messageId: id, userId })));
       }
 
-      const currentRecipients = recipientIds
+      currentRecipients = recipientIds
         ? recipientIds
         : (
             await tx
@@ -759,6 +783,30 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       version: document.version,
     });
     await logActivity(user.sub, 'document', document.id, 'sent', { messageId: id });
+
+    const subject = body.subject ?? message.subject;
+    // Los destinatarios reciben el documento ya oficializado.
+    await publishInboxEvent({
+      type: 'inbox.message.approved',
+      userIds: currentRecipients,
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject,
+      actorName: user.name,
+      status: 'sent',
+    });
+    // El remitente recibe el resultado de su solicitud.
+    await publishInboxEvent({
+      type: 'inbox.result.approved',
+      userIds: [message.senderId],
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject,
+      actorName: user.name,
+      status: 'sent',
+    });
 
     return { ok: true, id, status: 'sent', docNumber: assignedDocNumber };
   });
@@ -822,6 +870,18 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       allowEdit,
     });
 
+    // Solo el remitente se entera del rechazo.
+    await publishInboxEvent({
+      type: 'inbox.result.rejected',
+      userIds: [message.senderId],
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject: message.subject,
+      actorName: user.name,
+      status: 'rejected',
+    });
+
     return { ok: true, id, status: 'rejected', allowEdit };
   });
 
@@ -861,6 +921,18 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     });
 
     await logActivity(user.sub, 'document', document.id, 'cancelled', { messageId: id });
+
+    // El remitente y los administradores se enteran de la cancelación.
+    await publishInboxEvent({
+      type: 'inbox.message.cancelled',
+      userIds: [message.senderId, ...(await activeAdminIds())],
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject: message.subject,
+      actorName: user.name,
+      status: 'cancelled',
+    });
 
     return { ok: true, id, status: 'cancelled' };
   });

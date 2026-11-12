@@ -11,12 +11,17 @@ import {
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
-import { MENU_CATALOG } from '@sirpefoffice/shared';
+import {
+  MENU_CATALOG,
+  isInboxRealtimeEvent,
+  type RealtimeMessage,
+} from '@sirpefoffice/shared';
 
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import CommandPalette from '@/components/layout/CommandPalette.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { logoutFromSva, redirectToSvaLogin } from '@/lib/sva';
 import { PANEL_MODE } from '@/lib/panel';
@@ -26,7 +31,7 @@ import { useAuthStore } from '@/stores/auth';
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { totalCount, resultCount, latestResult, refresh: refreshInbox } = useInboxBadge();
+const { totalCount, refresh: refreshInbox } = useInboxBadge();
 const toast = useToast();
 
 /** Dentro de un panel modal el marco lo pone `ModulePanel`. */
@@ -54,28 +59,36 @@ const initials = computed(() => {
     .join('');
 });
 
+/**
+ * Sondeo de seguridad. El canal de eventos mantiene los contadores al día,
+ * pero si se cae (proxy, red) el sondeo los vuelve a poner al día aunque sea
+ * más tarde.
+ */
+const FALLBACK_POLL_MS = 5 * 60_000;
+
 let pollTimer: number | undefined;
-let lastResultCount: number | null = null;
+let unsubscribeRealtime: (() => void) | undefined;
 
-function notifyLatestResult(): void {
-  const result = latestResult.value;
-  if (!result) return;
-  if (result.status === 'sent') {
-    toast.success(
-      `Tu documento «${result.subject}» fue aprobado por ${result.approverName}`,
-    );
-  } else {
-    toast.error(`Tu documento «${result.subject}» fue rechazado`);
-  }
-}
+/**
+ * Avisa de los cambios de la bandeja que llegan por el canal de eventos.
+ *
+ * El evento solo dice *qué* ha cambiado; los contadores se vuelven a pedir
+ * con la API de siempre para no mantener dos versiones de los datos.
+ */
+async function handleRealtimeEvent(message: RealtimeMessage): Promise<void> {
+  if (!isInboxRealtimeEvent(message.type)) return;
 
-async function pollInbox(): Promise<void> {
-  const previous = resultCount.value;
   await refreshInbox();
-  if (lastResultCount !== null && resultCount.value > previous && latestResult.value) {
-    notifyLatestResult();
+
+  const payload = message.payload;
+  if (!payload) return;
+  if (message.type === 'inbox.result.approved') {
+    toast.success(
+      `Tu documento «${payload.subject}» fue aprobado por ${payload.actorName}`,
+    );
+  } else if (message.type === 'inbox.result.rejected') {
+    toast.error(`Tu documento «${payload.subject}» fue rechazado`);
   }
-  lastResultCount = resultCount.value;
 }
 
 function onGlobalKeydown(event: KeyboardEvent): void {
@@ -115,16 +128,19 @@ onMounted(() => {
   isMac.value = /Mac|iPhone|iPad/.test(navigator.platform);
   window.addEventListener('keydown', onGlobalKeydown);
 
-  if (!canSeeInbox.value) return;
-  void refreshInbox().then(() => {
-    lastResultCount = resultCount.value;
+  unsubscribeRealtime = onRealtimeEvent((message) => {
+    void handleRealtimeEvent(message);
   });
-  // Sondeo ligero para avisar de aprobaciones/rechazos sin recargar.
-  pollTimer = window.setInterval(() => void pollInbox(), 60_000);
+
+  if (!canSeeInbox.value) return;
+  void refreshInbox();
+  // Sondeo ligero como red de seguridad si el canal de eventos se cae.
+  pollTimer = window.setInterval(() => void refreshInbox(), FALLBACK_POLL_MS);
 });
 
 onUnmounted(() => {
   if (pollTimer !== undefined) window.clearInterval(pollTimer);
+  unsubscribeRealtime?.();
   window.removeEventListener('keydown', onGlobalKeydown);
 });
 
