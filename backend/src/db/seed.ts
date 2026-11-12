@@ -116,36 +116,37 @@ async function seed(): Promise<void> {
     const numberingEnabled = !DOC_TYPES_WITHOUT_NUMBER.includes(template.docType);
     const prefix = numberingEnabled ? DOC_TYPE_PREFIX[template.docType] : null;
 
-    let seriesId: string | null = null;
-    if (prefix) {
-      const [series] = await db
-        .insert(numberingSeries)
-        .values({
-          prefix,
-          startValue: 1,
-          padding: 4,
-          includeYear: true,
-          createdBy: admin.id,
-          updatedBy: admin.id,
-        })
-        .returning({ id: numberingSeries.id });
-      seriesId = series?.id ?? null;
-    }
+    const [created] = await db
+      .insert(templates)
+      .values({
+        ownerId: admin.id,
+        designId: designIds[template.designIndex] ?? null,
+        name: template.name,
+        docType: template.docType,
+        description: template.description,
+        schema: template.schema,
+        body: template.body,
+        aiInstructions: template.aiInstructions,
+        isShared: true,
+        numberingEnabled,
+        numberingPrefix: prefix,
+      })
+      .returning({ id: templates.id });
 
-    await db.insert(templates).values({
-      ownerId: admin.id,
-      designId: designIds[template.designIndex] ?? null,
-      name: template.name,
-      docType: template.docType,
-      description: template.description,
-      schema: template.schema,
-      body: template.body,
-      aiInstructions: template.aiInstructions,
-      isShared: true,
-      numberingEnabled,
-      numberingSeriesId: seriesId,
-      numberingPrefix: prefix,
-    });
+    // La serie declara a su plantilla, así que se crea cuando la plantilla ya
+    // existe.
+    if (prefix && created) {
+      await db.insert(numberingSeries).values({
+        templateId: created.id,
+        templateName: template.name,
+        prefix,
+        startValue: 1,
+        padding: 4,
+        includeYear: true,
+        createdBy: admin.id,
+        updatedBy: admin.id,
+      });
+    }
 
     console.log(`  ✓ Plantilla creada: ${template.name}`);
   }

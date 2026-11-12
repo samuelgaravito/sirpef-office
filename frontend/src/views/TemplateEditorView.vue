@@ -41,6 +41,7 @@ import {
   minimumStartValue,
   nextNumberValue,
   normalizeNumberingPrefix,
+  NUMBERING_MESSAGES,
   SYSTEM_VARIABLES,
 } from '@sirpefoffice/shared';
 import type {
@@ -242,6 +243,18 @@ const sharedPrefixSeries = computed(() => {
   );
 });
 
+/**
+ * Modo del prefijo.
+ *
+ * - con texto → prefijo propio;
+ * - con la casilla marcada → código automático (A3F9);
+ * - sin nada → serie sin prefijo (0001-2026).
+ */
+const numberingPrefixMode = computed<'own' | 'auto' | 'none'>(() => {
+  if (numberingPrefixAuto.value) return 'auto';
+  return normalizedNumberingPrefix.value ? 'own' : 'none';
+});
+
 const numberingStartChanged = computed(
   () =>
     !selectedNumberingSeries.value ||
@@ -308,9 +321,16 @@ function syncNumberingFromSeries(): void {
   numberingIncludeYear.value = series.includeYear;
 }
 
+/** Escribir un prefijo propio desmarca el código automático. */
 function onNumberingPrefixChange(): void {
   dirty.value = true;
   numberingPrefixAuto.value = false;
+}
+
+/** Marcar el código automático deja el campo en blanco: lo elige el servidor. */
+function onNumberingPrefixAutoChange(): void {
+  dirty.value = true;
+  if (numberingPrefixAuto.value) numberingPrefix.value = '';
 }
 
 function onDocTypeChange(): void {
@@ -615,7 +635,8 @@ async function save(): Promise<void> {
   saving.value = true;
   try {
     const body = (editor.value?.getJSON() ?? { type: 'doc', content: [] }) as JSONContent;
-    // Prefijo vacío = el servidor asigna un código corto único.
+    // El prefijo es opcional: vacío y sin código automático = serie sin
+    // prefijo (0001-2026).
     const numberingPrefixValue = numberingPrefixAuto.value
       ? ''
       : normalizedNumberingPrefix.value;
@@ -637,6 +658,7 @@ async function save(): Promise<void> {
             numbering: {
               enabled: numberingEnabled.value,
               prefix: numberingPrefixValue,
+              prefixAuto: numberingPrefixAuto.value,
               startValue: numberingStart.value,
               padding: numberingPadding.value,
               includeYear: numberingIncludeYear.value,
@@ -703,6 +725,7 @@ async function togglePreview(): Promise<void> {
       numbering: {
         enabled: numberingEnabled.value,
         prefix: numberingPrefixAuto.value ? '' : normalizedNumberingPrefix.value,
+        prefixAuto: numberingPrefixAuto.value,
         startValue: numberingStart.value,
         padding: numberingPadding.value,
         includeYear: numberingIncludeYear.value,
@@ -1079,6 +1102,24 @@ onMounted(() => {
                 </label>
 
                 <template v-if="numberingEnabled">
+                  <label class="mt-3 flex cursor-pointer items-start gap-2">
+                    <input
+                      v-model="numberingPrefixAuto"
+                      type="checkbox"
+                      class="mt-0.5 accent-[var(--color-accent)]"
+                      :disabled="!isOwner"
+                      @change="onNumberingPrefixAutoChange"
+                    />
+                    <span>
+                      <span class="block text-[12.5px] font-medium">
+                        {{ NUMBERING_MESSAGES.prefixAuto }}
+                      </span>
+                      <span class="block text-[11px] text-ink-subtle">
+                        El servidor elige una etiqueta corta para esta plantilla (p. ej. A3F9).
+                      </span>
+                    </span>
+                  </label>
+
                   <div class="mt-3 grid grid-cols-[minmax(0,1fr)_120px] gap-2">
                     <div>
                       <label class="label">Prefijo</label>
@@ -1086,8 +1127,8 @@ onMounted(() => {
                         v-model="numberingPrefix"
                         class="field h-8 font-mono uppercase"
                         maxlength="20"
-                        placeholder="Automático"
-                        :disabled="!isOwner"
+                        placeholder="Sin prefijo"
+                        :disabled="!isOwner || numberingPrefixAuto"
                         @input="onNumberingPrefixChange"
                       />
                       <p v-if="numberingPrefixError" class="mt-1 text-[11px] text-danger">
@@ -1097,10 +1138,14 @@ onMounted(() => {
                         {{ numberingPrefixHint }}
                       </p>
                       <p v-else-if="numberingPrefixAuto" class="mt-1 text-[10.5px] text-ink-subtle">
-                        Código automático: el servidor lo eligió para esta plantilla.
+                        {{ NUMBERING_MESSAGES.prefixAutoHint }}
+                      </p>
+                      <p v-else-if="!normalizedNumberingPrefix" class="mt-1 text-[10.5px] text-ink-subtle">
+                        {{ NUMBERING_MESSAGES.prefixNoneHint }}
                       </p>
                       <p v-else class="mt-1 text-[10.5px] text-ink-subtle">
-                        Déjalo vacío para que se asigne un código único (p. ej. A3F9).
+                        Etiqueta del número de esta plantilla. Puede repetirse en otra: cada una lleva
+                        su propia enumeración.
                       </p>
                     </div>
                     <div>

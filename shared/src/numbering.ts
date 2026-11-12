@@ -22,9 +22,10 @@ export const DOC_TYPES_WITHOUT_NUMBER: readonly DocType[] = ['resume', 'blank'];
 /**
  * Prefijo de una serie: de 1 a 20 letras o números en mayúsculas.
  *
- * El prefijo es la etiqueta visible del número. **No es único**: cada
- * plantilla tiene su propia serie y puede repetir prefijo, porque su
- * enumeración (su contador) es propia.
+ * El prefijo es **opcional**: una serie puede numerar sin etiqueta
+ * (`0007-2026`). Cuando está, es solo la etiqueta visible del número y **no
+ * es único**: cada plantilla tiene su propia serie y puede repetir prefijo,
+ * porque su enumeración (su contador) es propia.
  */
 export const NUMBERING_PREFIX_PATTERN = /^[A-Z0-9]{1,20}$/;
 export const NUMBERING_MIN_PREFIX_LENGTH = 1;
@@ -116,6 +117,14 @@ export const NUMBERING_MESSAGES = {
   approvedAs: (number: string) => `Aprobado y enviado como ${number}`,
   changedFrom: (number: string, previous: string) =>
     `Se asignó ${number} (el previsto era ${previous})`,
+  /** Prefijo propio: el usuario escribe la etiqueta del número. */
+  prefixOwn: 'Prefijo propio',
+  /** Código corto elegido por el servidor (A3F9). */
+  prefixAuto: 'Código automático',
+  /** Serie sin etiqueta: el número es solo el correlativo. */
+  prefixNone: 'Sin prefijo',
+  prefixNoneHint: 'Los números no llevan prefijo: 0001-2026, 0002-2026…',
+  prefixAutoHint: 'El servidor elige una etiqueta corta para esta plantilla (p. ej. A3F9).',
 } as const;
 
 /** Etiqueta legible de una serie a partir de su prefijo. */
