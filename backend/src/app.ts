@@ -2,6 +2,7 @@ import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import rateLimit from '@fastify/rate-limit';
+import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance } from 'fastify';
 
 import { corsOrigins, env, isProduction } from './env.js';
@@ -15,6 +16,7 @@ import { exportRoutes } from './modules/exports/routes.js';
 import { inboxRoutes } from './modules/inbox/routes.js';
 import { menuRoutes } from './modules/menus/routes.js';
 import { numberingRoutes } from './modules/numbering/routes.js';
+import { realtimeRoutes } from './modules/realtime/routes.js';
 import { templateRoutes } from './modules/templates/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -61,6 +63,11 @@ export async function buildApp(): Promise<FastifyInstance> {
     limits: { fileSize: 10 * 1024 * 1024, files: 10 },
   });
 
+  // El canal de eventos en tiempo real se registra en el ámbito raíz: su
+  // hook de ruta es lo que convierte en WebSocket las rutas con la opción
+  // `websocket: true`, y debe estar activo antes de declararlas.
+  await app.register(websocket);
+
   app.setErrorHandler(errorHandler);
 
   app.get('/api/health', async () => ({
@@ -79,6 +86,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(documentRoutes, { prefix: '/api/documents' });
   await app.register(exportRoutes, { prefix: '/api/documents' });
   await app.register(inboxRoutes, { prefix: '/api/inbox' });
+  await app.register(realtimeRoutes, { prefix: '/api' });
 
   app.setNotFoundHandler((request, reply) => {
     reply.status(404).send({

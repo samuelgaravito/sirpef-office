@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Sparkles, Trash2, UserRound, Users, Zap } from 'lucide-vue-next';
+import { Bell, BellOff, BellRing, Check, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Sparkles, Trash2, UserRound, Users, Zap } from 'lucide-vue-next';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
@@ -7,12 +7,32 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
+import { useNotifications } from '@/composables/useNotifications';
 import { useToast } from '@/composables/useToast';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
 const toast = useToast();
+const notifications = useNotifications();
+const {
+  permission: notifyPermission,
+  muted: notifyMuted,
+  supported: notifySupported,
+} = notifications;
+
+const notificationStatus = computed(() => {
+  if (!notifySupported.value) return 'Este navegador no admite avisos del sistema.';
+  if (notifyPermission.value === 'denied') {
+    return 'El navegador tiene bloqueados los avisos de este sitio. Actívalos desde sus ajustes.';
+  }
+  if (notifyPermission.value !== 'granted') {
+    return 'Aún no has activado los avisos del sistema.';
+  }
+  return notifyMuted.value
+    ? 'Los avisos del sistema están silenciados; la campana de la aplicación seguirá saliendo.'
+    : 'Recibirás un aviso del sistema cuando llegue algo y no estés mirando la aplicación.';
+});
 
 const isSvaUser = computed(() => auth.user?.authProvider === 'sva');
 const usersInSvaUrl = computed(() => svaUsersUrl());
@@ -247,6 +267,57 @@ onMounted(() => {
             {{ savingProfile ? 'Guardando…' : 'Guardar perfil' }}
           </button>
         </div>
+      </section>
+
+      <!-- Avisos -->
+      <section class="card mt-5 p-5">
+        <header class="mb-4 flex items-center gap-2">
+          <Bell class="size-4 text-ink-muted" />
+          <h2 class="text-[14px] font-semibold">Avisos</h2>
+        </header>
+
+        <p class="text-[12.5px] leading-relaxed text-ink-muted">
+          Recibe un aviso del sistema cuando llegue un mensaje, una aprobación o un rechazo a
+          tu bandeja y no estés mirando la aplicación. Funciona mientras SirpefOffice siga
+          abierto en alguna pestaña.
+        </p>
+
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <button
+            v-if="notifySupported && notifyPermission === 'default'"
+            type="button"
+            class="btn btn-primary"
+            @click="notifications.requestPermission()"
+          >
+            <BellRing class="size-4" />
+            Activar avisos del sistema
+          </button>
+          <button
+            v-else-if="notifyPermission === 'granted'"
+            type="button"
+            class="btn btn-outline"
+            @click="notifications.toggleMuted()"
+          >
+            <component :is="notifyMuted ? BellRing : BellOff" class="size-4" />
+            {{ notifyMuted ? 'Reactivar avisos' : 'Silenciar avisos' }}
+          </button>
+
+          <span class="chip">
+            {{
+              !notifySupported
+                ? 'No compatibles'
+                : notifyPermission === 'denied'
+                  ? 'Bloqueados'
+                  : notifyPermission === 'granted'
+                    ? notifyMuted
+                      ? 'Silenciados'
+                      : 'Activados'
+                    : 'Sin activar'
+            }}
+          </span>
+        </div>
+
+        <p class="mt-3 text-[12px] leading-relaxed text-ink-subtle">{{ notificationStatus }}</p>
       </section>
 
       <!-- SVA (solo administradores) -->

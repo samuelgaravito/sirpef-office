@@ -39,6 +39,10 @@
     "smoke:errors:ui": "node scripts/error-ui-check.mjs",
     "smoke:template-share": "tsx scripts/template-share-smoke.ts",
     "smoke:campaign": "tsx scripts/design-campaign-smoke.ts",
+    "smoke:realtime": "tsx scripts/realtime-smoke.ts",
+    "smoke:realtime:proxy": "node scripts/realtime-proxy-smoke.mjs",
+    "smoke:bell": "node scripts/notification-bell-smoke.mjs",
+    "smoke:send-once": "node scripts/send-dialog-smoke.mjs",
     "demo:inbox": "tsx scripts/inbox-demo.ts",
     "demo:inbox:notify": "tsx scripts/inbox-demo.ts --notify",
     "demo:review": "tsx scripts/review-demo.ts",
@@ -52,6 +56,7 @@
     "@fastify/multipart": "^10.1.6",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^10.1.7",
+    "@fastify/websocket": "^11.3.7",
     "@fontsource/georama": "^5.3.0",
     "@tiptap/core": "^3.32.0",
     "@tiptap/extension-hard-break": "^3.32.0",
@@ -79,10 +84,12 @@
     "postgres": "^3.4.9",
     "puppeteer-core": "^23.11.1",
     "tsx": "^4.23.15",
+    "ws": "^8.22.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.2",
     "drizzle-kit": "^0.31.11",
     "typescript": "5.9.3"
   }

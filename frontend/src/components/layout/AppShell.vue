@@ -17,7 +17,6 @@ import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import CommandPalette from '@/components/layout/CommandPalette.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
-import { useToast } from '@/composables/useToast';
 import { logoutFromSva, redirectToSvaLogin } from '@/lib/sva';
 import { PANEL_MODE } from '@/lib/panel';
 import type { Point } from '@/lib/motion';
@@ -26,8 +25,7 @@ import { useAuthStore } from '@/stores/auth';
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
-const { totalCount, resultCount, latestResult, refresh: refreshInbox } = useInboxBadge();
-const toast = useToast();
+const { totalCount, refresh: refreshInbox } = useInboxBadge();
 
 /** Dentro de un panel modal el marco lo pone `ModulePanel`. */
 const embedded = inject(PANEL_MODE, false);
@@ -54,29 +52,14 @@ const initials = computed(() => {
     .join('');
 });
 
+/**
+ * Sondeo de seguridad. El canal de eventos mantiene los contadores al día,
+ * pero si se cae (proxy, red) el sondeo los vuelve a poner al día aunque sea
+ * más tarde.
+ */
+const FALLBACK_POLL_MS = 5 * 60_000;
+
 let pollTimer: number | undefined;
-let lastResultCount: number | null = null;
-
-function notifyLatestResult(): void {
-  const result = latestResult.value;
-  if (!result) return;
-  if (result.status === 'sent') {
-    toast.success(
-      `Tu documento «${result.subject}» fue aprobado por ${result.approverName}`,
-    );
-  } else {
-    toast.error(`Tu documento «${result.subject}» fue rechazado`);
-  }
-}
-
-async function pollInbox(): Promise<void> {
-  const previous = resultCount.value;
-  await refreshInbox();
-  if (lastResultCount !== null && resultCount.value > previous && latestResult.value) {
-    notifyLatestResult();
-  }
-  lastResultCount = resultCount.value;
-}
 
 function onGlobalKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null;
@@ -116,11 +99,9 @@ onMounted(() => {
   window.addEventListener('keydown', onGlobalKeydown);
 
   if (!canSeeInbox.value) return;
-  void refreshInbox().then(() => {
-    lastResultCount = resultCount.value;
-  });
-  // Sondeo ligero para avisar de aprobaciones/rechazos sin recargar.
-  pollTimer = window.setInterval(() => void pollInbox(), 60_000);
+  void refreshInbox();
+  // Sondeo ligero como red de seguridad si el canal de eventos se cae.
+  pollTimer = window.setInterval(() => void refreshInbox(), FALLBACK_POLL_MS);
 });
 
 onUnmounted(() => {

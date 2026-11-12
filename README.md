@@ -52,7 +52,7 @@ y conservar el **historial de versiones** de cada documento.
 | Exportación | PDF (Chrome headless), DOCX (`docx`) y HTML autocontenido, con los datos interpolados y el diseño aplicado. |
 | IA | OpenAI-compatible, Anthropic, Gemini y Ollama; rellena **solo las variables** del formulario (nunca sobrescribe el formato del cuerpo). Modo manual sin IA. |
 | Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
-| Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso en la bandeja (badge, marca **Nuevo** y toast). Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
+| Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso **en tiempo real** en la bandeja: una **campana flotante** con el asunto (que agrupa los avisos seguidos y se va sola a los pocos segundos) y, si el usuario lo autoriza, un **aviso del sistema** cuando no está mirando la aplicación. Además suben el badge y la marca **Nuevo**. Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
 | Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo opcional de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia enumeración —la serie es la dueña del prefijo y del contador—, así que sus números nunca se intercalan con los de otra aunque repitan prefijo. Con el prefijo en blanco la serie numera sin etiqueta (`0001-2026`). Incluye campos automáticos (fecha, firmante, cargo). |
 
 ### Capturas
@@ -651,6 +651,10 @@ cd backend
 | `npm run dev:token -- <correo>` | Emite un access token para un usuario. Los miembros vienen de SVA y no tienen contraseña local: es la forma de abrir su sesión en las pruebas de interfaz. |
 | `npm run admin:reset` | Alinea el email y la contraseña del administrador con los valores del seed. |
 | `npm run smoke:inbox` | Con la API levantada, prueba el flujo de bandeja: solicitud de envío, aprobación, autorización de exportación, sellado, lectura, rechazo y bloqueo de edición/borrado/exportación (crea usuarios y documentos temporales y los elimina). |
+| `npm run smoke:realtime` | Levanta la API y comprueba el canal de eventos: el handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar (necesita PostgreSQL). |
+| `npm run smoke:realtime:proxy` | Con la web de desarrollo levantada, comprueba el mismo canal a través del proxy: login → cookie → handshake por el mismo origen. Acepta `ADMIN_EMAIL` / `ADMIN_PASSWORD`. |
+| `npm run smoke:bell` | Con la web de desarrollo levantada, comprueba en Chrome la campana flotante: aparece con el asunto, agrupa los avisos con contador, se va sola, y Ajustes permite activar o silenciar los avisos del sistema. |
+| `npm run smoke:send-once` | Con la web de desarrollo levantada, comprueba que el diálogo de envío se abre con **un solo clic** en un documento nuevo (la vista se remonta al crearlo y la intención tiene que sobrevivir). |
 | `node scripts/ui-smoke.mjs` | Prueba de humo de la UI con Chrome headless: previews reales de documentos y plantillas, hoja de Diseño con bandas editables y ancho de página completo, inserción de tablas y unión de celdas, creación directa de documentos, modal de diseño al crear plantilla y flujo completo (capturas en `/tmp/sirpefoffice-shots`). |
 | `node scripts/image-smoke.mjs` | Prueba funcional de imágenes A+B: insertar, arrastrar, redimensionar, flotar, alinear y exportar PDF/DOCX (capturas en `/tmp/sirpefoffice-shots-images`). |
 | `node scripts/chrome-smoke.mjs` | Prueba funcional de cabecera/pie: pie visible y anclado en modo lectura, herencia, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño en plantilla y exportación PDF/DOCX (capturas en `/tmp/sirpefoffice-shots-chrome`). |
@@ -707,11 +711,12 @@ sirpefoffice/
 │   └── src/
 │       ├── shared/            # copia generada de shared/src
 │       ├── db/                # Esquema, migraciones y seeds
-│       ├── modules/           # auth, documents, templates, designs, ai, exports
+│       ├── modules/           # auth, documents, templates, designs, numbering,
+│       │                      # realtime (WebSocket), ai, exports
 │       ├── lib/               # render, docx, auth, acceso…
 │       └── index.ts           # Arranque y registro de rutas
 ├── shared/                    # fuente única, sin node_modules
-│   └── src/{index,types,defaults,chrome,editor-extensions,image-node-view}.ts
+│   └── src/{index,types,defaults,chrome,editor-extensions,image-node-view,realtime}.ts
 ├── scripts/                   # sync-shared y publicación en Google Docs
 ├── deploy/                    # Nginx, Caddy, systemd y variables de producción
 ├── docker-compose.prod.yml    # stack Docker: db + api + web (+ caddy)

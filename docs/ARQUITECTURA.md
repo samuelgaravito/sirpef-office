@@ -73,6 +73,7 @@ shared/src/
   defaults.ts            # DEFAULT_DESIGN_TOKENS, PAGE_SIZES_CM, DOC_TYPES, EXPORT_FORMATS
   chrome.ts              # Resolución documento → plantilla → diseño y conversión de tokens
   editor-extensions.ts   # createEditorExtensions(): fuente única cliente/servidor
+  realtime.ts            # Contrato de los eventos en tiempo real (WebSocket)
 
 backend/src/
   index.ts               # Arranque del proceso
@@ -90,6 +91,7 @@ backend/src/
     templates/           # CRUD, clonado, versiones de plantilla
     designs/             # CRUD, clonado
     numbering/           # Series por plantilla y contador
+    realtime/            # Canal de eventos en tiempo real (hub, handshake y publicación)
     ai/                  # providers, service, routes
     exports/             # /export/:format
   lib/
@@ -111,11 +113,12 @@ frontend/src/
   main.ts / router/      # Rutas y guardas de sesión
   api/client.ts          # fetch con refresh automático y descarga de blobs
   stores/auth.ts         # Pinia: usuario, token, login/logout
+  composables/           # useToast, useInboxBadge, useRealtime, useNotifications, …
   views/                 # Login, Home, Documents, DocumentEditor, Templates,
                          # TemplateEditor, Designs, DesignEditor, Settings, NotFound,
                          # Inbox, InboxMessage
   components/
-    layout/AppShell.vue
+    layout/AppShell.vue | NotificationBell.vue
     documents/DocumentCard.vue | DocumentThumbnail.vue
     inbox/SendDocumentDialog.vue
     templates/TemplatePreview.vue | NewTemplateDialog.vue
@@ -616,9 +619,15 @@ instantánea (deuda pendiente).
 
 ### 7.2 Estado
 
-- **Pinia** solo para sesión (`stores/auth.ts`) y notificaciones (`stores/toasts.ts`).
+- **Pinia** solo para sesión (`stores/auth.ts`); los avisos son composables
+  (`useToast`, `useNotifications`).
 - El estado del editor es local a la vista: `document`, `data`, `schema`, `dirty`,
   `saving`, `version`, `conflict`.
+- La vista del editor se **remonta** al cambiar de documento (`App.vue` usa la ruta como
+  clave y es una ruta de primer nivel). Por eso, al crear un documento nuevo desde el
+  botón **Enviar**, la intención de abrir el diálogo se anota antes en
+  `lib/editor-intent.ts` y la recoge la instancia nueva al cargar; si no, el primer clic
+  solo crearía el documento y haría falta un segundo clic.
 - El editor de Diseño añade estado local para `panelOpen`, `zoom`, `lockAspect` y el
   viewport de la hoja (`canvasViewport`); los tokens siguen siendo la única fuente de
   verdad y se sincronizan con `DesignPreview` mediante `v-model`/eventos.
@@ -811,6 +820,70 @@ posición natural, el pie queda **anclado al borde inferior** y `{page}`/`{total
 muestran como `1`/`1`. La repetición en cada página y la numeración real solo se producen
 al exportar PDF/DOCX.
 
+### 7.6 Canal de eventos en tiempo real
+
+La bandeja avisa sin recargar: cuando un envío se crea, se aprueba, se rechaza o se
+cancela, el navegador recibe un aviso y actualiza el badge y la lista.
+
+**Servidor** (`backend/src/modules/realtime/`):
+
+- `routes.ts` expone `GET /api/ws`. El handshake se autentica con la cookie httpOnly
+  `sd_access` —el navegador no puede mandar cabeceras en un WebSocket— o, como
+  alternativa, con `?token=`. El origen se comprueba a mano (CORS no aplica al
+  handshake) y el estado de la cuenta, en la base local. Sin sesión se cierra con
+  **4401**; con un origen no permitido, con **4403**.
+- `hub.ts` mantiene las conexiones agrupadas por usuario, reparte cada evento solo a sus
+  destinatarios, manda un *ping* cada 30 s para detectar conexiones muertas y comprueba
+  cada 5 min que las cuentas de los conectados sigan activas.
+- `events.ts` publica con `pg_notify` en el canal `sirpefoffice_realtime`. Se usa
+  PostgreSQL y no un emisor en memoria porque los scripts de la aplicación (demo, humo,
+  siembra) escriben en la bandeja conectándose directamente a la base de datos: con un
+  emisor en memoria sus cambios no llegarían al navegador. La escucha usa una conexión
+  propia, aparte del pool de consultas, y se reintenta sola si la base no está lista.
+
+**Cliente** (`frontend/src/composables/useRealtime.ts`): una única conexión por sesión,
+abierta en el componente raíz cuando hay sesión y cerrada al cerrarla (no en `AppShell`,
+que se remonta en cada ruta). Se reconecta sola con espera creciente y al volver a la
+pestaña. Los suscriptores reciben el evento y piden los datos con la API de siempre: el
+evento solo dice *qué* ha cambiado, así que no hay dos versiones de la forma de un
+mensaje.
+
+Eventos (`shared/src/realtime.ts`): `connection.ready`, `inbox.message.created`,
+`inbox.message.pending`, `inbox.message.approved`, `inbox.result.approved`,
+`inbox.result.rejected` e `inbox.message.cancelled`.
+
+**Proxy.** El canal viaja por `/api/`, así que el proxy de producción tiene que reenviar
+el *upgrade*: Nginx necesita `proxy_set_header Upgrade` y `proxy_set_header Connection`
+(ya está en `deploy/nginx/`), Caddy lo hace solo y el proxy de Vite necesita `ws: true`.
+
+Verificación: `npm run smoke:realtime` (levanta la API y comprueba handshake, aislamiento
+por destinatario y el flujo envío → aviso → aprobación → aviso) y
+`npm run smoke:realtime:proxy` (el mismo canal a través del proxy de la web).
+
+### 7.7 Campana flotante y avisos del sistema
+
+`components/layout/NotificationBell.vue`, pintada en `App.vue`, muestra un aviso flotante
+arriba a la derecha (bajo la cabecera) cuando llega un evento de la bandeja. El estado y la
+suscripción viven en `composables/useNotifications.ts`, que se engancha **una sola vez** en
+la raíz para que funcione en cualquier ruta:
+
+- La campana **agrupa**: si llegan varios avisos seguidos se queda una sola con el
+  contador y el temporizador se reinicia. **Se va sola a los 6 s**; pasar el puntero o
+  enfocar el aviso pausa la cuenta atrás.
+- Al pulsarla (o al pulsar el aviso del sistema) se abre la bandeja.
+- Si el navegador lo permite, lanza un **aviso del sistema** (`Notification`) **solo
+  cuando la pestaña no está a la vista o la ventana no tiene el foco**, con `tag` para que
+  los avisos se sustituyan en vez de apilarse. El permiso se pide con un clic —los
+  navegadores no permiten pedirlo al cargar— desde la propia campana o desde
+  **Ajustes → Avisos**, donde además se puede silenciar.
+- Requiere contexto seguro (HTTPS o `localhost`), que ya es el caso en desarrollo y
+  producción. Android Chrome no admite el constructor de `Notification` desde la página
+  (haría falta un service worker) y iOS Safari exige PWA instalada; en ambos casos queda
+  la campana dentro de la aplicación.
+
+Verificación: `npm run smoke:bell` (Chrome real: aparece, muestra el asunto, agrupa, se va
+sola y el interruptor de Ajustes cambia el estado).
+
 ---
 
 ## 8. Asistente de IA
@@ -861,6 +934,7 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | `GET` | `/health` | Estado del servicio. |
+| `GET` | `/ws` | Canal de eventos en tiempo real (WebSocket). Autentica el handshake con la cookie de sesión o `?token=`; ver 7.6. |
 | `POST` | `/auth/register` | Registro; el primer usuario del sistema es `admin`, el resto `member`. |
 | `POST` | `/auth/login` | Login; devuelve usuario + access token y cookie refresh. |
 | `POST` | `/auth/refresh` | Rota el refresh token y emite un access nuevo. |
@@ -966,6 +1040,9 @@ diarios de PostgreSQL, rotación de claves, límite de tamaño de subida a nivel
 | Imágenes A+B | `cd backend && node scripts/image-smoke.mjs` | Inserción, arrastre, redimensionado, flotado, alineación, persistencia y exportación PDF/DOCX con imagen. |
 | Cabecera/pie | `cd backend && node scripts/chrome-smoke.mjs` | Pie visible y anclado en modo lectura, herencia documento → plantilla → diseño, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño de una plantilla y exportación. |
 | Exportación | `pdftotext` / `pdfimages` / `unzip` | Verifica datos interpolados, bandas, numeración real, imágenes embebidas y campos `PAGE`/`NUMPAGES` en DOCX. |
+| Tiempo real | `cd backend && npm run smoke:realtime` + `npm run smoke:realtime:proxy` | El handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar. |
+| Campana de avisos | `cd backend && npm run smoke:bell` | En Chrome real: la campana aparece con el asunto, agrupa con contador, se va sola a los 6 s y Ajustes permite activar o silenciar los avisos del sistema. |
+| Envío en un clic | `cd backend && npm run smoke:send-once` | En un documento nuevo, el primer clic en «Enviar» abre el diálogo: la intención sobrevive al remontaje de la vista al pasar de `/documents/new` a `/documents/:id`. |
 
 Las capturas de las pruebas se guardan en `/tmp/sirpefoffice-shots`, `/tmp/sirpefoffice-shots-images` y
 `/tmp/sirpefoffice-shots-chrome` (y una selección en `docs/capturas`).
