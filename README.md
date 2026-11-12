@@ -53,7 +53,7 @@ y conservar el **historial de versiones** de cada documento.
 | IA | OpenAI-compatible, Anthropic, Gemini y Ollama; rellena **solo las variables** del formulario (nunca sobrescribe el formato del cuerpo). Modo manual sin IA. |
 | Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
 | Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso en la bandeja (badge, marca **Nuevo** y toast). Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
-| Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia serie: el prefijo es único entre las plantillas vivas y, si se deja vacío, se asigna un código corto único. Sus números nunca se intercalan con los de otra plantilla. Incluye campos automáticos (fecha, firmante, cargo). |
+| Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia enumeración: su contador y su suelo no se comparten con nadie, aunque dos plantillas repitan prefijo. Si el prefijo se deja vacío, se asigna un código corto único. Sus números nunca se intercalan con los de otra plantilla. Incluye campos automáticos (fecha, firmante, cargo). |
 
 ### Capturas
 
@@ -316,16 +316,20 @@ plantilla con tipo, etiqueta, obligatoriedad, valor por defecto, opciones y ayud
 - El correlativo de la **serie de su plantilla** se asigna cuando el documento se
   **oficializa** (al aprobarlo y enviarlo, o al pasar a `final`/`archived`), no al crearlo.
   Un borrador nunca consume la secuencia: la fila nace con `doc_number = NULL` y la UI
-  muestra un **número previsto** orientativo que no reserva nada. La serie se identifica
-  por el prefijo (`MEM`, `OFI`…), de modo que varias plantillas que lo compartan suman la
-  misma secuencia. La configuración vive en `numbering_series` y el contador en
-  `document_counters` (sin carreras: `INSERT … ON CONFLICT DO UPDATE` dentro de la misma
+  muestra un **número previsto** orientativo que no reserva nada. La serie es **de la
+  plantilla** (`numbering_series.id`, enlazada con `templates.numbering_series_id`): cada
+  plantilla tiene su propia enumeración, con su contador y su suelo, de modo que los
+  números de una plantilla nunca se intercalan con los de otra. El prefijo (`MEM`, `OFI`…)
+  es solo la etiqueta visible del número y **puede repetirse** entre plantillas. La
+  configuración vive en `numbering_series` y el contador en `document_counters`
+  (sin carreras: `INSERT … ON CONFLICT DO UPDATE` dentro de la misma
   transacción que sella el documento). Cada documento emitido guarda además su identidad
-  de serie en `documents.numbering_prefix/year/value`, lo que permite recalcular los
-  contadores sin parsear el texto.
+  de serie en `documents.numbering_series_id` y `documents.numbering_prefix/year/value`, lo
+  que permite recalcular los contadores sin parsear el texto.
 - **La papelera no bloquea la numeración.** El número de un documento solo lo reserva
   mientras el documento está vivo: `documents.doc_number` es único **entre documentos no
-  eliminados** (índice parcial `WHERE deleted_at IS NULL`). Un documento en la papelera
+  eliminados de la misma serie** (índice parcial `WHERE deleted_at IS NULL`, por
+  `(numbering_series_id, doc_number)`). Un documento en la papelera
   conserva su número para la auditoría, pero ya no impide que otro documento lo reciba.
   La reserva comprueba además el suelo real que ocupan los documentos vivos, de modo que
   un contador desfasado (por ejemplo tras una reconciliación) nunca emite un correlativo
@@ -350,13 +354,14 @@ plantilla con tipo, etiqueta, obligatoriedad, valor por defecto, opciones y ayud
 - Desde **Ajustes de la plantilla** se activa o desactiva la numeración y se define el
   prefijo, el número inicial, los dígitos y el reinicio anual. El formato del número es
   `PREFIX-CORRELATIVO-AÑO` (`MEM-0008-2026`) y el prefijo admite de 1 a 20 letras o
-  números. **Cada plantilla lleva su propia numeración**: el prefijo es único entre las
-  plantillas vivas, así que dos plantillas nunca comparten contador ni intercalan sus
-  números. Si el prefijo queda vacío, el servidor asigna un código corto único derivado
-  del identificador de la plantilla (`A3F9`); si el prefijo ya lo usa otra plantilla, el
-  guardado se rechaza indicando a quién pertenece. El número inicial no puede bajar por
-  debajo de lo ya emitido; si se sube, el próximo documento usa ese valor. Las series se
-  consultan y ajustan con `GET /api/numbering` y `PUT /api/numbering/:prefix`.
+  números. **Cada plantilla lleva su propia enumeración**: su contador y su suelo no se
+  comparten con ninguna otra plantilla, así que sus números nunca se intercalan. El
+  prefijo puede repetirse —el panel avisa de que otra plantilla lo usa y explica que las
+  enumeraciones son independientes—; si el prefijo queda vacío, el servidor asigna un
+  código corto único derivado del identificador de la plantilla (`A3F9`). El número
+  inicial no puede bajar por debajo de lo ya emitido; si se sube, el próximo documento usa
+  ese valor. Las series se consultan y ajustan con `GET /api/numbering` y
+  `PUT /api/numbering/:seriesId` (la serie se identifica por su `id`, no por el prefijo).
 - El número está disponible como **variable de sistema** `{{numero_documento}}` en el
   cuerpo, la cabecera y el pie. Se inserta desde **Ajustes → Numeración** o desde la
   pestaña **Variables**, y se rellena al oficializar el documento. La clave
@@ -649,6 +654,7 @@ cd backend
 | `npm run smoke:draft` | Regresión del borrador local del documento nuevo: al abrir una plantilla y volver a entrar el cuerpo no aparece en blanco, el borrador conserva lo escrito y los borradores heredados se reparan (necesita la API y la web de desarrollo levantadas). |
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
+| `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, código automático cuando no hay prefijo, aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |
 
 ### Frontend
 

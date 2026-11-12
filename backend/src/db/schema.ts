@@ -153,26 +153,36 @@ export const designs = pgTable(
 );
 
 /**
- * Series de numeración correlativa. La clave es el prefijo (MEM, OFI…).
+ * Series de numeración correlativa. La clave es su `id`, no el prefijo.
  *
- * Cada serie pertenece como mucho a una plantilla viva: dos plantillas que
- * numeraran con el mismo prefijo repetirían números, así que el prefijo es
- * único entre las plantillas activas (índice
- * `templates_numbering_prefix_unique_idx`). Una serie liberada conserva su
- * contador, de modo que el correlativo nunca se reutiliza.
+ * Cada serie pertenece a una plantilla, que la referencia con
+ * `templates.numbering_series_id` (índice único: la relación es 1 a 1). El
+ * prefijo es solo la etiqueta visible del número (`MEM-0007-2026`) y **puede
+ * repetirse** entre series: dos plantillas con el mismo prefijo enumeran por
+ * separado, con su propio contador y su propio suelo, así que sus números
+ * nunca se intercalan.
+ *
+ * Una serie liberada (su plantilla se borró) conserva su contador, de modo que
+ * el correlativo nunca se reutiliza.
  */
-export const numberingSeries = pgTable('numbering_series', {
-  prefix: text('prefix').primaryKey(),
-  /** Primer número de la serie y de cada año nuevo. */
-  startValue: integer('start_value').notNull().default(1),
-  padding: integer('padding').notNull().default(4),
-  /** Si el número incluye el año y el contador se reinicia cada año. */
-  includeYear: boolean('include_year').notNull().default(true),
-  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
-  updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const numberingSeries = pgTable(
+  'numbering_series',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Etiqueta visible del número. No es única: cada serie tiene la suya. */
+    prefix: text('prefix').notNull(),
+    /** Primer número de la serie y de cada año nuevo. */
+    startValue: integer('start_value').notNull().default(1),
+    padding: integer('padding').notNull().default(4),
+    /** Si el número incluye el año y el contador se reinicia cada año. */
+    includeYear: boolean('include_year').notNull().default(true),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('numbering_series_prefix_idx').on(t.prefix)],
+);
 
 export const templates = pgTable(
   'templates',
@@ -184,10 +194,18 @@ export const templates = pgTable(
     designId: uuid('design_id').references(() => designs.id, { onDelete: 'set null' }),
     /** Si la plantilla asigna número correlativo al crear documentos. */
     numberingEnabled: boolean('numbering_enabled').notNull().default(true),
-    /** Serie de numeración; null = sin número. */
-    numberingPrefix: text('numbering_prefix').references(() => numberingSeries.prefix, {
+    /**
+     * Serie de numeración propia de la plantilla: es la dueña de su
+     * enumeración, con su contador y su suelo. `null` = sin serie.
+     */
+    numberingSeriesId: uuid('numbering_series_id').references(() => numberingSeries.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Prefijo visible del número. Copia de `numbering_series.prefix`: se
+     * guarda aquí para no tener que unir con la serie en cada lectura.
+     */
+    numberingPrefix: text('numbering_prefix'),
     /**
      * El prefijo lo asignó el servidor (plantilla sin prefijo propio). Si el
      * usuario lo edita, pasa a ser manual.
@@ -218,13 +236,13 @@ export const templates = pgTable(
     index('templates_owner_idx').on(t.ownerId),
     index('templates_design_idx').on(t.designId),
     /**
-     * Cada plantilla viva lleva su propia serie: dos plantillas con el mismo
-     * prefijo compartirían contador y sus números se intercalaría. El índice
-     * es parcial para que una plantilla en la papelera no bloquee su prefijo.
+     * Una enumeración por plantilla: la serie no se comparte con nadie. El
+     * índice es parcial para que una serie liberada (plantilla en la papelera)
+     * pueda volver a adoptarse.
      */
-    uniqueIndex('templates_numbering_prefix_unique_idx')
-      .on(t.numberingPrefix)
-      .where(sql`${t.numberingPrefix} is not null and ${t.deletedAt} is null`),
+    uniqueIndex('templates_numbering_series_unique_idx')
+      .on(t.numberingSeriesId)
+      .where(sql`${t.numberingSeriesId} is not null`),
   ],
 );
 
@@ -301,6 +319,13 @@ export const documents = pgTable(
     numberingPrefix: text('numbering_prefix'),
     numberingYear: integer('numbering_year'),
     numberingValue: integer('numbering_value'),
+    /**
+     * Serie que emitió el documento. Es la que fija el suelo del contador:
+     * dos series distintas (aunque compartan prefijo) no se pisan.
+     */
+    numberingSeriesId: uuid('numbering_series_id').references(() => numberingSeries.id, {
+      onDelete: 'set null',
+    }),
     /** Contenido TipTap actual. */
     content: jsonb('content').$type<JSONContent>().notNull(),
     /** Sobrescritura de cabecera; null = hereda de plantilla/diseño. */
@@ -323,12 +348,20 @@ export const documents = pgTable(
     index('documents_updated_idx').on(t.updatedAt),
     index('documents_template_idx').on(t.templateId),
     index('documents_design_idx').on(t.designId),
-    // Un número solo lo reserva el documento que lo tiene **vivo**. Un
-    // documento en la papelera conserva su número para la auditoría, pero no
-    // bloquea a quien lo necesite: el índice es parcial por `deleted_at`.
+    // Un número solo lo reserva el documento que lo tiene **vivo**, y es
+    // único **dentro de su serie**: dos plantillas pueden usar el mismo
+    // prefijo y cada una lleva su propia enumeración. Los documentos sin
+    // serie (sueltos o heredados) conservan la unicidad global.
+    uniqueIndex('documents_doc_number_series_idx')
+      .on(t.numberingSeriesId, t.docNumber)
+      .where(
+        sql`${t.docNumber} is not null and ${t.deletedAt} IS NULL and ${t.numberingSeriesId} is not null`,
+      ),
     uniqueIndex('documents_doc_number_idx')
       .on(t.docNumber)
-      .where(sql`${t.deletedAt} IS NULL`),
+      .where(
+        sql`${t.docNumber} is not null and ${t.deletedAt} IS NULL and ${t.numberingSeriesId} is null`,
+      ),
     // Búsqueda full-text dentro del contenido del documento
     index('documents_content_gin_idx').using('gin', sql`to_tsvector('simple', ${t.content}::text)`),
   ],
@@ -470,15 +503,23 @@ export const documentMessageRecipients = pgTable(
   ],
 );
 
-/** Contadores de numeración correlativa por tipo de documento y año. */
+/**
+ * Contadores de numeración correlativa por serie y año.
+ *
+ * La clave es la serie (`series_id`), no el prefijo: así cada plantilla lleva
+ * su propio contador aunque otra use el mismo prefijo.
+ */
 export const documentCounters = pgTable(
   'document_counters',
   {
-    scope: text('scope').notNull(),
+    /** Serie cuyo contador es este. */
+    seriesId: uuid('series_id')
+      .notNull()
+      .references(() => numberingSeries.id, { onDelete: 'cascade' }),
     year: integer('year').notNull(),
     counter: integer('counter').notNull().default(0),
   },
-  (t) => [primaryKey({ columns: [t.scope, t.year] })],
+  (t) => [primaryKey({ columns: [t.seriesId, t.year] })],
 );
 
 /**
@@ -505,6 +546,10 @@ export const documentsRelations = relations(documents, ({ one, many }) => ({
   owner: one(users, { fields: [documents.ownerId], references: [users.id] }),
   template: one(templates, { fields: [documents.templateId], references: [templates.id] }),
   design: one(designs, { fields: [documents.designId], references: [designs.id] }),
+  numberingSeries: one(numberingSeries, {
+    fields: [documents.numberingSeriesId],
+    references: [numberingSeries.id],
+  }),
   versions: many(documentVersions),
   shares: many(documentShares),
   comments: many(comments),
@@ -525,8 +570,8 @@ export const templatesRelations = relations(templates, ({ one, many }) => ({
   owner: one(users, { fields: [templates.ownerId], references: [users.id] }),
   design: one(designs, { fields: [templates.designId], references: [designs.id] }),
   numberingSeries: one(numberingSeries, {
-    fields: [templates.numberingPrefix],
-    references: [numberingSeries.prefix],
+    fields: [templates.numberingSeriesId],
+    references: [numberingSeries.id],
   }),
   versions: many(templateVersions),
   shares: many(templateShares),
@@ -543,7 +588,6 @@ export const templateSharesRelations = relations(templateShares, ({ one }) => ({
 export const numberingSeriesRelations = relations(numberingSeries, ({ many }) => ({
   templates: many(templates),
 }));
-
 export const designsRelations = relations(designs, ({ one, many }) => ({
   owner: one(users, { fields: [designs.ownerId], references: [users.id] }),
   templates: many(templates),

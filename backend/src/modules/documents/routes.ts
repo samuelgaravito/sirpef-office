@@ -49,7 +49,12 @@ import {
 } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
-import { numberDocumentInTx, numberingPreviewsFor, previewDocumentNumber } from '../../lib/counter.js';
+import {
+  numberDocumentInTx,
+  numberingPreviewsFor,
+  previewDocumentNumber,
+  templateNumberingFrom,
+} from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, internal, locked, notFound } from '../../lib/errors.js';
 import { resolveTemplateDesign } from '../../lib/active-design.js';
 import { sameJson } from '../../lib/json.js';
@@ -325,6 +330,8 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         templateSchema: templates.schema,
         templateNumberingEnabled: templates.numberingEnabled,
         templateNumberingPrefix: templates.numberingPrefix,
+        templateNumberingSeriesId: templates.numberingSeriesId,
+        templateId: templates.id,
       })
       .from(documents)
       .innerJoin(users, eq(users.id, documents.ownerId))
@@ -349,8 +356,10 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         template:
           row.templateNumberingEnabled !== null
             ? {
+                templateId: row.templateId,
                 numberingEnabled: row.templateNumberingEnabled,
                 numberingPrefix: row.templateNumberingPrefix,
+                numberingSeriesId: row.templateNumberingSeriesId,
               }
             : null,
       })),
@@ -402,12 +411,14 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       ? (
           await db
             .select({
+              id: templates.id,
               name: templates.name,
               schema: templates.schema,
               header: templates.header,
               footer: templates.footer,
               numberingEnabled: templates.numberingEnabled,
               numberingPrefix: templates.numberingPrefix,
+              numberingSeriesId: templates.numberingSeriesId,
             })
             .from(templates)
             .where(and(eq(templates.id, document.templateId), isNull(templates.deletedAt)))
@@ -460,12 +471,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       ? null
       : await previewDocumentNumber({
           docType: document.docType,
-          template: template
-            ? {
-                numberingEnabled: template.numberingEnabled,
-                numberingPrefix: template.numberingPrefix,
-              }
-            : null,
+          template: template ? templateNumberingFrom(template) : null,
         });
 
     // Si la solicitud más reciente fue rechazada, el remitente necesita el
@@ -871,9 +877,10 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     /**
      * Restaurar nunca falla por un número. Como el correlativo solo lo
      * reservan los documentos vivos, un documento que sale de la papelera
-     * puede encontrarse con que su número ya lo ocupa otro. En ese caso se
-     * le libera el número: vuelve a ser un borrador y recibirá uno nuevo la
-     * próxima vez que se oficialice.
+     * puede encontrarse con que su número ya lo ocupa otro de **su misma
+     * serie**. En ese caso se le libera el número: vuelve a ser un borrador y
+     * recibirá uno nuevo la próxima vez que se oficialice. Dos series que
+     * compartan prefijo pueden mostrar el mismo texto sin interferir.
      */
     let releasedDocNumber: string | null = null;
 
@@ -886,6 +893,9 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
             eq(documents.docNumber, row.docNumber),
             isNull(documents.deletedAt),
             ne(documents.id, id),
+            row.numberingSeriesId
+              ? eq(documents.numberingSeriesId, row.numberingSeriesId)
+              : isNull(documents.numberingSeriesId),
           ),
         )
         .limit(1);
@@ -903,6 +913,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
             numberingPrefix: null,
             numberingYear: null,
             numberingValue: null,
+            numberingSeriesId: null,
             data: nextData,
             updatedAt: new Date(),
           })

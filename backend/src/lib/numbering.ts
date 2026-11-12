@@ -27,7 +27,7 @@ import {
   numberingSeries,
   templates,
 } from '../db/schema.js';
-import { badRequest, conflict, forbidden, notFound } from './errors.js';
+import { badRequest, forbidden, internal, notFound } from './errors.js';
 
 /**
  * Ejecutor de consultas: la conexión normal o una transacción. Permite que la
@@ -53,7 +53,7 @@ export interface NumberingUser {
   role: 'admin' | 'member';
 }
 
-/** Plantilla viva que usa una serie. */
+/** Plantilla que usa una serie. */
 export interface SeriesOwner {
   id: string;
   name: string;
@@ -65,9 +65,9 @@ export interface SeriesOwner {
 /**
  * Valida y normaliza un prefijo de serie.
  *
- * El prefijo identifica la serie y es único entre las plantillas vivas: dos
- * plantillas que compartieran prefijo compartirían contador y sus números se
- * intercalaría.
+ * El prefijo es solo la etiqueta visible del número: **no tiene que ser
+ * único**. Cada plantilla tiene su propia enumeración, así que dos plantillas
+ * pueden usar el mismo prefijo sin compartir contador.
  */
 export function parseNumberingPrefix(raw: string): string {
   const prefix = normalizeNumberingPrefix(raw);
@@ -88,36 +88,34 @@ function assertRange(name: string, value: number, min: number, max: number): voi
   }
 }
 
-/** Devuelve la serie de un prefijo o null si todavía no existe. */
-export async function getNumberingSeries(prefix: string): Promise<NumberingSeriesRow | null> {
-  const normalized = normalizeNumberingPrefix(prefix);
+/** Devuelve la serie con ese identificador o null si no existe. */
+export async function getNumberingSeries(id: string): Promise<NumberingSeriesRow | null> {
   const [row] = await db
     .select()
     .from(numberingSeries)
-    .where(eq(numberingSeries.prefix, normalized))
+    .where(eq(numberingSeries.id, id))
     .limit(1);
   return row ?? null;
 }
 
-/** ¿Existe ya una serie con ese prefijo? */
-export async function seriesExists(prefix: string): Promise<boolean> {
+/**
+ * Serie de una plantilla.
+ *
+ * Cada plantilla tiene **su propia** enumeración: la serie que enlaza con
+ * `templates.numbering_series_id`. Nunca se comparte con otra plantilla.
+ */
+export async function getTemplateSeries(templateId: string): Promise<NumberingSeriesRow | null> {
   const [row] = await db
-    .select({ prefix: numberingSeries.prefix })
-    .from(numberingSeries)
-    .where(eq(numberingSeries.prefix, prefix))
+    .select({ series: numberingSeries })
+    .from(templates)
+    .innerJoin(numberingSeries, eq(templates.numberingSeriesId, numberingSeries.id))
+    .where(eq(templates.id, templateId))
     .limit(1);
-  return Boolean(row);
+  return row?.series ?? null;
 }
 
-/**
- * Plantilla viva que usa la serie de este prefijo.
- *
- * Como el prefijo es único entre las plantillas vivas, solo puede haber una.
- */
-export async function findSeriesOwner(
-  prefix: string,
-  excludeTemplateId?: string,
-): Promise<SeriesOwner | null> {
+/** Plantilla que usa la serie (si la hay). */
+export async function findSeriesOwner(seriesId: string): Promise<SeriesOwner | null> {
   const [row] = await db
     .select({
       id: templates.id,
@@ -127,6 +125,39 @@ export async function findSeriesOwner(
       isActive: templates.isActive,
     })
     .from(templates)
+    .where(eq(templates.numberingSeriesId, seriesId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Plantillas vivas que usan un prefijo.
+ *
+ * No es un conflicto: cada una lleva su propia enumeración. Solo se usa para
+ * avisar en la interfaz de que la etiqueta está repetida.
+ */
+export async function templatesUsingPrefix(
+  prefix: string,
+  excludeTemplateId?: string,
+): Promise<Array<{ id: string; name: string }>> {
+  if (prefix === '') return [];
+  return db
+    .select({ id: templates.id, name: templates.name })
+    .from(templates)
+    .where(
+      and(
+        eq(templates.numberingPrefix, prefix),
+        isNull(templates.deletedAt),
+        excludeTemplateId ? ne(templates.id, excludeTemplateId) : undefined,
+      ),
+    );
+}
+
+/** ¿Alguna plantilla viva usa ya ese prefijo? */
+export async function prefixInUse(prefix: string, excludeTemplateId?: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: templates.id })
+    .from(templates)
     .where(
       and(
         eq(templates.numberingPrefix, prefix),
@@ -135,7 +166,119 @@ export async function findSeriesOwner(
       ),
     )
     .limit(1);
-  return row ?? null;
+  return Boolean(row);
+}
+
+/**
+ * Código corto y único para una plantilla sin prefijo propio.
+ *
+ * Se deriva del identificador de la plantilla (estable aunque se renombre) y
+ * se alarga si el resultado ya lo usa otra plantilla.
+ */
+export async function generateAutoPrefix(templateId: string): Promise<string> {
+  for (let length = NUMBERING_AUTO_PREFIX_LENGTH; length <= NUMBERING_MAX_PREFIX_LENGTH; length += 1) {
+    const candidate = autoNumberingPrefix(templateId, length);
+    if (!(await prefixInUse(candidate, templateId))) return candidate;
+  }
+  throw badRequest('No se pudo asignar un prefijo automático. Escribe un prefijo propio.');
+}
+
+/**
+ * Crea la serie de una plantilla si no tiene una y la enlaza con ella.
+ *
+ * Si la plantilla ya tiene serie, se respeta su configuración: solo se
+ * actualiza el prefijo (que es la etiqueta) y los ajustes que se hayan
+ * pedido. El contador **no** se reinicia: la enumeración sigue donde estaba.
+ */
+export async function ensureTemplateSeries(
+  options: {
+    templateId: string;
+    prefix: string;
+    startValue?: number | undefined;
+    padding?: number | undefined;
+    includeYear?: boolean | undefined;
+    createdBy?: string | null | undefined;
+  },
+): Promise<NumberingSeriesRow> {
+  const prefix = parseNumberingPrefix(options.prefix);
+  const existing = await getTemplateSeries(options.templateId);
+
+  if (existing) {
+    const startValue = options.startValue ?? existing.startValue;
+    const padding = options.padding ?? existing.padding;
+    const includeYear = options.includeYear ?? existing.includeYear;
+
+    const configChanged =
+      startValue !== existing.startValue ||
+      padding !== existing.padding ||
+      includeYear !== existing.includeYear;
+
+    if (configChanged) {
+      // Los ajustes del contador se validan aparte (el número inicial no
+      // puede bajar del último emitido).
+      return updateNumberingSeries(
+        existing.id,
+        { startValue, padding, includeYear },
+        options.createdBy ?? existing.updatedBy ?? '',
+      );
+    }
+
+    if (prefix !== existing.prefix) {
+      // Solo cambia la etiqueta: la enumeración sigue intacta.
+      const [renamed] = await db
+        .update(numberingSeries)
+        .set({
+          prefix,
+          updatedBy: options.createdBy ?? existing.updatedBy,
+          updatedAt: new Date(),
+        })
+        .where(eq(numberingSeries.id, existing.id))
+        .returning();
+      if (!renamed) {
+        throw internal('NUMBERING_SERIES_UPDATE_FAILED', 'No se pudo actualizar la serie de numeración');
+      }
+      return renamed;
+    }
+
+    return existing;
+  }
+
+  assertRange('El número inicial', options.startValue ?? 1, 1, NUMBERING_MAX_START);
+  assertRange('El relleno', options.padding ?? 4, 1, NUMBERING_MAX_PADDING);
+
+  const [created] = await db
+    .insert(numberingSeries)
+    .values({
+      prefix,
+      startValue: options.startValue ?? 1,
+      padding: options.padding ?? 4,
+      includeYear: options.includeYear ?? true,
+      createdBy: options.createdBy ?? null,
+      updatedBy: options.createdBy ?? null,
+    })
+    .returning();
+
+  if (!created) {
+    throw internal('NUMBERING_SERIES_CREATE_FAILED', 'No se pudo crear la serie de numeración');
+  }
+
+  await db
+    .update(templates)
+    .set({ numberingSeriesId: created.id, updatedAt: new Date() })
+    .where(eq(templates.id, options.templateId));
+
+  return created;
+}
+
+/** Último número emitido por la serie en el período vigente (0 si aún no hay). */
+export async function lastIssuedNumber(seriesId: string, includeYear: boolean): Promise<number> {
+  const year = numberingPeriodYear(includeYear);
+  const [row] = await db
+    .select({ counter: documentCounters.counter })
+    .from(documentCounters)
+    .where(and(eq(documentCounters.seriesId, seriesId), eq(documentCounters.year, year)))
+    .limit(1);
+  return row?.counter ?? 0;
 }
 
 /** El usuario puede ver los datos de una plantilla ajena si está compartida. */
@@ -145,87 +288,17 @@ function canSeeOwner(owner: SeriesOwner, user: NumberingUser): boolean {
   return user.role === 'admin' || owner.isActive;
 }
 
-/**
- * Código corto y único para una plantilla sin prefijo propio.
- *
- * Se deriva del identificador de la plantilla (estable aunque se renombre) y
- * se alarga si el resultado ya está ocupado por otra serie.
- *
- * Si la plantilla ya tiene un código automático propio, se conserva: es el
- * que identificaba su serie y cambiarlo rompería su enumeración.
- */
-export async function generateAutoPrefix(
-  templateId: string,
-  currentPrefix?: string | null,
-): Promise<string> {
-  if (currentPrefix) {
-    const owner = await findSeriesOwner(currentPrefix, templateId);
-    // La serie es suya (o está libre): se mantiene el código.
-    if (!owner || owner.id === templateId) return currentPrefix;
-  }
-
-  for (let length = NUMBERING_AUTO_PREFIX_LENGTH; length <= NUMBERING_MAX_PREFIX_LENGTH; length += 1) {
-    const candidate = autoNumberingPrefix(templateId, length);
-    if (!(await seriesExists(candidate))) return candidate;
-  }
-  throw badRequest('No se pudo asignar un prefijo automático. Escribe un prefijo propio.');
-}
-
-/** Crea la serie si no existe; si ya existe, respeta su configuración. */
-export async function ensureNumberingSeries(
-  input: NumberingSeriesInput,
-): Promise<NumberingSeriesRow> {
-  const prefix = parseNumberingPrefix(input.prefix);
-  const existing = await getNumberingSeries(prefix);
-  if (existing) return existing;
-
-  assertRange('El número inicial', input.startValue, 1, NUMBERING_MAX_START);
-  assertRange('El relleno', input.padding, 1, NUMBERING_MAX_PADDING);
-
-  const [created] = await db
-    .insert(numberingSeries)
-    .values({
-      prefix,
-      startValue: input.startValue,
-      padding: input.padding,
-      includeYear: input.includeYear,
-      createdBy: input.createdBy ?? null,
-      updatedBy: input.createdBy ?? null,
-    })
-    // Otra petición simultánea pudo crearla: se reutiliza la existente.
-    .onConflictDoNothing({ target: numberingSeries.prefix })
-    .returning();
-
-  if (created) return created;
-
-  const raced = await getNumberingSeries(prefix);
-  if (!raced) throw new Error('No se pudo crear la serie de numeración');
-  return raced;
-}
-
-/** Último número emitido en el período vigente (0 si aún no hay). */
-export async function lastIssuedNumber(
-  prefix: string,
-  includeYear: boolean,
-): Promise<number> {
-  const year = numberingPeriodYear(includeYear);
-  const [row] = await db
-    .select({ counter: documentCounters.counter })
-    .from(documentCounters)
-    .where(and(eq(documentCounters.scope, prefix), eq(documentCounters.year, year)))
-    .limit(1);
-  return row?.counter ?? 0;
-}
-
 function toState(
   series: NumberingSeriesRow,
   lastIssued: number,
   owner: SeriesOwner | null,
   user: NumberingUser | null,
+  prefixShared: boolean,
 ): NumberingSeriesState {
   const nextValue = nextNumberValue(series, lastIssued);
   const visible = owner && user ? canSeeOwner(owner, user) : Boolean(owner);
   return {
+    id: series.id,
     prefix: series.prefix,
     startValue: series.startValue,
     padding: series.padding,
@@ -239,23 +312,24 @@ function toState(
       padding: series.padding,
       includeYear: series.includeYear,
     }),
-    taken: Boolean(owner),
     templateId: visible ? (owner?.id ?? null) : null,
     templateName: visible ? (owner?.name ?? null) : null,
+    prefixShared,
   };
 }
 
 /** Estado de una serie concreta (incluye el próximo número). */
 export async function getNumberingState(
-  prefix: string,
+  seriesId: string,
   user?: NumberingUser,
 ): Promise<NumberingSeriesState | null> {
-  const series = await getNumberingSeries(prefix);
+  const series = await getNumberingSeries(seriesId);
   if (!series) return null;
 
-  const lastIssued = await lastIssuedNumber(series.prefix, series.includeYear);
-  const owner = await findSeriesOwner(series.prefix);
-  return toState(series, lastIssued, owner, user ?? null);
+  const lastIssued = await lastIssuedNumber(series.id, series.includeYear);
+  const owner = await findSeriesOwner(series.id);
+  const shared = await prefixInUse(series.prefix, owner?.id);
+  return toState(series, lastIssued, owner, user ?? null, shared);
 }
 
 /** Todas las series ordenadas por prefijo. */
@@ -265,7 +339,7 @@ export async function listNumberingStates(user?: NumberingUser): Promise<Numberi
 
   const counters = await db.select().from(documentCounters);
   const counterByKey = new Map<string, number>();
-  for (const row of counters) counterByKey.set(`${row.scope}:${row.year}`, row.counter);
+  for (const row of counters) counterByKey.set(`${row.seriesId}:${row.year}`, row.counter);
 
   // Una sola consulta para saber qué plantilla usa cada serie.
   const owners = await db
@@ -275,15 +349,14 @@ export async function listNumberingStates(user?: NumberingUser): Promise<Numberi
       ownerId: templates.ownerId,
       isShared: templates.isShared,
       isActive: templates.isActive,
-      prefix: templates.numberingPrefix,
+      seriesId: templates.numberingSeriesId,
     })
     .from(templates)
-    .where(and(isNull(templates.deletedAt), ne(templates.numberingPrefix, '')));
-  const ownerByPrefix = new Map<string, SeriesOwner>();
+    .where(and(isNull(templates.deletedAt), isNotNull(templates.numberingSeriesId)));
+  const ownerBySeries = new Map<string, SeriesOwner>();
   for (const row of owners) {
-    if (!row.prefix) continue;
-    if (ownerByPrefix.has(row.prefix)) continue;
-    ownerByPrefix.set(row.prefix, {
+    if (!row.seriesId) continue;
+    ownerBySeries.set(row.seriesId, {
       id: row.id,
       name: row.name,
       ownerId: row.ownerId,
@@ -292,10 +365,17 @@ export async function listNumberingStates(user?: NumberingUser): Promise<Numberi
     });
   }
 
+  // Prefijos repetidos: cada serie conserva su enumeración.
+  const prefixCount = new Map<string, number>();
+  for (const row of series) {
+    prefixCount.set(row.prefix, (prefixCount.get(row.prefix) ?? 0) + 1);
+  }
+
   return series.map((row) => {
     const year = numberingPeriodYear(row.includeYear);
-    const lastIssued = counterByKey.get(`${row.prefix}:${year}`) ?? 0;
-    return toState(row, lastIssued, ownerByPrefix.get(row.prefix) ?? null, user ?? null);
+    const lastIssued = counterByKey.get(`${row.id}:${year}`) ?? 0;
+    const owner = ownerBySeries.get(row.id) ?? null;
+    return toState(row, lastIssued, owner, user ?? null, (prefixCount.get(row.prefix) ?? 0) > 1);
   });
 }
 
@@ -305,12 +385,11 @@ export async function listNumberingStates(user?: NumberingUser): Promise<Numberi
  * usará exactamente ese valor.
  */
 export async function updateNumberingSeries(
-  rawPrefix: string,
+  seriesId: string,
   patch: NumberingSeriesPatch,
   userId: string,
 ): Promise<NumberingSeriesRow> {
-  const prefix = parseNumberingPrefix(rawPrefix);
-  const series = await getNumberingSeries(prefix);
+  const series = await getNumberingSeries(seriesId);
   if (!series) throw notFound('Serie de numeración no encontrada');
 
   const startValue = patch.startValue ?? series.startValue;
@@ -324,7 +403,7 @@ export async function updateNumberingSeries(
     const [anyCounter] = await db
       .select({ counter: documentCounters.counter })
       .from(documentCounters)
-      .where(eq(documentCounters.scope, prefix))
+      .where(eq(documentCounters.seriesId, seriesId))
       .orderBy(sql`${documentCounters.counter} desc`)
       .limit(1);
     if ((anyCounter?.counter ?? 0) > 0) {
@@ -335,7 +414,7 @@ export async function updateNumberingSeries(
   }
 
   if (startValue !== series.startValue) {
-    const lastIssued = await lastIssuedNumber(prefix, includeYear);
+    const lastIssued = await lastIssuedNumber(seriesId, includeYear);
     const minimum = minimumStartValue(lastIssued);
     if (startValue < minimum) {
       throw badRequest(
@@ -347,9 +426,9 @@ export async function updateNumberingSeries(
     const year = numberingPeriodYear(includeYear);
     await db
       .insert(documentCounters)
-      .values({ scope: prefix, year, counter: startValue - 1 })
+      .values({ seriesId, year, counter: startValue - 1 })
       .onConflictDoUpdate({
-        target: [documentCounters.scope, documentCounters.year],
+        target: [documentCounters.seriesId, documentCounters.year],
         set: { counter: startValue - 1 },
       });
   }
@@ -363,44 +442,46 @@ export async function updateNumberingSeries(
       updatedBy: userId,
       updatedAt: new Date(),
     })
-    .where(eq(numberingSeries.prefix, prefix))
+    .where(eq(numberingSeries.id, seriesId))
     .returning();
 
-  if (!updated) throw new Error('No se pudo actualizar la serie de numeración');
+  if (!updated) {
+    throw internal('NUMBERING_SERIES_UPDATE_FAILED', 'No se pudo actualizar la serie de numeración');
+  }
   return updated;
 }
 
 /**
  * Suelo real de cada serie: el mayor correlativo que ocupan los documentos
- * vivos de ese prefijo y año.
+ * vivos de esa serie y año.
  *
  * Evita previsualizar un número ya ocupado aunque el contador esté
- * desfasado (por ejemplo tras una restauración de la base de datos).
+ * desfasado (por ejemplo tras una restauración de la base de datos). Cada
+ * serie cuenta solo con sus propios documentos: dos series que compartan
+ * prefijo no se pisan.
  */
-export async function liveNumberingFloors(
-  prefixes: string[],
-): Promise<Map<string, number>> {
+export async function liveNumberingFloors(seriesIds: string[]): Promise<Map<string, number>> {
   const floors = new Map<string, number>();
-  if (prefixes.length === 0) return floors;
+  if (seriesIds.length === 0) return floors;
 
   const rows = await db
     .select({
-      prefix: documents.numberingPrefix,
+      seriesId: documents.numberingSeriesId,
       year: documents.numberingYear,
       value: documents.numberingValue,
     })
     .from(documents)
     .where(
       and(
-        inArray(documents.numberingPrefix, prefixes),
+        inArray(documents.numberingSeriesId, seriesIds),
         isNull(documents.deletedAt),
         isNotNull(documents.numberingValue),
       ),
     );
 
   for (const row of rows) {
-    if (!row.prefix || row.value === null || row.year === null) continue;
-    const key = `${row.prefix}:${row.year}`;
+    if (!row.seriesId || row.value === null || row.year === null) continue;
+    const key = `${row.seriesId}:${row.year}`;
     const current = floors.get(key) ?? 0;
     if (row.value > current) floors.set(key, row.value);
   }
@@ -430,17 +511,17 @@ export async function reserveDocumentNumber(
 ): Promise<ReservedNumber> {
   const year = numberingPeriodYear(series.includeYear);
 
-  // Suelo real: el mayor correlativo que ocupan los documentos vivos. Si el
-  // contador quedó desfasado (por una restauración o un ajuste manual), el
-  // número reservado nunca pisa uno ya emitido.
-  const floor = await liveNumberingFloors([series.prefix]);
-  const realFloor = floor.get(`${series.prefix}:${year}`) ?? 0;
+  // Suelo real: el mayor correlativo que ocupan los documentos vivos de esta
+  // serie. Si el contador quedó desfasado (por una restauración o un ajuste
+  // manual), el número reservado nunca pisa uno ya emitido.
+  const floor = await liveNumberingFloors([series.id]);
+  const realFloor = floor.get(`${series.id}:${year}`) ?? 0;
 
   const [row] = await exec
     .insert(documentCounters)
-    .values({ scope: series.prefix, year, counter: series.startValue })
+    .values({ seriesId: series.id, year, counter: series.startValue })
     .onConflictDoUpdate({
-      target: [documentCounters.scope, documentCounters.year],
+      target: [documentCounters.seriesId, documentCounters.year],
       // `GREATEST` evita que subir el número inicial retroceda la secuencia y
       // que el suelo real se pise.
       set: {
@@ -492,6 +573,7 @@ export async function assignDocumentNumber(
       numberingPrefix: reserved.prefix,
       numberingYear: reserved.year,
       numberingValue: reserved.value,
+      numberingSeriesId: series.id,
       data: nextData,
       updatedAt: new Date(),
     })
@@ -529,12 +611,12 @@ export interface TemplateNumberingResult {
 /**
  * Resuelve la numeración de una plantilla y deja su serie lista.
  *
- * - Con un prefijo explícito se valida y no puede estar en uso por otra
- *   plantilla viva: dos series con el mismo prefijo compartirían contador y sus
- *   números se intercalaría.
+ * - Con un prefijo explícito se valida el formato. El prefijo **puede
+ *   repetirse**: cada plantilla lleva su propia serie, así que sus números no
+ *   se intercalan con los de otra aunque compartan etiqueta.
  * - Sin prefijo se asigna un código corto único derivado del identificador.
- * - Con la numeración apagada la plantilla no lleva número, pero conserva el
- *   prefijo para recuperarlo al volver a encenderla.
+ * - Con la numeración apagada la plantilla no lleva número, pero conserva su
+ *   serie (y su contador) para recuperarlo al volver a encenderla.
  */
 export async function resolveTemplateNumbering(options: {
   templateId: string;
@@ -550,71 +632,50 @@ export async function resolveTemplateNumbering(options: {
     current?.numberingEnabled ??
     !DOC_TYPES_WITHOUT_NUMBER.includes(docType);
 
+  const existing = await getTemplateSeries(templateId);
+
   // `undefined` = conservar el prefijo actual; `''` = quiero uno automático.
   const requested =
     input?.prefix === undefined ? (current?.numberingPrefix ?? '') : input.prefix;
   const normalized = normalizeNumberingPrefix(requested ?? '');
 
+  let prefix: string;
+  let auto: boolean;
+
   if (normalized === '') {
-    // Prefijo vacío: se conserva el código automático que ya tuviera la
-    // plantilla o, si no tiene, se le asigna uno.
-    const prefix = await generateAutoPrefix(
-      templateId,
-      current?.numberingPrefixAuto ? current?.numberingPrefix : null,
-    );
-    const series = await ensureNumberingSeries({
-      prefix,
-      startValue: input?.startValue ?? 1,
-      padding: input?.padding ?? 4,
-      includeYear: input?.includeYear ?? true,
-      createdBy: user.sub,
-    });
-    return { enabled: true, prefix: series.prefix, auto: true, series };
+    // Se conserva el código automático propio si ya lo tenía; si no, se le
+    // asigna uno.
+    const keepAuto = Boolean(existing) && Boolean(current?.numberingPrefixAuto);
+    prefix = keepAuto && existing ? existing.prefix : await generateAutoPrefix(templateId);
+    auto = true;
+  } else {
+    prefix = normalized;
+    auto = false;
   }
 
-  const prefix = parseNumberingPrefix(normalized);
-  const owner = await findSeriesOwner(prefix, templateId);
-  if (owner) {
-    const visible = canSeeOwner(owner, user);
-    throw conflict(
-      visible
-        ? `El prefijo ${prefix} ya lo usa la plantilla «${owner.name}». Cada plantilla necesita su propio prefijo.`
-        : `El prefijo ${prefix} ya lo usa otra plantilla. Cada plantilla necesita su propio prefijo.`,
-      { prefix },
-    );
+  if (!enabled) {
+    // La numeración está apagada: la plantilla no lleva número, pero su serie
+    // se conserva para recuperar la enumeración al volver a encenderla.
+    if (existing) {
+      const series =
+        existing.prefix === prefix
+          ? existing
+          : await ensureTemplateSeries({ templateId, prefix, createdBy: user.sub });
+      return { enabled: false, prefix: series.prefix, auto, series };
+    }
+    return { enabled: false, prefix: prefix === '' ? null : prefix, auto, series: null };
   }
 
-  const existing = await getNumberingSeries(prefix);
-  if (!existing) {
-    const series = await ensureNumberingSeries({
-      prefix,
-      startValue: input?.startValue ?? 1,
-      padding: input?.padding ?? 4,
-      includeYear: input?.includeYear ?? true,
-      createdBy: user.sub,
-    });
-    return { enabled: true, prefix: series.prefix, auto: false, series };
-  }
+  const series = await ensureTemplateSeries({
+    templateId,
+    prefix,
+    startValue: input?.startValue,
+    padding: input?.padding,
+    includeYear: input?.includeYear,
+    createdBy: user.sub,
+  });
 
-  if (
-    input &&
-    ((input.startValue !== undefined && input.startValue !== existing.startValue) ||
-      (input.padding !== undefined && input.padding !== existing.padding) ||
-      (input.includeYear !== undefined && input.includeYear !== existing.includeYear))
-  ) {
-    const updated = await updateNumberingSeries(
-      prefix,
-      {
-        startValue: input.startValue,
-        padding: input.padding,
-        includeYear: input.includeYear,
-      },
-      user.sub,
-    );
-    return { enabled: true, prefix: updated.prefix, auto: false, series: updated };
-  }
-
-  return { enabled: true, prefix: existing.prefix, auto: false, series: existing };
+  return { enabled: true, prefix: series.prefix, auto, series };
 }
 
 /**
@@ -624,10 +685,10 @@ export async function resolveTemplateNumbering(options: {
  * administrador) puede tocar sus ajustes.
  */
 export async function assertCanEditSeries(
-  prefix: string,
+  seriesId: string,
   user: NumberingUser,
 ): Promise<void> {
-  const owner = await findSeriesOwner(prefix);
+  const owner = await findSeriesOwner(seriesId);
   if (!owner) return;
   if (owner.ownerId === user.sub || user.role === 'admin') return;
   throw forbidden('Esta numeración pertenece a otra plantilla');
