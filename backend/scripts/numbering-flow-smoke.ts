@@ -114,14 +114,14 @@ async function main(): Promise<void> {
   /** Series creadas por las plantillas de prueba (se borran al terminar). */
   const createdSeriesIds: string[] = [];
   const scope = template.numberingPrefix ?? DOC_TYPE_PREFIX[template.docType];
-  const seriesId = template.numberingSeriesId;
-  if (!seriesId) throw new Error('La plantilla no tiene serie de numeración propia');
+  // La serie declara a su plantilla: se busca por `template_id`.
   const [series] = await db
     .select()
     .from(numberingSeries)
-    .where(eq(numberingSeries.id, seriesId))
+    .where(eq(numberingSeries.templateId, template.id))
     .limit(1);
-  if (!series) throw new Error(`No existe la serie de numeración "${scope}"`);
+  if (!series) throw new Error(`La plantilla "${template.name}" no tiene serie de numeración propia`);
+  const seriesId = series.id;
   const year = series.includeYear ? new Date().getFullYear() : 0;
 
   const [counterBefore] = await db
@@ -335,7 +335,14 @@ async function main(): Promise<void> {
         docType: template.docType,
         body: { type: 'doc', content: [{ type: 'paragraph' }] },
         schema: [],
-        numbering: { enabled: true, prefix: '', startValue: 1, padding: 4, includeYear: true },
+        numbering: {
+          enabled: true,
+          prefix: '',
+          prefixAuto: true,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+        },
       },
     );
     assert(own.status === 201, 'Se crea una plantilla con numeración automática');
@@ -368,6 +375,18 @@ async function main(): Promise<void> {
       'El número lleva el prefijo de su plantilla',
     );
 
+    /* 9b. La serie declara a su plantilla. */
+    const [ownSeries] = await db
+      .select()
+      .from(numberingSeries)
+      .where(eq(numberingSeries.templateId, own.body.template.id))
+      .limit(1);
+    assert(Boolean(ownSeries), 'La serie de la plantilla declara a su plantilla');
+    assert(
+      typeof ownSeries?.templateName === 'string' && ownSeries.templateName.length > 0,
+      'La serie guarda el nombre de su plantilla',
+    );
+
     /* 10. El código automático es estable al volver a guardar. */
     const ownDetail = await call<{
       template: { id: string; version: number; numberingPrefix: string | null };
@@ -384,7 +403,14 @@ async function main(): Promise<void> {
         body: { type: 'doc', content: [{ type: 'paragraph' }] },
         schema: [],
         expectedVersion: ownDetail.body.template.version,
-        numbering: { enabled: true, prefix: '', startValue: 1, padding: 4, includeYear: true },
+        numbering: {
+          enabled: true,
+          prefix: '',
+          prefixAuto: true,
+          startValue: 1,
+          padding: 4,
+          includeYear: true,
+        },
       },
     );
     assert(
@@ -493,6 +519,50 @@ async function main(): Promise<void> {
     assert(
       (twinNumbered.body.document.docNumber ?? '').startsWith(`${scope}-`),
       'El número gemelo lleva el prefijo repetido',
+    );
+
+    /* 13. El prefijo es opcional: una serie puede numerar sin etiqueta. */
+    const bare = await call<{
+      template?: { id: string; numberingSeriesId: string | null; numberingPrefix: string | null };
+    }>('/templates', token, 'POST', {
+      name: `Sin prefijo ${Date.now()}`,
+      docType: template.docType,
+      body: { type: 'doc', content: [{ type: 'paragraph' }] },
+      schema: [],
+      numbering: {
+        enabled: true,
+        prefix: '',
+        prefixAuto: false,
+        startValue: 1,
+        padding: 4,
+        includeYear: true,
+      },
+    });
+    assert(bare.status === 201, 'Se crea una plantilla sin prefijo');
+    createdTemplateIds.push(bare.body.template!.id);
+    if (bare.body.template!.numberingSeriesId) {
+      createdSeriesIds.push(bare.body.template!.numberingSeriesId);
+    }
+    assert(
+      !bare.body.template!.numberingPrefix,
+      'La plantilla sin prefijo se queda sin etiqueta',
+    );
+
+    const bareDraft = await call<DocumentPayload>('/documents', token, 'POST', {
+      templateId: bare.body.template!.id,
+      content: { type: 'doc', content: [{ type: 'paragraph' }] },
+    });
+    assert(bareDraft.status === 201, 'Se crea un borrador con la plantilla sin prefijo');
+    createdIds.push(bareDraft.body.document.id);
+
+    await call(`/documents/${bareDraft.body.document.id}`, token, 'PATCH', { status: 'final' });
+    const bareNumbered = await call<DocumentPayload>(
+      `/documents/${bareDraft.body.document.id}`,
+      token,
+    );
+    assert(
+      bareNumbered.body.document.docNumber === `0001-${new Date().getFullYear()}`,
+      'El número sin prefijo es solo el correlativo y el año',
     );
   } finally {
     // Limpieza: se borran los documentos, las plantillas de prueba y las

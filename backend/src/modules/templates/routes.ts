@@ -18,6 +18,7 @@ import type { DesignTokens, DocType, JSONContent } from '@sirpefoffice/shared';
 import { db } from '../../db/index.js';
 import {
   designs,
+  numberingSeries,
   templateShares,
   templateVersions,
   templates,
@@ -30,8 +31,11 @@ import { getActiveDesigns, resolveTemplateDesign } from '../../lib/active-design
 import { getTemplateAccess, type Permission } from '../../lib/access.js';
 import { AppError, badRequest, forbidden, internal, notFound } from '../../lib/errors.js';
 import {
+  ensureTemplateSeries,
   getNumberingState,
+  getTemplateSeries,
   resolveTemplateNumbering as resolveTemplateNumberingConfig,
+  syncSeriesTemplateName,
 } from '../../lib/numbering.js';
 import { renderDocumentHtml } from '../../lib/document-html.js';
 import { buildDocumentHtml, sampleValues } from '../../lib/render.js';
@@ -44,8 +48,13 @@ import {
 
 const numberingInputSchema = z.object({
   enabled: z.boolean().optional(),
-  /** Prefijo de 1 a 20 caracteres; vacío = que el servidor asigne uno. */
+  /** Prefijo de 1 a 20 caracteres; vacío = serie sin prefijo. */
   prefix: z.string().trim().max(20).nullable().optional(),
+  /**
+   * `true` = que el servidor asigne un código corto (A3F9). `false` con el
+   * prefijo vacío = serie sin prefijo (`0001-2026`).
+   */
+  prefixAuto: z.boolean().optional(),
   startValue: z.number().int().min(1).max(999_999).optional(),
   padding: z.number().int().min(1).max(8).optional(),
   includeYear: z.boolean().optional(),
@@ -177,8 +186,6 @@ async function isSharedWithOthers(templateId: string, isSharedGlobally: boolean)
 interface TemplateNumbering {
   enabled: boolean;
   prefix: string | null;
-  /** Serie de la plantilla: es la dueña de su enumeración. */
-  seriesId: string | null;
   /** El prefijo lo asignó el servidor, no el usuario. */
   auto: boolean;
 }
@@ -187,8 +194,9 @@ interface TemplateNumbering {
  * Resuelve la serie de numeración de una plantilla.
  *
  * Cada plantilla tiene su propia serie: su contador no se comparte con nadie
- * más, aunque otra plantilla use el mismo prefijo. Si el usuario deja el
- * prefijo vacío, el servidor le asigna un código corto único.
+ * más, aunque otra plantilla use el mismo prefijo. El prefijo es opcional:
+ * si el campo queda en blanco, la serie numera sin etiqueta (`0001-2026`);
+ * si se pide el código automático, el servidor asigna uno corto (A3F9).
  */
 async function resolveTemplateNumbering(options: {
   userId: string;
@@ -200,7 +208,6 @@ async function resolveTemplateNumbering(options: {
     numberingEnabled: boolean;
     numberingPrefix: string | null;
     numberingPrefixAuto: boolean;
-    numberingSeriesId: string | null;
   } | null;
 }): Promise<TemplateNumbering> {
   const resolved = await resolveTemplateNumberingConfig({
@@ -214,7 +221,6 @@ async function resolveTemplateNumbering(options: {
   return {
     enabled: resolved.enabled,
     prefix: resolved.prefix,
-    seriesId: resolved.series?.id ?? null,
     auto: resolved.auto,
   };
 }
@@ -223,12 +229,14 @@ async function resolveTemplateNumbering(options: {
 async function templateSampleNumber(template: {
   numberingEnabled: boolean;
   numberingPrefix: string | null;
-  numberingSeriesId: string | null;
+  id: string;
   docType: DocType;
 }): Promise<string> {
   if (!template.numberingEnabled) return '';
-  if (template.numberingSeriesId) {
-    const state = await getNumberingState(template.numberingSeriesId);
+
+  const series = await getTemplateSeries(template.id);
+  if (series) {
+    const state = await getNumberingState(series.id);
     if (state) return state.nextNumber;
   }
 
@@ -346,7 +354,8 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         sharePermission: templateShares.permission,
         /** Numeración de la plantilla: prefijo propio o código automático. */
         numberingEnabled: templates.numberingEnabled,
-        numberingSeriesId: templates.numberingSeriesId,
+        /** Serie propia de la plantilla: la declara la propia serie. */
+        numberingSeriesId: numberingSeries.id,
         numberingPrefix: templates.numberingPrefix,
         numberingPrefixAuto: templates.numberingPrefixAuto,
         updatedAt: templates.updatedAt,
@@ -355,6 +364,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .from(templates)
       .leftJoin(designs, and(eq(designs.id, templates.designId), isNull(designs.deletedAt)))
       .leftJoin(users, eq(users.id, templates.ownerId))
+      .leftJoin(numberingSeries, eq(numberingSeries.templateId, templates.id))
       .leftJoin(
         templateShares,
         and(eq(templateShares.templateId, templates.id), eq(templateShares.userId, user.sub)),
@@ -558,13 +568,25 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions ?? null,
         isShared: body.isShared,
         numberingEnabled: numbering.enabled,
-        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
     if (!created) throw internal('TEMPLATE_CREATE_FAILED', 'No se pudo crear la plantilla');
+
+    // Ahora que la plantilla existe, se crea su serie: la serie declara a su
+    // plantilla, así que necesita su fila.
+    if (numbering.enabled) {
+      await ensureTemplateSeries({
+        templateId: created.id,
+        prefix: numbering.prefix ?? '',
+        startValue: body.numbering?.startValue,
+        padding: body.numbering?.padding,
+        includeYear: body.numbering?.includeYear,
+        createdBy: user.sub,
+      });
+    }
 
     await logActivity(user.sub, 'template', created.id, 'created', { name: created.name });
     return reply.status(201).send({ template: created });
@@ -651,13 +673,11 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
             numberingEnabled: row.numberingEnabled,
             numberingPrefix: row.numberingPrefix,
             numberingPrefixAuto: row.numberingPrefixAuto,
-            numberingSeriesId: row.numberingSeriesId,
           },
         })
       : {
           enabled: row.numberingEnabled,
           prefix: row.numberingPrefix,
-          seriesId: row.numberingSeriesId,
           auto: row.numberingPrefixAuto,
         };
     // La instantánea guarda los tokens del diseño efectivo (el que está en
@@ -678,7 +698,6 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         aiInstructions: body.aiInstructions === undefined ? row.aiInstructions : body.aiInstructions,
         isShared: body.isShared ?? row.isShared,
         numberingEnabled: numbering.enabled,
-        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
         version: nextVersion,
@@ -688,6 +707,12 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
       .returning();
 
     if (!updated) throw internal('TEMPLATE_UPDATE_FAILED', 'No se pudo actualizar la plantilla');
+
+    // La serie guarda el nombre de su plantilla como etiqueta legible: se
+    // actualiza al renombrarla.
+    if ((body.name ?? row.name) !== row.name) {
+      await syncSeriesTemplateName(id, updated.name);
+    }
 
     await db.insert(templateVersions).values({
       templateId: id,
@@ -756,13 +781,22 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         isShared: false,
         isActive: true,
         numberingEnabled: numbering.enabled,
-        numberingSeriesId: numbering.seriesId,
         numberingPrefix: numbering.prefix,
         numberingPrefixAuto: numbering.auto,
       })
       .returning();
 
     if (!created) throw internal('TEMPLATE_CLONE_FAILED', 'No se pudo duplicar la plantilla');
+
+    // La copia recibe su propia serie: su enumeración empieza de cero.
+    if (numbering.enabled) {
+      await ensureTemplateSeries({
+        templateId: created.id,
+        prefix: numbering.prefix ?? '',
+        createdBy: user.sub,
+      });
+    }
+
     await logActivity(user.sub, 'template', created.id, 'cloned', { from: id });
     return reply.status(201).send({ template: created });
   });

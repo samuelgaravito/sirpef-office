@@ -330,7 +330,6 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
         templateSchema: templates.schema,
         templateNumberingEnabled: templates.numberingEnabled,
         templateNumberingPrefix: templates.numberingPrefix,
-        templateNumberingSeriesId: templates.numberingSeriesId,
         templateId: templates.id,
       })
       .from(documents)
@@ -359,7 +358,6 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
                 templateId: row.templateId,
                 numberingEnabled: row.templateNumberingEnabled,
                 numberingPrefix: row.templateNumberingPrefix,
-                numberingSeriesId: row.templateNumberingSeriesId,
               }
             : null,
       })),
@@ -418,7 +416,6 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
               footer: templates.footer,
               numberingEnabled: templates.numberingEnabled,
               numberingPrefix: templates.numberingPrefix,
-              numberingSeriesId: templates.numberingSeriesId,
             })
             .from(templates)
             .where(and(eq(templates.id, document.templateId), isNull(templates.deletedAt)))
