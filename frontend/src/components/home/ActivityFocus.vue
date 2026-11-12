@@ -65,7 +65,7 @@ const updatedLabel = computed(() => {
     </div>
 
     <!-- Cargando -->
-    <div v-if="loading && !hasItems" class="mt-3 grid gap-2 sm:grid-cols-3">
+    <div v-if="loading && !hasItems" class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
       <span
         v-for="n in 3"
         :key="n"
@@ -74,7 +74,7 @@ const updatedLabel = computed(() => {
     </div>
 
     <!-- Pendientes reales -->
-    <div v-else-if="hasItems" class="mt-3 grid gap-2 sm:grid-cols-3">
+    <div v-else-if="hasItems" class="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
       <button
         v-for="(item, index) in items"
         :key="item.id"
