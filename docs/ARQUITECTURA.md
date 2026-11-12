@@ -619,9 +619,15 @@ instantánea (deuda pendiente).
 
 ### 7.2 Estado
 
-- **Pinia** solo para sesión (`stores/auth.ts`) y notificaciones (`stores/toasts.ts`).
+- **Pinia** solo para sesión (`stores/auth.ts`); los avisos son composables
+  (`useToast`, `useNotifications`).
 - El estado del editor es local a la vista: `document`, `data`, `schema`, `dirty`,
   `saving`, `version`, `conflict`.
+- La vista del editor se **remonta** al cambiar de documento (`App.vue` usa la ruta como
+  clave y es una ruta de primer nivel). Por eso, al crear un documento nuevo desde el
+  botón **Enviar**, la intención de abrir el diálogo se anota antes en
+  `lib/editor-intent.ts` y la recoge la instancia nueva al cargar; si no, el primer clic
+  solo crearía el documento y haría falta un segundo clic.
 - El editor de Diseño añade estado local para `panelOpen`, `zoom`, `lockAspect` y el
   viewport de la hoja (`canvasViewport`); los tokens siguen siendo la única fuente de
   verdad y se sincronizan con `DesignPreview` mediante `v-model`/eventos.
@@ -1036,6 +1042,7 @@ diarios de PostgreSQL, rotación de claves, límite de tamaño de subida a nivel
 | Exportación | `pdftotext` / `pdfimages` / `unzip` | Verifica datos interpolados, bandas, numeración real, imágenes embebidas y campos `PAGE`/`NUMPAGES` en DOCX. |
 | Tiempo real | `cd backend && npm run smoke:realtime` + `npm run smoke:realtime:proxy` | El handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar. |
 | Campana de avisos | `cd backend && npm run smoke:bell` | En Chrome real: la campana aparece con el asunto, agrupa con contador, se va sola a los 6 s y Ajustes permite activar o silenciar los avisos del sistema. |
+| Envío en un clic | `cd backend && npm run smoke:send-once` | En un documento nuevo, el primer clic en «Enviar» abre el diálogo: la intención sobrevive al remontaje de la vista al pasar de `/documents/new` a `/documents/:id`. |
 
 Las capturas de las pruebas se guardan en `/tmp/sirpefoffice-shots`, `/tmp/sirpefoffice-shots-images` y
 `/tmp/sirpefoffice-shots-chrome` (y una selección en `docs/capturas`).

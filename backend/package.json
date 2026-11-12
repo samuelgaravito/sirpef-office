@@ -42,6 +42,7 @@
     "smoke:realtime": "tsx scripts/realtime-smoke.ts",
     "smoke:realtime:proxy": "node scripts/realtime-proxy-smoke.mjs",
     "smoke:bell": "node scripts/notification-bell-smoke.mjs",
+    "smoke:send-once": "node scripts/send-dialog-smoke.mjs",
     "demo:inbox": "tsx scripts/inbox-demo.ts",
     "demo:inbox:notify": "tsx scripts/inbox-demo.ts --notify",
     "demo:review": "tsx scripts/review-demo.ts",

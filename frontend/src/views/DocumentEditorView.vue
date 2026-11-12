@@ -80,6 +80,7 @@ import {
 } from '@/lib/labels';
 import { normalizeRouteId } from '@/lib/routes';
 import { isBlankContent, readEditorContent } from '@/lib/editor-content';
+import { setPendingSend, takePendingSend } from '@/lib/editor-intent';
 import { VARIABLE_HIGHLIGHT_REFRESH, VariableHighlight } from '@/lib/variable-highlight';
 import { useAuthStore } from '@/stores/auth';
 import type {
@@ -657,7 +658,11 @@ async function load(): Promise<void> {
     previewMode.value = false;
     previewHtml.value = '';
     void loadReviewMessage();
+    // Si el envío venía pedido desde la vista «nueva», ahora que el documento
+    // ya tiene id se abre el diálogo sin que el usuario tenga que repetir el clic.
+    consumePendingSend();
   } catch (error) {
+    takePendingSend();
     loadError.value = explainError(error, 'No se pudo cargar el documento');
   } finally {
     loading.value = false;
@@ -927,7 +932,13 @@ async function saveAndExit(): Promise<void> {
   await router.replace(backTarget.value);
 }
 
-/** Guarda los cambios pendientes antes de abrir el diálogo de envío. */
+/**
+ * Guarda los cambios pendientes antes de abrir el diálogo de envío.
+ *
+ * Con un documento nuevo, crearlo cambia la ruta y `App.vue` remonta la
+ * vista: la intención se anota antes y la recoge la instancia nueva al
+ * terminar de cargar (ver `consumePendingSend`).
+ */
 async function openSendDialog(prefill?: {
   subject?: string;
   body?: string;
@@ -938,14 +949,13 @@ async function openSendDialog(prefill?: {
   approveMessageId.value = null;
 
   if (isNew.value) {
-    const id = await materialize();
-    if (!id) return;
-    sendPrefill.value = {
+    setPendingSend({
       subject: prefill?.subject ?? '',
       body: prefill?.body ?? '',
       recipientIds: prefill?.recipientIds ?? [],
-    };
-    sendOpen.value = true;
+    });
+    const id = await materialize();
+    if (!id) takePendingSend();
     return;
   }
 
@@ -955,6 +965,22 @@ async function openSendDialog(prefill?: {
     subject: prefill?.subject ?? '',
     body: prefill?.body ?? '',
     recipientIds: prefill?.recipientIds ?? [],
+  };
+  sendOpen.value = true;
+}
+
+/** Abre el diálogo de envío si venía pedido desde antes del remontaje. */
+function consumePendingSend(): void {
+  const prefill = takePendingSend();
+  if (!prefill) return;
+  if (isNew.value || !canEdit.value || pendingMessage.value) return;
+
+  sendMode.value = 'send';
+  approveMessageId.value = null;
+  sendPrefill.value = {
+    subject: prefill.subject ?? '',
+    body: prefill.body ?? '',
+    recipientIds: prefill.recipientIds ?? [],
   };
   sendOpen.value = true;
 }
