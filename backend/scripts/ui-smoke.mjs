@@ -89,14 +89,14 @@ async function main() {
 
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
-    await page.waitForSelector('text/Continuar donde lo dejé', { timeout: 15000 });
+    await page.waitForSelector('text/Tus últimos documentos', { timeout: 15000 });
     await page.waitForSelector('text/Esperando al jefe', { timeout: 15000 });
     await wait(600);
     const homeDay = await page.evaluate(() => ({
       create: Array.from(document.querySelectorAll('button')).some((button) =>
         button.textContent?.includes('Crear documento'),
       ),
-      drafts: Boolean(document.body.textContent?.includes('Continuar donde lo dejé')),
+      drafts: Boolean(document.body.textContent?.includes('Tus últimos documentos')),
     }));
     console.log(
       homeDay.create && homeDay.drafts
@@ -283,7 +283,7 @@ async function main() {
 
     console.log('→ Crear documento desde el inicio');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Continuar donde lo dejé');
+    await page.waitForSelector('text/Tus últimos documentos');
     await wait(600);
     await clickText(page, 'button', 'Crear documento');
     await page.waitForFunction(
@@ -404,7 +404,7 @@ async function main() {
 
     console.log('→ Nuevo documento en blanco');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Continuar donde lo dejé');
+    await page.waitForSelector('text/Tus últimos documentos');
     await wait(600);
     await clickText(page, 'button', 'Crear documento');
     await page.waitForFunction(

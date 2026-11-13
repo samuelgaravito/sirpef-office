@@ -14,6 +14,7 @@ import {
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import DocumentPreview from '@/components/documents/DocumentPreview.vue';
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
@@ -24,7 +25,7 @@ import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
-import { relativeTime } from '@/lib/labels';
+import { relativeTime, STATUS_LABELS, STATUS_STYLES } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
 import type { DocumentSummary, InboxMessageSummary, ListResponse } from '@/types';
@@ -48,8 +49,8 @@ const pendingItems = ref<InboxMessageSummary[]>([]);
 const pendingLoading = ref(false);
 const pendingUpdatedAt = ref<Date | null>(null);
 
-/** Documentos que la persona dejó a medias, para retomarlos de un clic. */
-const recentDrafts = ref<DocumentSummary[]>([]);
+/** Últimos documentos en los que trabajó la persona (borradores o enviados). */
+const recentDocuments = ref<DocumentSummary[]>([]);
 /** Envíos propios esperando la aprobación del jefe. */
 const waitingApproval = ref<InboxMessageSummary[]>([]);
 /** Borradores que solo viven en este navegador (aún sin fila en el servidor). */
@@ -230,7 +231,7 @@ async function loadPending(): Promise<void> {
   }
 }
 
-/** «Tu día»: borradores por retomar y envíos esperando al jefe. */
+/** Últimos documentos y envíos esperando al jefe. */
 async function loadActivity(): Promise<void> {
   activityLoading.value = true;
   const tasks: Promise<unknown>[] = [];
@@ -239,16 +240,15 @@ async function loadActivity(): Promise<void> {
     tasks.push(
       api
         .get<ListResponse<DocumentSummary>>('/documents', {
-          scope: 'mine',
-          status: 'draft',
+          scope: 'all',
           sort: 'updated',
-          pageSize: 3,
+          pageSize: 6,
         })
         .then((data) => {
-          recentDrafts.value = data.items;
+          recentDocuments.value = data.items;
         })
         .catch(() => {
-          recentDrafts.value = [];
+          recentDocuments.value = [];
         }),
     );
   }
@@ -481,79 +481,128 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- «Tu día»: lo que quedó a medias y lo que espera al jefe -->
+      <!-- Últimos documentos y avisos -->
       <section
         v-if="canSeeDocuments || canSeeInbox"
         class="mx-auto mt-6 w-full max-w-[1280px] px-4 sm:px-6 lg:px-8"
       >
-        <OnboardingCard v-if="canSeeDocuments" class="mb-4" @create="pickerOpen = true" />
-
-        <div class="grid gap-4 lg:grid-cols-2">
-          <!-- Continuar donde lo dejé -->
-          <div v-if="canSeeDocuments" class="card p-4">
-            <header class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2">
-                <Clock class="size-4 text-accent" />
-                <h2 class="text-[15px] font-semibold">Continuar donde lo dejé</h2>
+        <!-- Últimos documentos -->
+        <div v-if="canSeeDocuments" class="card p-4 sm:p-5">
+          <header class="flex flex-wrap items-start justify-between gap-3">
+            <div class="flex items-start gap-2">
+              <Clock class="mt-0.5 size-4 shrink-0 text-accent" />
+              <div>
+                <h2 class="text-[16px] font-semibold">Tus últimos documentos</h2>
+                <p class="text-meta">Retoma donde lo dejaste.</p>
               </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button type="button" class="btn btn-primary btn-sm" @click="pickerOpen = true">
+                <Plus class="size-3.5" />
+                Crear documento
+              </button>
               <RouterLink :to="{ name: 'documents' }" class="text-[12.5px] font-medium text-accent hover:underline">
                 Ver todos
               </RouterLink>
-            </header>
-
-            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
-              <Loader2 class="size-3.5 animate-spin" />
-              Cargando…
             </div>
+          </header>
 
-            <template v-else>
-              <ul
-                v-if="recentDrafts.length > 0 || localDrafts.length > 0"
-                class="mt-2 divide-y divide-hairline"
-              >
-                <li v-for="draft in localDrafts" :key="draft.key">
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
-                    @click="resumeLocalDraft(draft)"
-                  >
-                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
-                      <span class="text-meta block">
-                        Solo en este navegador · {{ relativeTime(draft.savedAt) }}
-                      </span>
-                    </span>
-                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
-                  </button>
-                </li>
-                <li v-for="draft in recentDrafts" :key="draft.id">
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
-                    @click="openDocument(draft.id)"
-                  >
-                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
-                      <span class="text-meta block">
-                        {{ draft.docNumber ?? 'En preparación' }} · {{ relativeTime(draft.updatedAt) }}
-                      </span>
-                    </span>
-                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
-                  </button>
-                </li>
-              </ul>
-              <p v-else class="text-description mt-3">
-                No tienes borradores pendientes.
-                <button type="button" class="font-medium text-accent hover:underline" @click="pickerOpen = true">
-                  Crear un documento
-                </button>
-              </p>
-            </template>
+          <div v-if="activityLoading" class="mt-4 flex items-center gap-2 text-[13px] text-ink-muted">
+            <Loader2 class="size-3.5 animate-spin" />
+            Cargando documentos…
           </div>
 
-          <!-- Esperando al jefe -->
+          <template v-else>
+            <div
+              v-if="recentDocuments.length > 0 || localDrafts.length > 0"
+              class="mt-4 grid gap-2.5 sm:grid-cols-2"
+            >
+              <!-- Borradores que solo viven en este navegador -->
+              <button
+                v-for="draft in localDrafts"
+                :key="draft.key"
+                type="button"
+                class="flex w-full items-start gap-3 rounded-lg border border-warning/30 bg-warning-soft/25 p-3 text-left transition-colors hover:border-warning/60"
+                @click="resumeLocalDraft(draft)"
+              >
+                <span class="grid size-9 shrink-0 place-items-center rounded-md bg-surface text-warning">
+                  <FileText class="size-4" />
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[14px] font-medium text-ink">{{ draft.title }}</span>
+                  <span class="text-meta block">Solo en este navegador · {{ relativeTime(draft.savedAt) }}</span>
+                </span>
+                <ArrowRight class="mt-1 size-4 shrink-0 text-ink-subtle" />
+              </button>
+
+              <!-- Documentos guardados en el servidor -->
+              <button
+                v-for="document in recentDocuments"
+                :key="document.id"
+                type="button"
+                class="group flex w-full items-start gap-3 rounded-lg border border-hairline bg-surface p-3 text-left transition-colors hover:border-accent/40 hover:bg-accent-soft/20"
+                @click="openDocument(document.id)"
+              >
+                <span class="hidden w-[66px] shrink-0 overflow-hidden rounded-md border border-hairline bg-surface-muted/40 p-1 sm:block">
+                  <DocumentPreview
+                    :document-id="document.id"
+                    :version="document.version"
+                    :updated-at="document.updatedAt"
+                    :design-updated-at="document.designUpdatedAt"
+                    :tokens="document.designTokens"
+                    :scale="0.07"
+                    :title="document.title"
+                  />
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-1.5">
+                    <span class="truncate text-[14px] font-medium text-ink">{{ document.title }}</span>
+                    <span :class="['shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium', STATUS_STYLES[document.status]]">
+                      {{ STATUS_LABELS[document.status] }}
+                    </span>
+                  </span>
+                  <span
+                    class="text-meta mt-0.5 block truncate"
+                    :title="
+                      !document.docNumber && document.numberingPreview
+                        ? 'Número previsto: se asigna al aprobar'
+                        : undefined
+                    "
+                  >
+                    {{ document.docNumber ?? document.numberingPreview?.number ?? 'Sin número todavía' }}
+                    · {{ relativeTime(document.updatedAt) }}
+                    <template v-if="document.ownerId !== auth.user?.id"> · De {{ document.ownerName }}</template>
+                  </span>
+                  <span
+                    v-if="document.description || document.autoDescription"
+                    class="text-description mt-0.5 line-clamp-1"
+                  >
+                    {{ document.description || document.autoDescription }}
+                  </span>
+                </span>
+                <ArrowRight class="mt-1 size-4 shrink-0 text-ink-subtle transition-colors group-hover:text-accent" />
+              </button>
+            </div>
+
+            <div
+              v-else
+              class="mt-4 rounded-lg border border-dashed border-hairline-strong bg-surface/60 px-6 py-8 text-center"
+            >
+              <FileText class="mx-auto size-7 text-ink-subtle" />
+              <p class="mt-2 text-[15px] font-semibold">Todavía no tienes documentos</p>
+              <p class="text-description mt-1">
+                Crea el primero y aparecerá aquí para retomarlo cuando quieras.
+              </p>
+              <button type="button" class="btn btn-primary btn-sm mt-3" @click="pickerOpen = true">
+                <Plus class="size-3.5" />
+                Crear documento
+              </button>
+            </div>
+          </template>
+        </div>
+
+        <!-- Avisos: esperando al jefe + guía de primeros pasos -->
+        <div class="mt-4 grid gap-4 lg:grid-cols-2">
           <div v-if="canSeeInbox" class="card p-4">
             <header class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
@@ -594,6 +643,12 @@ onUnmounted(() => {
               No hay envíos esperando aprobación.
             </p>
           </div>
+
+          <OnboardingCard
+            v-if="canSeeDocuments"
+            :class="canSeeInbox ? '' : 'lg:col-span-2'"
+            @create="pickerOpen = true"
+          />
         </div>
       </section>
 

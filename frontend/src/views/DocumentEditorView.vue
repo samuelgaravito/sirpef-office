@@ -1332,7 +1332,7 @@ function onKeydown(event: KeyboardEvent): void {
 onBeforeRouteLeave(async () => {
   // Un documento nuevo se materializa al salir: así aparece en Documentos y no
   // depende de que alguien recuerde pulsar Guardar. Si la API falla, el
-  // borrador local sigue disponible en «Continuar donde lo dejé».
+  // borrador local sigue disponible en «Tus últimos documentos».
   if (isNew.value) {
     flushLocalDraft();
     if (!dirty.value) return true;
