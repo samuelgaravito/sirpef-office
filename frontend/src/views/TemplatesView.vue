@@ -376,8 +376,8 @@ onMounted(load);
                 class="min-w-0 flex-1 text-left"
                 @click="useTemplateCard(template)"
               >
-                <p class="truncate text-[13px] font-medium">{{ template.name }}</p>
-                <p class="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] text-ink-subtle">
+                <p class="truncate text-[15px] font-medium">{{ template.name }}</p>
+                <p class="text-meta mt-0.5 flex items-center gap-1.5 truncate">
                   <span class="truncate">{{ docTypeLabel(template.docType) }} · v{{ template.version }}</span>
                   <span
                     v-if="mode === 'manage' || !template.isActive"
@@ -398,7 +398,7 @@ onMounted(load);
                 </p>
                 <p
                   v-if="mode === 'manage' && template.effectiveDesignName"
-                  class="mt-1 truncate text-[11px] text-ink-subtle"
+                  class="text-meta mt-1 truncate"
                   :title="`Dibuja con «${template.effectiveDesignName}», el diseño en uso`"
                 >
                   Dibuja con {{ template.effectiveDesignName }}
@@ -471,12 +471,12 @@ onMounted(load);
               </BaseDropdown>
             </div>
 
-            <p class="mt-2 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
+            <p class="text-description mt-2 line-clamp-2">
               {{ template.description || 'Sin descripción' }}
             </p>
 
             <div class="mt-3 flex items-center justify-between">
-              <span class="text-[10.5px] text-ink-subtle">
+              <span class="text-meta">
                 {{ view === 'trash' ? `Eliminada ${relativeTime(template.deletedAt ?? template.updatedAt)}` : relativeTime(template.updatedAt) }}
               </span>
               <button

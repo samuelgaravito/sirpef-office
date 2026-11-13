@@ -64,11 +64,11 @@ function openDocument(): void {
 
     <div class="flex flex-1 items-start gap-1.5 px-3 pb-2.5 pt-2.5">
       <button type="button" class="min-w-0 flex-1 text-left" @click="openDocument">
-        <p class="truncate text-[13px] font-medium text-ink">{{ document.title }}</p>
-        <p v-if="document.description || document.autoDescription" class="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
+        <p class="truncate text-[15px] font-medium text-ink">{{ document.title }}</p>
+        <p v-if="document.description || document.autoDescription" class="text-description mt-0.5 line-clamp-2">
           {{ document.description || document.autoDescription }}
         </p>
-        <p class="mt-0.5 flex items-center gap-1 truncate text-[11.5px] text-ink-subtle">
+        <p class="text-meta mt-0.5 flex items-center gap-1 truncate">
           <span class="truncate" :title="numberTitle">{{ numberLabel }}</span>
           <span aria-hidden="true">·</span>
           <span class="shrink-0">
@@ -76,7 +76,7 @@ function openDocument(): void {
           </span>
         </p>
         <span
-          :class="['mt-1.5 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium', STATUS_STYLES[document.status]]"
+          :class="['mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[12px] font-medium', STATUS_STYLES[document.status]]"
         >
           {{ STATUS_LABELS[document.status] }}
         </span>

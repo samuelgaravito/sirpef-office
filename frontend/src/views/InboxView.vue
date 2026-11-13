@@ -254,7 +254,7 @@ onUnmounted(() => {
             :key="tab.value"
             type="button"
             :class="[
-              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+              'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13.5px] font-medium transition-colors',
               scope === tab.value ? 'bg-accent-soft text-accent' : 'text-ink-muted hover:bg-surface-hover',
             ]"
             @click="scope = tab.value"
@@ -264,7 +264,7 @@ onUnmounted(() => {
             <span
               v-if="tabCount(tab.value) > 0"
               :class="[
-                'grid min-w-[18px] place-items-center rounded-full px-1 py-0.5 text-[10px] font-bold leading-none',
+                'grid min-w-[18px] place-items-center rounded-full px-1 py-0.5 text-[11px] font-bold leading-none',
                 tabBadgeClass[tab.value],
               ]"
             >
@@ -320,7 +320,7 @@ onUnmounted(() => {
             />
             <span
               :class="[
-                'text-[12.5px] font-semibold',
+                'text-[14px] font-semibold',
                 group.tone === 'warning' ? 'text-warning' : 'text-ink-muted',
               ]"
             >
@@ -328,13 +328,13 @@ onUnmounted(() => {
             </span>
             <span
               v-if="group.tone === 'warning'"
-              class="grid min-w-5 place-items-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+              class="grid min-w-5 place-items-center rounded-full bg-warning px-1.5 py-0.5 text-[11px] font-bold leading-none text-white"
             >
               {{ group.items.length }}
             </span>
             <span
               v-if="group.tone === 'warning'"
-              class="ml-auto text-[11.5px] text-ink-muted"
+              class="ml-auto text-[12.5px] text-ink-muted"
             >
               Revisa y aprueba o rechaza
             </span>
@@ -367,12 +367,12 @@ onUnmounted(() => {
               <InboxStatusChip :status="message.status" :context="chipContext(message)" />
               <span
                 v-if="message.unread && scope !== 'received'"
-                class="inline-flex items-center rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+                class="inline-flex items-center rounded-full bg-accent-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent"
               >
                 Nuevo
               </span>
             </span>
-            <span class="mt-0.5 block truncate text-[11.5px] text-ink-muted">
+            <span class="mt-0.5 block truncate text-[13px] text-ink-muted">
               {{ rowContext(message) }}
               <template v-if="message.documentDocNumber"> · {{ message.documentDocNumber }}</template>
               <template v-else> · {{ message.documentTitle }}</template>
@@ -383,15 +383,15 @@ onUnmounted(() => {
           </span>
 
           <span class="shrink-0 text-right">
-            <span class="block text-[11px] text-ink-subtle">{{ relativeTime(message.sentAt ?? message.createdAt) }}</span>
+            <span class="text-meta block">{{ relativeTime(message.sentAt ?? message.createdAt) }}</span>
             <span
               v-if="message.status === 'pending_approval'"
-              class="mt-1 inline-flex items-center justify-end gap-0.5 text-[11px] font-semibold text-warning"
+              class="mt-1 inline-flex items-center justify-end gap-0.5 text-[12.5px] font-semibold text-warning"
             >
               {{ chipContext(message) === 'pending-approver' ? 'Revisar' : 'Ver estado' }}
               <ChevronRight class="size-3" />
             </span>
-            <span v-else class="mt-1 block text-[11px] text-ink-subtle">
+            <span v-else class="text-meta mt-1 block">
               {{ message.recipientCount }} destinatario{{ message.recipientCount === 1 ? '' : 's' }}
             </span>
           </span>
@@ -400,7 +400,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="totalPages > 1" class="mt-6 flex items-center justify-between">
-        <p class="text-[12.5px] text-ink-muted">Página {{ page }} de {{ totalPages }}</p>
+        <p class="text-[13.5px] text-ink-muted">Página {{ page }} de {{ totalPages }}</p>
         <div class="flex gap-2">
           <button type="button" class="btn btn-outline btn-sm" :disabled="page <= 1" @click="page -= 1">Anterior</button>
           <button type="button" class="btn btn-outline btn-sm" :disabled="page >= totalPages" @click="page += 1">Siguiente</button>

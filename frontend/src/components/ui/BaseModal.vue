@@ -69,15 +69,21 @@ onBeforeUnmount(() => {
         aria-modal="true"
         @mousedown.self="closeOnBackdrop && emit('close')"
       >
-        <div :class="['card w-full', widths[size]]" role="document">
+        <div
+          :class="[
+            'card flex max-h-[calc(100dvh-2rem)] w-full flex-col sm:max-h-[calc(100dvh-3rem)]',
+            widths[size],
+          ]"
+          role="document"
+        >
           <header
             v-if="title || $slots.header"
-            class="flex items-start justify-between gap-4 border-b border-hairline px-5 py-4"
+            class="flex shrink-0 items-start justify-between gap-4 border-b border-hairline px-5 py-4"
           >
             <div class="min-w-0">
               <slot name="header">
-                <h2 class="truncate text-[15px] font-semibold text-ink">{{ title }}</h2>
-                <p v-if="description" class="mt-0.5 text-xs text-ink-muted">{{ description }}</p>
+                <h2 class="truncate text-[17px] font-semibold text-ink">{{ title }}</h2>
+                <p v-if="description" class="text-description mt-0.5">{{ description }}</p>
               </slot>
             </div>
             <button
@@ -90,13 +96,13 @@ onBeforeUnmount(() => {
             </button>
           </header>
 
-          <div class="px-5 py-4">
+          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <slot />
           </div>
 
           <footer
             v-if="$slots.footer"
-            class="flex items-center justify-end gap-2 border-t border-hairline bg-surface-muted/60 px-5 py-3"
+            class="flex shrink-0 items-center justify-end gap-2 border-t border-hairline bg-surface-muted/60 px-5 py-3"
           >
             <slot name="footer" />
           </footer>

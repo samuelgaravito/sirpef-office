@@ -213,9 +213,9 @@ async function submit(): Promise<void> {
           <FileText class="size-4" />
         </span>
         <div class="min-w-0 flex-1">
-          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Documento adjunto</p>
+          <p class="text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">Documento adjunto</p>
           <p class="truncate text-[13px] font-medium text-ink">{{ documentTitle }}</p>
-          <p class="mt-0.5 text-[11px] text-ink-subtle">Versión a sellar: v{{ expectedVersion }}</p>
+          <p class="text-meta mt-0.5">Versión a sellar: v{{ expectedVersion }}</p>
         </div>
       </div>
 
@@ -226,11 +226,11 @@ async function submit(): Promise<void> {
       >
         <Hash class="mt-0.5 size-4 shrink-0 text-accent" />
         <div class="min-w-0">
-          <p class="text-[12.5px] leading-snug text-ink">
+          <p class="text-description leading-snug text-ink">
             Al aprobarse, este documento quedará numerado como
             <strong class="font-semibold text-accent">{{ pendingNumber }}</strong>.
           </p>
-          <p class="mt-0.5 text-[11px] text-ink-subtle">{{ NUMBERING_MESSAGES.pendingWarning }}</p>
+          <p class="text-meta mt-0.5">{{ NUMBERING_MESSAGES.pendingWarning }}</p>
         </div>
       </div>
       <div
@@ -246,7 +246,7 @@ async function submit(): Promise<void> {
 
       <div
         v-if="versionChanged"
-        class="flex items-start gap-2 rounded-xl border border-danger/25 bg-danger-soft/60 px-3 py-2.5 text-[12px] leading-snug text-danger"
+        class="flex items-start gap-2 rounded-xl border border-danger/25 bg-danger-soft/60 px-3 py-2.5 text-[13px] leading-snug text-danger"
       >
         <TriangleAlert class="mt-0.5 size-4 shrink-0" />
         <span>
@@ -258,16 +258,16 @@ async function submit(): Promise<void> {
       <!-- Resumen para el jefe: primero lo esencial, editar solo si hace falta -->
       <div v-if="isApprove && !editing" class="rounded-xl border border-hairline bg-surface-muted/50 px-3.5 py-3">
         <div class="flex items-center justify-between gap-2">
-          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Resumen del envío</p>
+          <p class="text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">Resumen del envío</p>
           <button
             type="button"
-            class="text-[12px] font-medium text-accent hover:underline"
+            class="text-[13px] font-medium text-accent hover:underline"
             @click="editing = true"
           >
             Ajustar antes de enviar
           </button>
         </div>
-        <dl class="mt-2.5 space-y-2 text-[12.5px]">
+        <dl class="mt-2.5 space-y-2 text-[13.5px]">
           <div class="flex gap-2">
             <dt class="w-[86px] shrink-0 text-ink-subtle">Destinatarios</dt>
             <dd :class="['min-w-0 flex-1', recipientNames ? 'text-ink' : 'font-medium text-danger']">
@@ -288,7 +288,7 @@ async function submit(): Promise<void> {
       <div v-if="isApprove && editing" class="flex justify-end">
         <button
           type="button"
-          class="text-[12px] font-medium text-accent hover:underline"
+          class="text-[13px] font-medium text-accent hover:underline"
           @click="editing = false"
         >
           Volver al resumen
@@ -299,14 +299,14 @@ async function submit(): Promise<void> {
       <div v-if="!isApprove || editing">
         <div class="mb-1.5 flex items-center justify-between">
           <label class="label mb-0">Destinatarios</label>
-          <span class="text-[11px] text-ink-subtle">{{ selected.length }} seleccionado{{ selected.length === 1 ? '' : 's' }}</span>
+          <span class="text-[12.5px] text-ink-subtle">{{ selected.length }} seleccionado{{ selected.length === 1 ? '' : 's' }}</span>
         </div>
 
         <div v-if="selectedUsers.length > 0" class="mb-2 flex flex-wrap gap-1.5">
           <span
             v-for="user in selectedUsers"
             :key="user.id"
-            class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft py-1 pl-1 pr-2 text-[11.5px] font-medium text-accent"
+            class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft py-1 pl-1 pr-2 text-[12.5px] font-medium text-accent"
           >
             <UserAvatar :name="user.name" :src="user.avatarUrl" size="xs" />
             {{ user.name }}
@@ -325,7 +325,7 @@ async function submit(): Promise<void> {
           <div v-if="loadingUsers" class="grid place-items-center py-8">
             <Loader2 class="size-5 animate-spin text-ink-subtle" />
           </div>
-          <p v-else-if="available.length === 0" class="px-3 py-6 text-center text-[12.5px] text-ink-muted">
+          <p v-else-if="available.length === 0" class="px-3 py-6 text-center text-[13.5px] text-ink-muted">
             No hay usuarios que coincidan.
           </p>
           <label
@@ -341,13 +341,13 @@ async function submit(): Promise<void> {
             />
             <UserAvatar :name="user.name" :src="user.avatarUrl" size="sm" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate text-[12.5px] font-medium text-ink">{{ user.name }}</span>
-              <span v-if="user.email" class="block truncate text-[11px] text-ink-subtle">{{ user.email }}</span>
+              <span class="block truncate text-[13.5px] font-medium text-ink">{{ user.name }}</span>
+              <span v-if="user.email" class="block truncate text-[12.5px] text-ink-subtle">{{ user.email }}</span>
             </span>
             <span v-if="user.role === 'admin'" class="chip">Jefe</span>
           </label>
         </div>
-        <p class="mt-1.5 flex items-center gap-1 text-[11px] text-ink-subtle">
+        <p class="mt-1.5 flex items-center gap-1 text-[12.5px] text-ink-subtle">
           <Users class="size-3" />
           Los destinatarios podrán leerlo, pero no editarlo.
         </p>
@@ -355,7 +355,7 @@ async function submit(): Promise<void> {
 
       <label
         v-if="isApprove"
-        class="flex cursor-pointer items-start gap-2.5 rounded-xl border border-hairline bg-surface-muted/50 px-3 py-2.5 text-[12.5px] leading-snug text-ink-muted"
+        class="flex cursor-pointer items-start gap-2.5 rounded-xl border border-hairline bg-surface-muted/50 px-3 py-2.5 text-description leading-snug"
       >
         <input
           v-model="allowSenderExport"

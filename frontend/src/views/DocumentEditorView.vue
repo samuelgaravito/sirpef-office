@@ -1341,7 +1341,7 @@ onBeforeUnmount(() => {
             class="shrink-0"
           />
         </div>
-        <p class="mt-0.5 flex items-center gap-1.5 px-1.5 text-[11px] text-ink-subtle">
+        <p class="text-meta mt-0.5 flex items-center gap-1.5 px-1.5">
           <component
             :is="saving ? Loader2 : conflict ? CloudOff : Cloud"
             :class="['size-3', saving ? 'animate-spin' : '', conflict ? 'text-danger' : '']"
@@ -1355,7 +1355,7 @@ onBeforeUnmount(() => {
       <select
         v-if="auth.isAdmin && canEdit"
         :value="status"
-        :class="['hidden rounded-full border-0 px-2.5 py-1 text-[11px] font-medium sm:block', STATUS_STYLES[status]]"
+        :class="['hidden rounded-full border-0 px-2.5 py-1 text-[12px] font-medium sm:block', STATUS_STYLES[status]]"
         aria-label="Estado del documento"
         @change="updateStatus(($event.target as HTMLSelectElement).value as DocumentStatus)"
       >
@@ -1363,7 +1363,7 @@ onBeforeUnmount(() => {
       </select>
       <span
         v-else
-        :class="['hidden items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
+        :class="['hidden items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
         :title="STATUS_ADMIN_ONLY_MESSAGE"
         aria-readonly="true"
       >
@@ -1467,7 +1467,7 @@ onBeforeUnmount(() => {
           </button>
         </template>
         <template #content>
-          <p v-if="!canExport" class="px-2.5 py-2 text-[11.5px] leading-snug text-ink-subtle">
+          <p v-if="!canExport" class="px-2.5 py-2 text-[12.5px] leading-snug text-ink-muted">
             {{ EXPORT_FORBIDDEN_MESSAGE }}
           </p>
           <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
@@ -1519,7 +1519,7 @@ onBeforeUnmount(() => {
     </header>
 
     <!-- Aviso de conflicto -->
-    <div v-if="conflict" class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[12.5px] text-danger">
+    <div v-if="conflict" class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[13.5px] text-danger">
       <TriangleAlert class="size-4 shrink-0" />
       <span class="flex-1">Otra sesión guardó cambios en este documento.</span>
       <button type="button" class="btn btn-outline btn-sm" @click="load">Descartar y recargar</button>
@@ -1529,7 +1529,7 @@ onBeforeUnmount(() => {
     <!-- Documento nuevo: el borrador vive en este navegador hasta guardarlo -->
     <div
       v-if="isNew"
-      class="flex flex-wrap items-center gap-3 border-b border-hairline bg-surface-muted/50 px-4 py-2 text-[12.5px] text-ink-muted"
+      class="flex flex-wrap items-center gap-3 border-b border-hairline bg-surface-muted/50 px-4 py-2 text-[13.5px] text-ink-muted"
     >
       <Cloud class="size-4 shrink-0" />
       <span class="flex-1">
@@ -1549,7 +1549,7 @@ onBeforeUnmount(() => {
     <!-- Panel de revisión del envío pendiente -->
     <div v-if="pendingMessage && !locked" class="border-b border-warning/20 bg-warning-soft/50">
       <!-- Jefe / aprobador -->
-      <div v-if="auth.isAdmin" class="flex flex-wrap items-start gap-3 px-4 py-3 text-[12.5px]">
+      <div v-if="auth.isAdmin" class="flex flex-wrap items-start gap-3 px-4 py-3 text-[13.5px]">
         <ShieldCheck class="mt-0.5 size-5 shrink-0 text-warning" />
         <div class="min-w-0 flex-1">
           <p class="font-semibold text-ink">Revisión de envío</p>
@@ -1575,21 +1575,21 @@ onBeforeUnmount(() => {
             <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
               <button
                 type="button"
-                class="text-[11.5px] font-medium text-accent hover:underline"
+                class="text-[12.5px] font-medium text-accent hover:underline"
                 @click="reviewExpanded = !reviewExpanded"
               >
                 {{ reviewExpanded ? 'Ocultar detalles' : 'Ver detalles del mensaje' }}
               </button>
               <RouterLink
                 :to="{ name: 'inbox-message', params: { id: reviewMessage.id } }"
-                class="text-[11.5px] font-medium text-ink-muted hover:text-ink"
+                class="text-[12.5px] font-medium text-ink-muted hover:text-ink"
               >
                 Ver mensaje completo
               </RouterLink>
               <button
                 v-if="reviewVersionChanged"
                 type="button"
-                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                class="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent hover:underline"
                 @click="openHistory(reviewMessage.documentVersion)"
               >
                 <GitCompareArrows class="size-3.5" />
@@ -1597,7 +1597,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                class="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent hover:underline"
                 @click="togglePreview()"
               >
                 <Eye class="size-3.5" />
@@ -1654,7 +1654,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Remitente / otros usuarios -->
-      <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[12.5px] text-ink-muted">
+      <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[13.5px] text-ink-muted">
         <Send class="size-4 shrink-0 text-warning" />
         <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
         <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
@@ -1667,7 +1667,7 @@ onBeforeUnmount(() => {
     <div
       v-if="lastRejection"
       :class="[
-        'flex flex-wrap items-start gap-3 border-b px-4 py-2.5 text-[12.5px] lg:hidden',
+        'flex flex-wrap items-start gap-3 border-b px-4 py-2.5 text-[13.5px] lg:hidden',
         lastRejection.allowSenderEdit
           ? 'border-danger/20 bg-danger-soft/70 text-danger'
           : 'border-danger/20 bg-danger-soft/50 text-danger',
@@ -1703,7 +1703,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Documento sellado -->
-    <div v-if="locked" class="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface-hover px-4 py-2 text-[12.5px] text-ink-muted">
+    <div v-if="locked" class="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface-hover px-4 py-2 text-[13.5px] text-ink-muted">
       <Lock class="size-4 shrink-0" />
       <span class="flex-1">
         {{
@@ -1791,7 +1791,7 @@ onBeforeUnmount(() => {
 
         <button
           type="button"
-          class="fixed bottom-5 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[12.5px] font-medium shadow-pop lg:hidden"
+          class="fixed bottom-5 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[13px] font-medium shadow-pop lg:hidden"
           @click="mobileDataOpen = true"
         >
           <Sparkles class="size-4 text-accent" />
@@ -1819,7 +1819,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="rejectionPanelOpen" class="max-h-[44vh] overflow-y-auto px-4 pb-3 text-[12px]">
-            <p class="text-[11.5px] text-ink-muted">
+            <p class="text-[13px] text-ink-muted">
               <template v-if="lastRejection.rejectedByName">
                 Devuelto por
                 <strong class="font-medium text-ink">{{ lastRejection.rejectedByName }}</strong>
@@ -1832,24 +1832,24 @@ onBeforeUnmount(() => {
             <p class="mt-1.5 font-medium text-ink">{{ lastRejection.subject }}</p>
             <p
               v-if="lastRejection.body"
-              class="mt-1 whitespace-pre-wrap text-[11.5px] leading-snug text-ink-muted"
+              class="mt-1 whitespace-pre-wrap text-[13px] leading-snug text-ink-muted"
             >
               {{ lastRejection.body }}
             </p>
 
             <div class="mt-2 rounded-lg border border-danger/20 bg-surface px-2.5 py-2">
-              <p class="text-[10.5px] font-semibold uppercase tracking-wide text-danger">Motivo</p>
+              <p class="text-[12px] font-semibold uppercase tracking-wide text-danger">Motivo</p>
               <p class="mt-0.5 whitespace-pre-wrap text-[12px] text-ink">
                 {{ lastRejection.reason || 'Sin motivo indicado' }}
               </p>
             </div>
 
-            <p class="mt-1.5 text-[11px] text-ink-subtle">
+            <p class="text-meta mt-1.5">
               Versión enviada: v{{ lastRejection.documentVersion }} ·
               {{ lastRejection.recipientIds.length }} destinatario{{ lastRejection.recipientIds.length === 1 ? '' : 's' }}
             </p>
 
-            <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[11.5px] text-ink-muted">
+            <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[13px] text-ink-muted">
               El documento quedó cerrado y no se puede editar.
             </p>
 
@@ -1870,7 +1870,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <p v-if="lastRejection.allowSenderEdit" class="mt-1.5 text-[11px] text-ink-subtle">
+            <p v-if="lastRejection.allowSenderEdit" class="text-meta mt-1.5">
               Corrige lo indicado y reenvía el documento a aprobación.
             </p>
           </div>
@@ -1887,7 +1887,7 @@ onBeforeUnmount(() => {
             :placeholder="autoDescription || 'Para qué trata este documento'"
             @input="markDirty"
           />
-          <p v-if="autoDescription" class="mt-1.5 text-[11px] leading-snug text-ink-subtle">
+          <p v-if="autoDescription" class="text-meta mt-1.5 leading-snug">
             Sugerencia automática: «{{ autoDescription }}»
             <button
               v-if="canEdit && description.trim() !== autoDescription"
@@ -1951,7 +1951,7 @@ onBeforeUnmount(() => {
               :placeholder="autoDescription || 'Para qué trata este documento'"
               @input="markDirty"
             />
-            <p v-if="autoDescription" class="mt-1.5 text-[11px] leading-snug text-ink-subtle">
+            <p v-if="autoDescription" class="text-meta mt-1.5 leading-snug">
               Sugerencia automática: «{{ autoDescription }}»
               <button
                 v-if="canEdit && description.trim() !== autoDescription"
@@ -2025,7 +2025,7 @@ onBeforeUnmount(() => {
     />
 
     <div v-if="!canEdit" class="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2">
-      <span class="rounded-full bg-ink/85 px-3 py-1.5 text-[11.5px] font-medium text-white">
+      <span class="rounded-full bg-ink/85 px-3 py-1.5 text-[12.5px] font-medium text-white">
         {{
           locked
             ? status === 'rejected'
@@ -2036,12 +2036,12 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <div v-if="saving" class="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[11.5px] text-ink-muted shadow-card">
+    <div v-if="saving" class="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[12.5px] text-ink-muted shadow-card">
       <Loader2 class="size-3 animate-spin" />
       Guardando cambios…
     </div>
 
-    <div v-else-if="!dirty && lastSavedAt" class="pointer-events-none fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[11.5px] text-ink-subtle opacity-0 transition-opacity duration-300">
+    <div v-else-if="!dirty && lastSavedAt" class="pointer-events-none fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12.5px] text-ink-subtle opacity-0 transition-opacity duration-300">
       <Check class="size-3" />
       Guardado
     </div>

@@ -373,11 +373,11 @@ onUnmounted(() => {
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-3">
                 <span
-                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white"
+                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white"
                 >
                   SIRPEF
                 </span>
-                <span class="text-[10.5px] font-semibold uppercase tracking-[0.18em] text-white/55">
+                <span class="text-[12px] font-semibold uppercase tracking-[0.18em] text-white/70">
                   Panel de trabajo
                 </span>
               </div>
@@ -388,7 +388,7 @@ onUnmounted(() => {
                 {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
               </h1>
 
-              <p class="mt-4 max-w-lg text-[13.5px] leading-relaxed text-white/65 sm:text-[14.5px]">
+              <p class="mt-4 max-w-lg text-[15px] leading-relaxed text-white/80 sm:text-[16px]">
                 <template v-if="canSeeDocuments">
                   {{ displayedDocuments }} documento{{ displayedDocuments === 1 ? '' : 's' }} en tu
                   espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
@@ -471,7 +471,7 @@ onUnmounted(() => {
         />
 
         <div
-          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[11.5px] text-ink-subtle"
+          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[12.5px] text-ink-muted"
         >
           <span>Accede a tus módulos desde aquí.</span>
           <span class="hidden sm:block">
@@ -491,14 +491,14 @@ onUnmounted(() => {
             <header class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
                 <Clock class="size-4 text-accent" />
-                <h2 class="text-[13.5px] font-semibold">Continuar donde lo dejé</h2>
+                <h2 class="text-[15px] font-semibold">Continuar donde lo dejé</h2>
               </div>
-              <RouterLink :to="{ name: 'documents' }" class="text-[11.5px] font-medium text-accent hover:underline">
+              <RouterLink :to="{ name: 'documents' }" class="text-[12.5px] font-medium text-accent hover:underline">
                 Ver todos
               </RouterLink>
             </header>
 
-            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[12px] text-ink-muted">
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
               <Loader2 class="size-3.5 animate-spin" />
               Cargando…
             </div>
@@ -516,8 +516,8 @@ onUnmounted(() => {
                   >
                     <FileText class="size-3.5 shrink-0 text-ink-subtle" />
                     <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[12.5px] font-medium">{{ draft.title }}</span>
-                      <span class="block text-[11px] text-ink-subtle">
+                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
+                      <span class="text-meta block">
                         Solo en este navegador · {{ relativeTime(draft.savedAt) }}
                       </span>
                     </span>
@@ -532,8 +532,8 @@ onUnmounted(() => {
                   >
                     <FileText class="size-3.5 shrink-0 text-ink-subtle" />
                     <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[12.5px] font-medium">{{ draft.title }}</span>
-                      <span class="block text-[11px] text-ink-subtle">
+                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
+                      <span class="text-meta block">
                         {{ draft.docNumber ?? 'Borrador' }} · {{ relativeTime(draft.updatedAt) }}
                       </span>
                     </span>
@@ -541,7 +541,7 @@ onUnmounted(() => {
                   </button>
                 </li>
               </ul>
-              <p v-else class="mt-3 text-[12px] text-ink-muted">
+              <p v-else class="text-description mt-3">
                 No tienes borradores pendientes.
                 <button type="button" class="font-medium text-accent hover:underline" @click="pickerOpen = true">
                   Crear un documento
@@ -555,17 +555,17 @@ onUnmounted(() => {
             <header class="flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
                 <Send class="size-4 text-warning" />
-                <h2 class="text-[13.5px] font-semibold">Esperando al jefe</h2>
+                <h2 class="text-[15px] font-semibold">Esperando al jefe</h2>
               </div>
               <RouterLink
                 :to="{ name: 'inbox', query: { tab: 'sent' } }"
-                class="text-[11.5px] font-medium text-accent hover:underline"
+                class="text-[12.5px] font-medium text-accent hover:underline"
               >
                 Ver envíos
               </RouterLink>
             </header>
 
-            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[12px] text-ink-muted">
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
               <Loader2 class="size-3.5 animate-spin" />
               Cargando…
             </div>
@@ -578,8 +578,8 @@ onUnmounted(() => {
                 >
                   <Send class="size-3.5 shrink-0 text-ink-subtle" />
                   <span class="min-w-0 flex-1">
-                    <span class="block truncate text-[12.5px] font-medium">{{ message.documentTitle }}</span>
-                    <span class="block truncate text-[11px] text-ink-subtle">
+                    <span class="block truncate text-[14px] font-medium">{{ message.documentTitle }}</span>
+                    <span class="text-meta block truncate">
                       {{ message.subject }} · {{ relativeTime(message.createdAt) }}
                     </span>
                   </span>
@@ -587,7 +587,7 @@ onUnmounted(() => {
                 </button>
               </li>
             </ul>
-            <p v-else class="mt-3 text-[12px] text-ink-muted">
+            <p v-else class="text-description mt-3">
               No hay envíos esperando aprobación.
             </p>
           </div>
@@ -597,7 +597,7 @@ onUnmounted(() => {
       <section v-else-if="!shellLoading" class="card mx-auto mt-8 max-w-[1280px] p-8 text-center">
         <FileText class="mx-auto size-8 text-ink-subtle" />
         <h2 class="mt-3 text-[15px] font-semibold">Tu menú está vacío</h2>
-        <p class="mt-1 text-[13px] text-ink-muted">
+        <p class="text-description mt-1">
           Un administrador todavía no te asignó módulos. Puedes seguir entrando a Ajustes
           desde tu avatar.
         </p>

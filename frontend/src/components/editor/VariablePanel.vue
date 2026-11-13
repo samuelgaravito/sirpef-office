@@ -99,8 +99,8 @@ const missingRequired = computed(() =>
   <div class="flex h-full flex-col">
     <header class="flex items-start justify-between gap-2 border-b border-hairline px-4 py-3">
       <div>
-        <h2 class="text-[13px] font-semibold">Datos del documento</h2>
-        <p class="mt-0.5 text-[11.5px] text-ink-muted">
+        <h2 class="text-[15px] font-semibold">Datos del documento</h2>
+        <p class="text-meta mt-0.5">
           {{ schema.length }} campo{{ schema.length === 1 ? '' : 's' }}
           <template v-if="missingRequired.length">
             · <span class="text-warning">{{ missingRequired.length }} obligatorio{{ missingRequired.length === 1 ? '' : 's' }} sin completar</span>
@@ -122,13 +122,13 @@ const missingRequired = computed(() =>
     <div class="flex-1 space-y-3.5 overflow-y-auto px-4 py-4">
       <!-- Número de documento: variable de sistema, no editable -->
       <div class="rounded-lg border border-hairline bg-surface-muted/40 px-3 py-2.5">
-        <p class="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-subtle">
+        <p class="mb-1 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
           {{ NUMBERING_MESSAGES.variableLabel }}
         </p>
         <NumberingBadge :doc-number="docNumber" :numbering="numbering" variant="full" />
       </div>
 
-      <p v-if="schema.length === 0" class="text-[12.5px] text-ink-muted">
+      <p v-if="schema.length === 0" class="text-description">
         Esta plantilla no define variables. Puedes escribir libremente en el documento.
       </p>
 
@@ -137,6 +137,14 @@ const missingRequired = computed(() =>
           {{ variable.label }}
           <span v-if="variable.required" class="text-danger">*</span>
         </label>
+
+        <!-- Explicación del campo: qué se espera escribir aquí. -->
+        <p
+          v-if="variable.description && variable.type !== 'checkbox'"
+          class="mb-1.5 -mt-0.5 text-[12.5px] leading-snug text-ink-muted"
+        >
+          {{ variable.description }}
+        </p>
 
         <!-- Texto corto -->
         <input
@@ -173,7 +181,7 @@ const missingRequired = computed(() =>
 
         <!-- Número / moneda -->
         <div v-else-if="variable.type === 'number' || variable.type === 'money'" class="relative">
-          <span v-if="variable.type === 'money'" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[12px] text-ink-subtle">S/</span>
+          <span v-if="variable.type === 'money'" class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[13px] text-ink-subtle">S/</span>
           <input
             :id="`var-${variable.key}`"
             type="number"
@@ -206,7 +214,7 @@ const missingRequired = computed(() =>
           <label
             v-for="option in variable.options ?? []"
             :key="option.value"
-            class="flex cursor-pointer items-center gap-1.5 rounded-lg border border-hairline px-2 py-1 text-[12px]"
+            class="flex cursor-pointer items-center gap-1.5 rounded-lg border border-hairline px-2.5 py-1.5 text-[13px]"
           >
             <input
               type="checkbox"
@@ -227,7 +235,7 @@ const missingRequired = computed(() =>
         </div>
 
         <!-- Casilla -->
-        <label v-else-if="variable.type === 'checkbox'" class="flex cursor-pointer items-center gap-2 text-[12.5px]">
+        <label v-else-if="variable.type === 'checkbox'" class="flex cursor-pointer items-center gap-2 text-[13.5px]">
           <input
             type="checkbox"
             class="accent-[var(--color-accent)]"
@@ -255,7 +263,7 @@ const missingRequired = computed(() =>
 
         <!-- Tabla -->
         <div v-else-if="variable.type === 'table'" class="overflow-hidden rounded-lg border border-hairline">
-          <table class="w-full border-collapse text-[11.5px]">
+          <table class="w-full border-collapse text-[12.5px]">
             <thead class="bg-surface-muted">
               <tr>
                 <th v-for="column in variable.columns ?? []" :key="column.key" class="border-b border-hairline px-2 py-1.5 text-left font-medium text-ink-muted">
@@ -268,7 +276,7 @@ const missingRequired = computed(() =>
               <tr v-for="(row, index) in rowsOf(variable.key)" :key="index" class="border-b border-hairline last:border-0">
                 <td v-for="column in variable.columns ?? []" :key="column.key" class="p-1">
                   <input
-                    class="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-[11.5px] focus:border-accent focus:bg-surface focus:outline-none"
+                    class="w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-[12.5px] focus:border-accent focus:bg-surface focus:outline-none"
                     :type="column.type === 'number' || column.type === 'money' ? 'number' : column.type === 'date' ? 'date' : 'text'"
                     :value="row[column.key] ?? ''"
                     :disabled="disabled"
@@ -282,7 +290,7 @@ const missingRequired = computed(() =>
                 </td>
               </tr>
               <tr v-if="rowsOf(variable.key).length === 0">
-                <td :colspan="(variable.columns?.length ?? 1) + 1" class="px-2 py-3 text-center text-[11.5px] text-ink-subtle">
+                <td :colspan="(variable.columns?.length ?? 1) + 1" class="px-2 py-3 text-center text-[12.5px] text-ink-subtle">
                   Sin filas
                 </td>
               </tr>
@@ -290,7 +298,7 @@ const missingRequired = computed(() =>
           </table>
           <button
             type="button"
-            class="flex w-full items-center justify-center gap-1 border-t border-hairline bg-surface-muted/50 py-1.5 text-[11.5px] font-medium text-accent hover:bg-accent-soft"
+            class="flex w-full items-center justify-center gap-1 border-t border-hairline bg-surface-muted/50 py-2 text-[13px] font-medium text-accent hover:bg-accent-soft"
             :disabled="disabled"
             @click="addRow(variable)"
           >
@@ -299,7 +307,7 @@ const missingRequired = computed(() =>
           </button>
         </div>
 
-        <p v-if="variable.aiHint && variable.type !== 'text' && variable.type !== 'longtext'" class="mt-1 text-[11px] text-ink-subtle">
+        <p v-if="variable.aiHint && variable.type !== 'text' && variable.type !== 'longtext'" class="mt-1 text-[12.5px] leading-snug text-ink-subtle">
           {{ variable.aiHint }}
         </p>
       </div>

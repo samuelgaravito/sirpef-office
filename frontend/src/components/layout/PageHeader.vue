@@ -26,7 +26,7 @@ const closePanel = inject(PANEL_CLOSE, null);
   >
     <div class="min-w-0">
       <h1 class="truncate text-[22px] font-semibold tracking-tight text-ink">{{ title }}</h1>
-      <p v-if="subtitle" class="mt-1 text-[13px] text-ink-muted">{{ subtitle }}</p>
+      <p v-if="subtitle" class="text-description mt-1">{{ subtitle }}</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <slot name="actions" />

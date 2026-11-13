@@ -48,8 +48,8 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
         </span>
       </div>
 
-      <p class="mt-3.5 text-[13.5px] font-semibold text-ink">{{ tile.label }}</p>
-      <p class="mt-0.5 line-clamp-2 min-h-[32px] text-[11.5px] leading-snug text-ink-muted">
+      <p class="mt-3.5 text-[15px] font-semibold text-ink">{{ tile.label }}</p>
+      <p class="mt-1 line-clamp-2 min-h-[40px] text-[13.5px] leading-snug text-ink-muted">
         {{ tile.description }}
       </p>
 
@@ -57,7 +57,7 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
         <span class="text-[19px] font-semibold leading-none tracking-tight text-ink">
           {{ tile.value }}
         </span>
-        <span class="truncate text-[11px] text-ink-subtle">{{ tile.caption }}</span>
+        <span class="truncate text-[12.5px] text-ink-muted">{{ tile.caption }}</span>
         <span
           v-if="tile.badge"
           class="ml-auto grid min-w-[18px] place-items-center rounded-full bg-accent px-1 py-0.5 text-[9.5px] font-bold leading-none text-white"

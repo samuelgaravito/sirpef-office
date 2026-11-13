@@ -96,7 +96,24 @@ function choose(templateId: string | null): void {
         />
       </div>
 
-      <div v-if="filtered.length > 0" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <button
+        type="button"
+        class="flex w-full items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface px-4 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent-soft/30"
+        @click="choose(null)"
+      >
+        <span class="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-muted text-ink-muted">
+          <FilePlus2 class="size-5" />
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-[15px] font-medium text-ink">Hoja en blanco</span>
+          <span class="mt-0.5 flex items-center gap-1 text-[13px] text-warning">
+            <TriangleAlert class="size-3.5 shrink-0" />
+            Sin modelo ni número correlativo
+          </span>
+        </span>
+      </button>
+
+      <div v-if="filtered.length > 0" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <button
           v-for="template in filtered"
           :key="template.id"
@@ -113,14 +130,14 @@ function choose(templateId: string | null): void {
               :effective-design-updated-at="template.effectiveDesignUpdatedAt"
               :version="template.version"
               :tokens="template.designTokens"
-              :scale="0.24"
+              :scale="0.16"
               :title="template.name"
             />
           </span>
           <span class="flex flex-1 flex-col px-3 pb-3 pt-2.5">
-            <span class="truncate text-[13px] font-semibold text-ink">{{ template.name }}</span>
-            <span class="mt-0.5 text-[11px] text-ink-subtle">{{ docTypeLabel(template.docType) }}</span>
-            <span v-if="template.description" class="mt-1 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
+            <span class="truncate text-[15px] font-semibold text-ink">{{ template.name }}</span>
+            <span v-if="docTypeLabel(template.docType) !== template.name" class="text-meta mt-0.5">{{ docTypeLabel(template.docType) }}</span>
+            <span v-if="template.description" class="text-description mt-1 line-clamp-2">
               {{ template.description }}
             </span>
           </span>
@@ -129,10 +146,10 @@ function choose(templateId: string | null): void {
 
       <div v-else class="rounded-xl border border-hairline bg-surface-muted/40 px-4 py-6 text-center">
         <FileText class="mx-auto size-6 text-ink-subtle" />
-        <p class="mt-2 text-[13px] font-medium">
+        <p class="mt-2 text-[15px] font-semibold">
           {{ search ? 'Ningún modelo coincide' : 'Todavía no hay modelos disponibles' }}
         </p>
-        <p class="mt-1 text-[12px] text-ink-muted">
+        <p class="text-description mt-1">
           {{
             search
               ? 'Prueba con otro nombre o crea una hoja en blanco.'
@@ -140,23 +157,6 @@ function choose(templateId: string | null): void {
           }}
         </p>
       </div>
-
-      <button
-        type="button"
-        class="flex w-full items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface px-4 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent-soft/30"
-        @click="choose(null)"
-      >
-        <span class="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-muted text-ink-muted">
-          <FilePlus2 class="size-5" />
-        </span>
-        <span class="min-w-0 flex-1">
-          <span class="block text-[13px] font-medium text-ink">Hoja en blanco</span>
-          <span class="mt-0.5 flex items-center gap-1 text-[11.5px] text-warning">
-            <TriangleAlert class="size-3.5 shrink-0" />
-            Sin modelo ni número correlativo
-          </span>
-        </span>
-      </button>
     </div>
 
     <template #footer>
