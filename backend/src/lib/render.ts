@@ -167,7 +167,9 @@ export function interpolateDoc(content: JSONContent, values: VariableValues): JS
     // La tabla puede estar anidada en cualquier nivel del documento (doc →
     // párrafos/tablas), así que hay que descender por todos los hijos.
     if (node.content) node.content = node.content.map(walk);
-    if (node.text) node.text = interpolateText(node.text, values);
+    // Se conservan tanto los espacios del valor como los que el diseño de la
+    // plantilla usa para alinear (p. ej. «OBSERVACIONES:    {{texto}}»).
+    if (node.text) node.text = preserveSpacing(interpolateText(node.text, values));
     return node;
   };
 
