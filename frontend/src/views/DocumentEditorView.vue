@@ -1526,6 +1526,26 @@ onBeforeUnmount(() => {
       <button type="button" class="btn btn-danger btn-sm" @click="overwriteConflict">Conservar mis cambios</button>
     </div>
 
+    <!-- Documento nuevo: el borrador vive en este navegador hasta guardarlo -->
+    <div
+      v-if="isNew"
+      class="flex flex-wrap items-center gap-3 border-b border-hairline bg-surface-muted/50 px-4 py-2 text-[12.5px] text-ink-muted"
+    >
+      <Cloud class="size-4 shrink-0" />
+      <span class="flex-1">
+        Este documento aún no está en el servidor: el borrador se guarda solo en este navegador.
+      </span>
+      <button
+        type="button"
+        class="btn btn-outline btn-sm"
+        :disabled="saving || !dirty || !canEdit"
+        @click="save()"
+      >
+        <Save class="size-3.5" />
+        {{ saving ? 'Guardando…' : 'Guardar en el servidor' }}
+      </button>
+    </div>
+
     <!-- Panel de revisión del envío pendiente -->
     <div v-if="pendingMessage && !locked" class="border-b border-warning/20 bg-warning-soft/50">
       <!-- Jefe / aprobador -->

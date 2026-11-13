@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 'lucide-vue-next';
+import {
+  ArrowRight,
+  Clock,
+  FileText,
+  Inbox,
+  LayoutTemplate,
+  Loader2,
+  Palette,
+  Plus,
+  Search,
+  Send,
+} from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
@@ -12,9 +23,10 @@ import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { relativeTime } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import type { InboxMessageSummary, ListResponse } from '@/types';
+import type { DocumentSummary, InboxMessageSummary, ListResponse } from '@/types';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -34,6 +46,56 @@ const panelOrigin = ref<{ x: number; y: number } | null>(null);
 const pendingItems = ref<InboxMessageSummary[]>([]);
 const pendingLoading = ref(false);
 const pendingUpdatedAt = ref<Date | null>(null);
+
+/** Documentos que la persona dejó a medias, para retomarlos de un clic. */
+const recentDrafts = ref<DocumentSummary[]>([]);
+/** Envíos propios esperando la aprobación del jefe. */
+const waitingApproval = ref<InboxMessageSummary[]>([]);
+/** Borradores que solo viven en este navegador (aún sin fila en el servidor). */
+const localDrafts = ref<LocalDraftItem[]>([]);
+const activityLoading = ref(false);
+
+interface LocalDraftItem {
+  key: string;
+  title: string;
+  savedAt: string;
+  templateId: string | null;
+}
+
+const DRAFT_PREFIX = 'sirpef:doc-draft:';
+
+/** Lee los borradores locales para que no queden escondidos en el navegador. */
+function readLocalDrafts(): LocalDraftItem[] {
+  const found: LocalDraftItem[] = [];
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key?.startsWith(DRAFT_PREFIX)) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const draft = JSON.parse(raw) as { title?: string; savedAt?: string };
+      const suffix = key.slice(DRAFT_PREFIX.length);
+      found.push({
+        key,
+        title: draft.title?.trim() || 'Documento sin título',
+        savedAt: draft.savedAt ?? '',
+        templateId: suffix === 'blank' ? null : suffix,
+      });
+    }
+  } catch {
+    // Almacenamiento no disponible: no hay borradores locales que mostrar.
+  }
+  return found
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+    .slice(0, 3);
+}
+
+function resumeLocalDraft(draft: LocalDraftItem): void {
+  void router.push({
+    name: 'document-new',
+    query: draft.templateId ? { template: draft.templateId } : {},
+  });
+}
 
 const displayedDocuments = ref(0);
 let countFrame: number | undefined;
@@ -167,6 +229,51 @@ async function loadPending(): Promise<void> {
   }
 }
 
+/** «Tu día»: borradores por retomar y envíos esperando al jefe. */
+async function loadActivity(): Promise<void> {
+  activityLoading.value = true;
+  const tasks: Promise<unknown>[] = [];
+
+  if (canSeeDocuments.value) {
+    tasks.push(
+      api
+        .get<ListResponse<DocumentSummary>>('/documents', {
+          scope: 'mine',
+          status: 'draft',
+          sort: 'updated',
+          pageSize: 3,
+        })
+        .then((data) => {
+          recentDrafts.value = data.items;
+        })
+        .catch(() => {
+          recentDrafts.value = [];
+        }),
+    );
+  }
+
+  if (canSeeInbox.value) {
+    tasks.push(
+      api
+        .get<ListResponse<InboxMessageSummary>>('/inbox', {
+          scope: 'sent',
+          status: 'pending_approval',
+          pageSize: 3,
+        })
+        .then((data) => {
+          waitingApproval.value = data.items;
+        })
+        .catch(() => {
+          waitingApproval.value = [];
+        }),
+    );
+  }
+
+  await Promise.allSettled(tasks);
+  localDrafts.value = readLocalDrafts();
+  activityLoading.value = false;
+}
+
 async function load(): Promise<void> {
   shellLoading.value = true;
   try {
@@ -199,6 +306,7 @@ async function load(): Promise<void> {
       void refreshInbox();
       void loadPending();
     }
+    void loadActivity();
   } catch (error) {
     toast.failure(error, 'No se pudo cargar el panel de inicio');
   } finally {
@@ -225,6 +333,10 @@ function rememberOrigin(event: PointerEvent): void {
 
 function openMessage(id: string): void {
   void router.push({ name: 'inbox-message', params: { id } });
+}
+
+function openDocument(id: string): void {
+  void router.push({ name: 'document', params: { id } });
 }
 
 // Los contadores de la bandeja se refrescan por sondeo en `AppShell`; cuando
@@ -365,6 +477,120 @@ onUnmounted(() => {
           <span class="hidden sm:block">
             También puedes pulsar <kbd class="kbd">Ctrl</kbd> + <kbd class="kbd">K</kbd>
           </span>
+        </div>
+      </section>
+
+      <!-- «Tu día»: lo que quedó a medias y lo que espera al jefe -->
+      <section
+        v-if="canSeeDocuments || canSeeInbox"
+        class="mx-auto mt-6 w-full max-w-[1280px] px-4 sm:px-6 lg:px-8"
+      >
+        <div class="grid gap-4 lg:grid-cols-2">
+          <!-- Continuar donde lo dejé -->
+          <div v-if="canSeeDocuments" class="card p-4">
+            <header class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <Clock class="size-4 text-accent" />
+                <h2 class="text-[13.5px] font-semibold">Continuar donde lo dejé</h2>
+              </div>
+              <RouterLink :to="{ name: 'documents' }" class="text-[11.5px] font-medium text-accent hover:underline">
+                Ver todos
+              </RouterLink>
+            </header>
+
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[12px] text-ink-muted">
+              <Loader2 class="size-3.5 animate-spin" />
+              Cargando…
+            </div>
+
+            <template v-else>
+              <ul
+                v-if="recentDrafts.length > 0 || localDrafts.length > 0"
+                class="mt-2 divide-y divide-hairline"
+              >
+                <li v-for="draft in localDrafts" :key="draft.key">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                    @click="resumeLocalDraft(draft)"
+                  >
+                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[12.5px] font-medium">{{ draft.title }}</span>
+                      <span class="block text-[11px] text-ink-subtle">
+                        Solo en este navegador · {{ relativeTime(draft.savedAt) }}
+                      </span>
+                    </span>
+                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                  </button>
+                </li>
+                <li v-for="draft in recentDrafts" :key="draft.id">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                    @click="openDocument(draft.id)"
+                  >
+                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[12.5px] font-medium">{{ draft.title }}</span>
+                      <span class="block text-[11px] text-ink-subtle">
+                        {{ draft.docNumber ?? 'Borrador' }} · {{ relativeTime(draft.updatedAt) }}
+                      </span>
+                    </span>
+                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="mt-3 text-[12px] text-ink-muted">
+                No tienes borradores pendientes.
+                <button type="button" class="font-medium text-accent hover:underline" @click="pickerOpen = true">
+                  Crear un documento
+                </button>
+              </p>
+            </template>
+          </div>
+
+          <!-- Esperando al jefe -->
+          <div v-if="canSeeInbox" class="card p-4">
+            <header class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <Send class="size-4 text-warning" />
+                <h2 class="text-[13.5px] font-semibold">Esperando al jefe</h2>
+              </div>
+              <RouterLink
+                :to="{ name: 'inbox', query: { tab: 'sent' } }"
+                class="text-[11.5px] font-medium text-accent hover:underline"
+              >
+                Ver envíos
+              </RouterLink>
+            </header>
+
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[12px] text-ink-muted">
+              <Loader2 class="size-3.5 animate-spin" />
+              Cargando…
+            </div>
+            <ul v-else-if="waitingApproval.length > 0" class="mt-2 divide-y divide-hairline">
+              <li v-for="message in waitingApproval" :key="message.id">
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                  @click="openMessage(message.id)"
+                >
+                  <Send class="size-3.5 shrink-0 text-ink-subtle" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-[12.5px] font-medium">{{ message.documentTitle }}</span>
+                    <span class="block truncate text-[11px] text-ink-subtle">
+                      {{ message.subject }} · {{ relativeTime(message.createdAt) }}
+                    </span>
+                  </span>
+                  <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                </button>
+              </li>
+            </ul>
+            <p v-else class="mt-3 text-[12px] text-ink-muted">
+              No hay envíos esperando aprobación.
+            </p>
+          </div>
         </div>
       </section>
 

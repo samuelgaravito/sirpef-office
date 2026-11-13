@@ -8,7 +8,7 @@ import {
   Send,
 } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { isInboxRealtimeEvent } from '@sirpefoffice/shared';
 
@@ -36,6 +36,7 @@ interface MessageGroup {
 }
 
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const { pendingCount, sections, refresh: refreshInbox } = useInboxBadge();
@@ -46,7 +47,9 @@ const page = ref(1);
 const pageSize = 20;
 const loading = ref(true);
 const search = ref('');
-const scope = ref<Scope>('received');
+const scope = ref<Scope>(
+  route.query.tab === 'sent' || route.query.scope === 'sent' ? 'sent' : 'received',
+);
 const statusFilter = ref<StatusFilter>('all');
 
 let searchTimer: number | undefined;
