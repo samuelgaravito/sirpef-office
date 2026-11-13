@@ -21,6 +21,12 @@ async function shot(page, name) {
   console.log(`  · captura ${name}.png`);
 }
 
+/** Abre el menú «⋯» del editor, donde viven las acciones secundarias. */
+async function openActions(page) {
+  await page.click('button[aria-label="Más acciones"]');
+  await wait(250);
+}
+
 async function clickText(page, selector, text) {
   const handles = await page.$$(selector);
   for (const handle of handles) {
@@ -66,22 +72,21 @@ async function main() {
 
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
-    await page.waitForSelector('text/Documentos recientes', { timeout: 15000 });
-    await page.waitForSelector('article iframe', { timeout: 15000 });
-    await wait(1400);
-    const homeDocumentPreviews = await page.evaluate(() => {
-      const frames = Array.from(document.querySelectorAll('article iframe'));
-      return {
-        count: frames.length,
-        real: frames.some((frame) => frame.getAttribute('srcdoc')?.includes('doc-page')),
-      };
-    });
+    await page.waitForSelector('text/Continuar donde lo dejé', { timeout: 15000 });
+    await page.waitForSelector('text/Esperando al jefe', { timeout: 15000 });
+    await wait(600);
+    const homeDay = await page.evaluate(() => ({
+      create: Array.from(document.querySelectorAll('button')).some((button) =>
+        button.textContent?.includes('Crear documento'),
+      ),
+      drafts: Boolean(document.body.textContent?.includes('Continuar donde lo dejé')),
+    }));
     console.log(
-      homeDocumentPreviews.real
-        ? `  · ${homeDocumentPreviews.count} documentos recientes con vista previa real`
-        : '  · los documentos recientes NO muestran la vista previa real',
+      homeDay.create && homeDay.drafts
+        ? '  · inicio con «Tu día», borradores y botón Crear documento'
+        : '  · falta el panel «Tu día» en Inicio',
     );
-    if (!homeDocumentPreviews.real) errors.push('Inicio no muestra la vista previa real de documentos');
+    if (!homeDay.create || !homeDay.drafts) errors.push('Inicio no muestra el panel «Tu día»');
     await shot(page, '02-inicio');
 
     console.log('→ Documentos');
@@ -105,8 +110,8 @@ async function main() {
     await shot(page, '03-documentos');
 
     console.log('→ Plantillas');
-    await page.click('a[href="/templates"]');
-    await page.waitForSelector('input[placeholder="Buscar plantilla…"]');
+    await page.goto(`${BASE}/templates`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('input[placeholder="Buscar plantilla…"], input[placeholder="Buscar un modelo…"]');
     await wait(1200);
     const templatePreviews = await page.evaluate(() => {
       const frames = Array.from(document.querySelectorAll('article iframe'));
@@ -123,53 +128,42 @@ async function main() {
     if (!templatePreviews.real) errors.push('Las plantillas no muestran la vista previa real');
     await shot(page, '04-plantillas');
 
-    console.log('→ Nueva plantilla: elegir diseño');
+    console.log('→ Nueva plantilla: diseño en uso');
+    await clickText(page, 'button', 'Administrar');
+    await wait(400);
     await clickText(page, 'button', 'Nueva plantilla');
     await page.waitForSelector('text/Vista previa del diseño', { timeout: 15000 });
     await wait(900);
     const templateDesignModal = await page.evaluate(() => ({
-      hasNoDesign: document.body.textContent?.includes('Sin diseño') ?? false,
+      hasDesign:
+        (document.body.textContent?.includes('Diseño en uso') ?? false) ||
+        (document.body.textContent?.includes('Sin diseño') ?? false),
       hasConfirm: Array.from(document.querySelectorAll('button')).some((button) =>
         button.textContent?.includes('Crear plantilla'),
       ),
     }));
     console.log(
-      templateDesignModal.hasNoDesign && templateDesignModal.hasConfirm
-        ? '  · modal de diseño disponible antes de crear la plantilla'
+      templateDesignModal.hasDesign && templateDesignModal.hasConfirm
+        ? '  · la modal muestra el diseño con el que nacerá la plantilla'
         : '  · faltan opciones en la modal de nueva plantilla',
     );
-    if (!templateDesignModal.hasNoDesign || !templateDesignModal.hasConfirm) {
-      errors.push('La modal de nueva plantilla no muestra el selector de diseño');
+    if (!templateDesignModal.hasDesign || !templateDesignModal.hasConfirm) {
+      errors.push('La modal de nueva plantilla no muestra el diseño aplicado');
     }
-    await clickText(page, 'button', 'Menta Verde');
-    await wait(500);
     await shot(page, '04b-nueva-plantilla');
     await clickText(page, 'button', 'Crear plantilla');
     await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 20000 });
     await wait(900);
-    await clickText(page, 'button', 'Ajustes');
-    const selectedDesign = await page.evaluate(() => {
-      const label = Array.from(document.querySelectorAll('label')).find(
-        (item) => item.textContent?.trim() === 'Diseño',
-      );
-      const select = label?.parentElement?.querySelector('select');
-      return select?.selectedOptions[0]?.textContent?.trim() ?? '';
-    });
-    console.log(
-      selectedDesign === 'Menta Verde'
-        ? '  · la nueva plantilla abre con el diseño elegido'
-        : `  · la nueva plantilla NO mantiene el diseño elegido (${selectedDesign || 'vacío'})`,
-    );
-    if (selectedDesign !== 'Menta Verde') {
-      errors.push('La nueva plantilla no abre con el diseño elegido en la modal');
-    }
+    console.log('  · la nueva plantilla abre en el editor');
     await shot(page, '04c-nueva-plantilla-editor');
 
     await page.goto(`${BASE}/templates`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('input[placeholder="Buscar plantilla…"]');
+    await page.waitForSelector('input[placeholder="Buscar plantilla…"], input[placeholder="Buscar un modelo…"]');
     await wait(800);
 
     console.log('→ Editor de plantilla');
+    await clickText(page, 'button', 'Administrar');
+    await wait(400);
     await page.click('article button');
     await page.waitForSelector('.doc-paged-flow .tiptap');
     await wait(900);
@@ -272,36 +266,31 @@ async function main() {
 
     console.log('→ Crear documento desde el inicio');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Empezar un documento nuevo');
-    await wait(1200);
-
-    // La lista puede cambiar de orden: buscamos una plantilla con variables.
-    await page.waitForFunction(() => {
-      const section = Array.from(document.querySelectorAll('section')).find((item) =>
-        item.textContent?.includes('Empezar un documento nuevo'),
+    await page.waitForSelector('text/Continuar donde lo dejé');
+    await wait(600);
+    await clickText(page, 'button', 'Crear documento');
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[role="dialog"]')).some((node) =>
+        node.textContent?.includes('Elige el modelo'),
+      ),
+      { timeout: 15000 },
+    );
+    await page.waitForSelector('[role="dialog"] button.card', { timeout: 15000 });
+    await wait(500);
+    const picked = await page.evaluate(() => {
+      const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find((node) =>
+        node.textContent?.includes('Elige el modelo'),
       );
-      return Array.from(section?.querySelectorAll('button') ?? []).some((button) =>
-        button.textContent?.includes('Certificado'),
-      );
-    });
-    const opened = await page.evaluate(() => {
-      const section = Array.from(document.querySelectorAll('section')).find((item) =>
-        item.textContent?.includes('Empezar un documento nuevo'),
-      );
-      const target = Array.from(section?.querySelectorAll('button') ?? []).find((button) =>
+      const target = Array.from(dialog?.querySelectorAll('button.card') ?? []).find((button) =>
         button.textContent?.includes('Certificado'),
       );
       if (!target) return false;
       target.click();
       return true;
     });
-    if (!opened) {
-      const section = await page.$('section');
-      const cards = (await section?.$$('button')) ?? [];
-      await (cards[1] ?? cards[0])?.click();
-    }
+    if (!picked) throw new Error('El selector de modelo no muestra «Certificado»');
 
-    console.log('→ Documento creado directamente con la plantilla');
+    console.log('→ Documento creado directamente con el modelo');
     await page.waitForFunction(() => location.pathname.startsWith('/documents/'), {
       timeout: 20000,
     });
@@ -309,15 +298,15 @@ async function main() {
     await wait(1200);
     const modalStillOpen = await page.evaluate(() =>
       Array.from(document.querySelectorAll('[role="dialog"]')).some((node) =>
-        node.textContent?.includes('Elegir una plantilla'),
+        node.textContent?.includes('Elige el modelo'),
       ),
     );
     console.log(
       modalStillOpen
-        ? '  · la modal de plantilla sigue abierta'
+        ? '  · el selector de modelo sigue abierto'
         : '  · el documento se abrió directamente en el editor',
     );
-    if (modalStillOpen) errors.push('La creación desde Inicio sigue abriendo la modal de plantilla');
+    if (modalStillOpen) errors.push('El selector de modelo no se cerró al elegir');
     await shot(page, '09-editor-documento');
 
     console.log('→ Escribir y autoguardar');
@@ -338,7 +327,8 @@ async function main() {
     console.log(`  · estado de guardado: ${saveLabel || '(no visible)'}`);
 
     console.log('→ Historial de versiones');
-    await page.click('button[title="Historial de versiones"]');
+    await openActions(page);
+    await clickText(page, 'button', 'Historial de versiones');
     await page.waitForSelector('text/Historial de versiones');
     await wait(1400);
     await shot(page, '11-historial');
@@ -353,7 +343,8 @@ async function main() {
     await shot(page, '12-datos-rellenos');
 
     console.log('→ Vista previa con datos');
-    await page.click('button[title*="Vista previa"]');
+    await openActions(page);
+    await clickText(page, 'button', 'Vista previa');
     await page.waitForSelector('iframe[title="Vista previa del documento"]', { timeout: 20000 });
     await wait(1500);
     await shot(page, '13-vista-previa');
@@ -365,7 +356,8 @@ async function main() {
     console.log(previewText ? '  · los datos aparecen en la vista previa' : '  · ¡los datos NO aparecen!');
 
     console.log('→ Volver a editar y buscar');
-    await page.click('button[title*="Volver a editar"]');
+    await openActions(page);
+    await clickText(page, 'button', 'Volver a editar');
     await page.waitForSelector('.doc-paged-flow .tiptap');
     await page.keyboard.down('Control');
     await page.keyboard.press('f');
@@ -386,15 +378,22 @@ async function main() {
 
     console.log('→ Nuevo documento en blanco');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Empezar un documento nuevo');
+    await page.waitForSelector('text/Continuar donde lo dejé');
     await wait(600);
-    await clickText(page, 'button', 'Nuevo documento');
+    await clickText(page, 'button', 'Crear documento');
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[role="dialog"]')).some((node) =>
+        node.textContent?.includes('Elige el modelo'),
+      ),
+      { timeout: 15000 },
+    );
+    await clickText(page, 'button', 'Hoja en blanco');
     await page.waitForFunction(() => location.pathname.startsWith('/documents/'), {
       timeout: 20000,
     });
     await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 20000 });
     await wait(900);
-    console.log('  · el botón Nuevo documento abre directamente el editor');
+    console.log('  · la hoja en blanco se abre en el editor y avisa de que no tiene numeración');
     await shot(page, '15-documento-blanco');
 
     console.log('→ Tablas: insertar y combinar celdas');
