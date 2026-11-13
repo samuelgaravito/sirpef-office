@@ -6,6 +6,7 @@ import { useRouter } from 'vue-router';
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import DocumentCard from '@/components/documents/DocumentCard.vue';
+import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -36,6 +37,8 @@ const view = ref<'active' | 'trash'>('active');
 
 const deleting = ref<DocumentSummary | null>(null);
 const removing = ref(false);
+/** Selector de modelo: la puerta de entrada para crear un documento. */
+const pickerOpen = ref(false);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
@@ -119,6 +122,11 @@ function openDocument(id: string): void {
   void router.push({ name: 'document', params: { id } });
 }
 
+/** El selector entrega `null` para la hoja en blanco. */
+function onCreate(templateId: string | null): void {
+  void createDocument(templateId ?? undefined);
+}
+
 async function confirmDelete(): Promise<void> {
   if (!deleting.value || removing.value) return;
   removing.value = true;
@@ -159,9 +167,9 @@ onMounted(() => {
   <AppShell>
     <PageHeader title="Documentos" :subtitle="subtitle">
       <template #actions>
-        <button v-if="view === 'active'" type="button" class="btn btn-primary" :disabled="creating !== null" @click="createDocument()">
+        <button v-if="view === 'active'" type="button" class="btn btn-primary" :disabled="creating !== null" @click="pickerOpen = true">
           <component :is="creating === 'blank' ? Loader2 : Plus" :class="['size-4', creating === 'blank' ? 'animate-spin' : '']" />
-          {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+          {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
         </button>
       </template>
     </PageHeader>
@@ -242,9 +250,9 @@ onMounted(() => {
               : 'Crea tu primer documento a partir de una plantilla.'
         "
       >
-        <button v-if="view === 'active'" type="button" class="btn btn-primary" :disabled="creating !== null" @click="createDocument()">
+        <button v-if="view === 'active'" type="button" class="btn btn-primary" :disabled="creating !== null" @click="pickerOpen = true">
           <component :is="creating === 'blank' ? Loader2 : Plus" :class="['size-4', creating === 'blank' ? 'animate-spin' : '']" />
-          {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+          {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
         </button>
       </EmptyState>
 
@@ -290,5 +298,11 @@ onMounted(() => {
         </button>
       </template>
     </BaseModal>
+
+    <NewDocumentDialog
+      :open="pickerOpen"
+      @close="pickerOpen = false"
+      @create="onCreate"
+    />
   </AppShell>
 </template>

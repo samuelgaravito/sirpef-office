@@ -34,6 +34,11 @@ const deleting = ref<TemplateSummary | null>(null);
 const removing = ref(false);
 const newTemplateOpen = ref(false);
 const view = ref<'active' | 'trash'>('active');
+/**
+ * «Usar» es el modo por defecto: la tarjeta crea un documento, no edita el
+ * modelo. «Administrar» deja el editor de plantillas para quien las mantiene.
+ */
+const mode = ref<'use' | 'manage'>('use');
 /** Plantilla cuyos accesos se están gestionando. */
 const sharing = ref<TemplateSummary | null>(null);
 const shares = ref<ShareRecord[]>([]);
@@ -72,8 +77,9 @@ async function load(): Promise<void> {
   try {
     const data = await api.get<ListResponse<TemplateSummary>>('/templates', {
       q: search.value.trim() || undefined,
-      status: view.value === 'active' ? status.value : undefined,
-      scope: view.value === 'active' ? scope.value : undefined,
+      // En modo «Usar» solo interesan los modelos disponibles para crear.
+      status: view.value === 'active' ? (mode.value === 'use' ? 'active' : status.value) : undefined,
+      scope: view.value === 'active' && mode.value === 'manage' ? scope.value : undefined,
       trashed: view.value === 'trash' ? 'true' : undefined,
     });
     templates.value = data.items;
@@ -97,6 +103,11 @@ watch(view, () => {
   templateId.value = '';
   void load();
 });
+watch(mode, () => {
+  templateId.value = '';
+  if (mode.value === 'use') view.value = 'active';
+  void load();
+});
 
 function startNewTemplate(designId: string | null): void {
   newTemplateOpen.value = false;
@@ -109,6 +120,20 @@ function startNewTemplate(designId: string | null): void {
 function openTemplate(id: string): void {
   if (view.value === 'trash') return;
   void router.push({ name: 'template', params: { id } });
+}
+
+/**
+ * Clic en la tarjeta. En «Usar» crea el documento con ese modelo; en
+ * «Administrar» abre el editor de la plantilla.
+ */
+function useTemplateCard(template: TemplateSummary): void {
+  if (view.value === 'trash') return;
+  if (mode.value === 'manage') {
+    openTemplate(template.id);
+    return;
+  }
+  if (!template.isActive || creating.value !== null) return;
+  void createDocument(template.id);
 }
 
 async function clone(template: TemplateSummary): Promise<void> {
@@ -192,9 +217,38 @@ onMounted(load);
 
 <template>
   <AppShell>
-    <PageHeader title="Plantillas" subtitle="Documentos reutilizables con variables y diseño propio.">
+    <PageHeader
+      title="Plantillas"
+      :subtitle="
+        mode === 'use'
+          ? 'Elige un modelo para crear un documento nuevo. Editar el modelo es una acción aparte.'
+          : 'Modelos reutilizables con variables y diseño propio. Aquí sí se editan.'
+      "
+    >
       <template #actions>
-        <button v-if="view === 'active'" type="button" class="btn btn-primary" @click="newTemplateOpen = true">
+        <div class="flex items-center gap-1 rounded-lg border border-hairline bg-surface p-1">
+          <button
+            v-for="option in [
+              { value: 'use', label: 'Usar' },
+              { value: 'manage', label: 'Administrar' },
+            ]"
+            :key="option.value"
+            type="button"
+            :class="[
+              'rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors',
+              mode === option.value ? 'bg-accent-soft text-accent' : 'text-ink-muted hover:bg-surface-hover',
+            ]"
+            @click="mode = option.value as typeof mode"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <button
+          v-if="view === 'active' && mode === 'manage'"
+          type="button"
+          class="btn btn-primary"
+          @click="newTemplateOpen = true"
+        >
           <Plus class="size-4" />
           Nueva plantilla
         </button>
@@ -205,20 +259,24 @@ onMounted(load);
       <div class="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center">
         <div class="relative flex-1">
           <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
-          <input v-model="search" class="field pl-9" placeholder="Buscar plantilla…" />
+          <input
+            v-model="search"
+            class="field pl-9"
+            :placeholder="mode === 'use' ? 'Buscar un modelo…' : 'Buscar plantilla…'"
+          />
         </div>
-        <select v-model="templateId" class="field sm:w-[230px]">
+        <select v-if="mode === 'manage'" v-model="templateId" class="field sm:w-[230px]">
           <option value="">Todas las plantillas</option>
           <option v-for="template in templates" :key="template.id" :value="template.id">
             {{ template.name }}
           </option>
         </select>
-        <select v-if="view === 'active'" v-model="status" class="field sm:w-[145px]">
+        <select v-if="view === 'active' && mode === 'manage'" v-model="status" class="field sm:w-[145px]">
           <option value="all">Todas</option>
           <option value="active">Activas</option>
           <option value="inactive">Inactivas</option>
         </select>
-        <div v-if="view === 'active'" class="flex items-center gap-1 rounded-lg border border-hairline bg-surface p-1">
+        <div v-if="view === 'active' && mode === 'manage'" class="flex items-center gap-1 rounded-lg border border-hairline bg-surface p-1">
           <button
             v-for="option in [
               { value: 'all', label: 'Todas' },
@@ -238,6 +296,7 @@ onMounted(load);
         </div>
 
         <button
+          v-if="mode === 'manage' || view === 'trash'"
           type="button"
           :class="['btn btn-sm', view === 'trash' ? 'btn-primary' : 'btn-outline']"
           @click="view = view === 'active' ? 'trash' : 'active'"
@@ -259,17 +318,26 @@ onMounted(load);
             ? 'La papelera está vacía'
             : search || templateId || status !== 'all'
               ? 'Sin resultados'
-              : 'No hay plantillas'
+              : mode === 'use'
+                ? 'No hay modelos disponibles'
+                : 'No hay plantillas'
         "
         :description="
           view === 'trash'
             ? 'Las plantillas que elimines aparecerán aquí y podrás restaurarlas.'
             : search || templateId || status !== 'all'
               ? 'Prueba con otro término o quita los filtros.'
-              : 'Crea una plantilla con variables para generar documentos con un clic.'
+              : mode === 'use'
+                ? 'Puedes crear una hoja en blanco desde «Crear documento» en Inicio, pero no tendrá numeración.'
+                : 'Crea una plantilla con variables para generar documentos con un clic.'
         "
       >
-        <button v-if="view === 'active'" type="button" class="btn btn-primary" @click="newTemplateOpen = true">
+        <button
+          v-if="view === 'active' && mode === 'manage'"
+          type="button"
+          class="btn btn-primary"
+          @click="newTemplateOpen = true"
+        >
           <Plus class="size-4" />
           Nueva plantilla
         </button>
@@ -281,7 +349,13 @@ onMounted(load);
           :key="template.id"
           class="card group flex flex-col transition-shadow hover:shadow-pop"
         >
-          <button type="button" class="flex justify-center overflow-hidden px-2.5 pt-2.5" :class="{ 'cursor-default': view === 'trash' }" @click="openTemplate(template.id)">
+          <button
+            type="button"
+            class="flex justify-center overflow-hidden px-2.5 pt-2.5"
+            :class="{ 'cursor-default': view === 'trash' }"
+            :aria-label="mode === 'use' ? `Crear documento con ${template.name}` : `Abrir ${template.name}`"
+            @click="useTemplateCard(template)"
+          >
             <TemplatePreview
               :template-id="template.id"
               :design-id="template.designId"
@@ -300,12 +374,13 @@ onMounted(load);
               <button
                 type="button"
                 class="min-w-0 flex-1 text-left"
-                @click="openTemplate(template.id)"
+                @click="useTemplateCard(template)"
               >
                 <p class="truncate text-[13px] font-medium">{{ template.name }}</p>
                 <p class="mt-0.5 flex items-center gap-1.5 truncate text-[11.5px] text-ink-subtle">
                   <span class="truncate">{{ docTypeLabel(template.docType) }} · v{{ template.version }}</span>
                   <span
+                    v-if="mode === 'manage' || !template.isActive"
                     :class="[
                       'shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium',
                       template.isActive ? 'bg-success-soft text-success' : 'bg-warning-soft text-warning',
@@ -314,7 +389,7 @@ onMounted(load);
                     {{ template.isActive ? 'Activa' : 'Inactiva' }}
                   </span>
                   <span
-                    v-if="canEditTemplate(template) && !ownsTemplate(template)"
+                    v-if="mode === 'manage' && canEditTemplate(template) && !ownsTemplate(template)"
                     class="shrink-0 rounded-full bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent"
                     title="Puedes mejorar esta plantilla"
                   >
@@ -322,7 +397,7 @@ onMounted(load);
                   </span>
                 </p>
                 <p
-                  v-if="template.effectiveDesignName"
+                  v-if="mode === 'manage' && template.effectiveDesignName"
                   class="mt-1 truncate text-[11px] text-ink-subtle"
                   :title="`Dibuja con «${template.effectiveDesignName}», el diseño en uso`"
                 >
@@ -330,7 +405,7 @@ onMounted(load);
                 </p>
               </button>
 
-              <BaseDropdown align="right" width="w-48">
+              <BaseDropdown v-if="mode === 'manage'" align="right" width="w-48">
                 <template #trigger>
                   <button
                     type="button"
@@ -408,12 +483,23 @@ onMounted(load);
                 v-if="view === 'active'"
                 type="button"
                 class="btn btn-outline btn-sm"
-                :disabled="creating !== null || !template.isActive"
+                :disabled="mode === 'use' && (creating !== null || !template.isActive)"
                 :title="template.isActive ? undefined : 'Activa la plantilla para crear documentos'"
-                @click="createDocument(template.id)"
+                @click="useTemplateCard(template)"
               >
-                <Loader2 v-if="creating === template.id" class="size-3.5 animate-spin" />
-                {{ creating === template.id ? 'Creando…' : template.isActive ? 'Usar' : 'Inactiva' }}
+                <component
+                  :is="creating === template.id ? Loader2 : mode === 'use' ? Wand2 : Pencil"
+                  :class="['size-3.5', creating === template.id ? 'animate-spin' : '']"
+                />
+                {{
+                  creating === template.id
+                    ? 'Creando…'
+                    : mode === 'use'
+                      ? 'Crear documento'
+                      : canEditTemplate(template)
+                        ? 'Editar'
+                        : 'Ver'
+                }}
               </button>
             </div>
           </div>

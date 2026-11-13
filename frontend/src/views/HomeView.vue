@@ -3,6 +3,7 @@ import { FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
 import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
@@ -24,6 +25,8 @@ const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
+/** Selector de modelo: la puerta de entrada para crear un documento. */
+const pickerOpen = ref(false);
 
 /** Punto de la ventana desde el que "nace" el panel del módulo. */
 const panelOrigin = ref<{ x: number; y: number } | null>(null);
@@ -207,6 +210,11 @@ function openModule(name: string): void {
   void router.push({ name });
 }
 
+/** El selector entrega `null` para la hoja en blanco. */
+function onCreate(templateId: string | null): void {
+  void createDocument(templateId ?? undefined);
+}
+
 /** Recuerda de qué tile sale el panel para anclar la animación. */
 function rememberOrigin(event: PointerEvent): void {
   const el = event.currentTarget as HTMLElement | null;
@@ -281,13 +289,13 @@ onUnmounted(() => {
                   type="button"
                   class="btn bg-white text-navy hover:bg-white/90"
                   :disabled="creating !== null"
-                  @click="createDocument()"
+                  @click="pickerOpen = true"
                 >
                   <component
                     :is="creating === 'blank' ? Loader2 : Plus"
                     :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
                   />
-                  {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+                  {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
                 </button>
                 <button
                   type="button"
@@ -369,6 +377,12 @@ onUnmounted(() => {
         </p>
       </section>
     </div>
+
+    <NewDocumentDialog
+      :open="pickerOpen"
+      @close="pickerOpen = false"
+      @create="onCreate"
+    />
 
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">
