@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
+import { ArrowLeft, CalendarDays, ChevronDown, FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -7,6 +7,7 @@ import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
 import DocumentCard from '@/components/documents/DocumentCard.vue';
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
+import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -33,9 +34,10 @@ const templates = ref<TemplateSummary[]>([]);
 const status = ref<DocumentStatus | ''>('');
 const sort = ref<'updated' | 'created' | 'title'>('updated');
 const dateField = ref<'created' | 'updated'>('updated');
+/** Permite cerrar el panel de fecha al elegir un atajo. */
+const dateDropdown = ref<{ close: () => void } | null>(null);
 const dateFrom = ref('');
 const dateTo = ref('');
-const filtersOpen = ref(false);
 const view = ref<'active' | 'trash'>('active');
 
 const deleting = ref<DocumentSummary | null>(null);
@@ -92,7 +94,16 @@ function toDateInput(date: Date): string {
 type DatePreset = 'today' | '7d' | 'month' | 'lastMonth' | 'year';
 
 /** Atajos de fecha calculados en el calendario local, no en UTC. */
-function applyDatePreset(preset: DatePreset): void {
+const datePresets: { value: DatePreset; label: string }[] = [
+  { value: 'today', label: 'Hoy' },
+  { value: '7d', label: '7 días' },
+  { value: 'month', label: 'Este mes' },
+  { value: 'lastMonth', label: 'Mes anterior' },
+  { value: 'year', label: 'Este año' },
+];
+
+/** Rango local de cada atajo, sin tocar el estado. */
+function presetRange(preset: DatePreset): { from: string; to: string } {
   const now = new Date();
   let from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   let to = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -108,8 +119,43 @@ function applyDatePreset(preset: DatePreset): void {
     from = new Date(now.getFullYear(), 0, 1);
   }
 
-  dateFrom.value = toDateInput(from);
-  dateTo.value = toDateInput(to);
+  return { from: toDateInput(from), to: toDateInput(to) };
+}
+
+function applyDatePreset(preset: DatePreset): void {
+  const range = presetRange(preset);
+  dateFrom.value = range.from;
+  dateTo.value = range.to;
+  dateDropdown.value?.close();
+}
+
+function isPresetActive(preset: DatePreset): boolean {
+  const range = presetRange(preset);
+  return dateFrom.value === range.from && dateTo.value === range.to;
+}
+
+const dateFilterActive = computed(() => Boolean(dateFrom.value || dateTo.value));
+
+const dateButtonLabel = computed(() => {
+  if (!dateFrom.value && !dateTo.value) return 'Fecha';
+  if (dateFrom.value && dateTo.value) {
+    if (dateFrom.value === dateTo.value) return `Fecha: ${formatDateInput(dateFrom.value)}`;
+    return `Fecha: ${formatDateInput(dateFrom.value)} – ${formatDateInput(dateTo.value)}`;
+  }
+  return dateFrom.value
+    ? `Fecha: desde ${formatDateInput(dateFrom.value)}`
+    : `Fecha: hasta ${formatDateInput(dateTo.value)}`;
+});
+
+/** Cuántos filtros del panel avanzado están activos. */
+const advancedFilterCount = computed(
+  () => (templateId.value ? 1 : 0) + (status.value ? 1 : 0),
+);
+
+function clearAdvancedFilters(): void {
+  templateId.value = '';
+  status.value = '';
+  sort.value = 'updated';
 }
 
 function clearDates(): void {
@@ -259,14 +305,16 @@ onMounted(() => {
 
     <div class="mx-auto max-w-[1200px] px-5 pb-14 pt-2 sm:px-8">
       <!-- Barra de filtros -->
-      <div class="mb-5 rounded-xl border border-hairline bg-[#f8fafc] p-2.5">
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div class="relative flex-1">
+      <div class="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-[#f8fafc] p-2.5">
+        <div class="relative min-w-[240px] flex-1">
           <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
           <input v-model="search" class="field pl-9" placeholder="Buscar por título o descripción…" />
         </div>
 
-        <div v-if="view === 'active'" class="flex items-center gap-1 rounded-lg border border-hairline bg-surface p-1">
+        <div
+          v-if="view === 'active'"
+          class="flex items-center gap-1 rounded-lg border border-hairline bg-surface p-1"
+        >
           <button
             v-for="option in [
               { value: 'all', label: 'Todos' },
@@ -285,90 +333,161 @@ onMounted(() => {
           </button>
         </div>
 
+        <!-- Fecha -->
+        <BaseDropdown ref="dateDropdown" align="right" width="w-80" :close-on-click="false">
+          <template #trigger>
+            <button
+              type="button"
+              :class="[
+                'btn btn-sm whitespace-nowrap',
+                dateFilterActive
+                  ? 'btn-outline !border-accent/40 !bg-accent-soft !text-accent'
+                  : 'btn-outline',
+              ]"
+            >
+              <CalendarDays class="size-4" />
+              {{ dateButtonLabel }}
+              <ChevronDown class="size-3" />
+            </button>
+          </template>
+          <template #content>
+            <div class="p-2" @click.stop>
+              <p class="text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
+                Atajos
+              </p>
+              <div class="mt-1.5 grid grid-cols-2 gap-1.5">
+                <button
+                  v-for="preset in datePresets"
+                  :key="preset.value"
+                  type="button"
+                  :class="[
+                    'rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] font-medium transition-colors',
+                    isPresetActive(preset.value)
+                      ? 'border-accent/40 bg-accent-soft text-accent'
+                      : 'border-hairline bg-surface text-ink-muted hover:border-accent/40 hover:text-accent',
+                  ]"
+                  @click="applyDatePreset(preset.value)"
+                >
+                  {{ preset.label }}
+                </button>
+              </div>
+
+              <p class="mt-3 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
+                Rango personalizado
+              </p>
+              <div class="mt-1.5 grid grid-cols-2 gap-2">
+                <label class="block">
+                  <span class="label">Desde</span>
+                  <input v-model="dateFrom" type="date" class="field" :max="dateTo || undefined" />
+                </label>
+                <label class="block">
+                  <span class="label">Hasta</span>
+                  <input v-model="dateTo" type="date" class="field" :min="dateFrom || undefined" />
+                </label>
+              </div>
+
+              <label class="mt-3 block">
+                <span class="label">Aplicar a</span>
+                <select v-model="dateField" class="field">
+                  <option value="updated">Última edición</option>
+                  <option value="created">Fecha de creación</option>
+                </select>
+              </label>
+
+              <p v-if="dateRangeInvalid" class="mt-2 text-[12.5px] font-medium text-danger">
+                La fecha inicial no puede ser posterior a la final.
+              </p>
+
+              <div class="mt-3 flex items-center justify-between border-t border-hairline pt-2.5">
+                <span class="text-meta">
+                  {{ dateFilterActive ? dateButtonLabel : 'Sin filtro de fecha' }}
+                </span>
+                <button
+                  v-if="dateFilterActive"
+                  type="button"
+                  class="text-[12.5px] font-medium text-danger hover:underline"
+                  @click="clearDates"
+                >
+                  Limpiar fechas
+                </button>
+              </div>
+            </div>
+          </template>
+        </BaseDropdown>
+
+        <!-- Filtros avanzados -->
+        <BaseDropdown align="right" width="w-72" :close-on-click="false">
+          <template #trigger>
+            <button
+              type="button"
+              :class="[
+                'btn btn-sm',
+                advancedFilterCount ? 'btn-outline !border-accent/40 !text-accent' : 'btn-outline',
+              ]"
+            >
+              <SlidersHorizontal class="size-4" />
+              Filtros
+              <span
+                v-if="advancedFilterCount"
+                class="grid min-w-[18px] place-items-center rounded-full bg-accent px-1 text-[11px] font-bold leading-none text-white"
+              >
+                {{ advancedFilterCount }}
+              </span>
+            </button>
+          </template>
+          <template #content>
+            <div class="space-y-2.5 p-2" @click.stop>
+              <label class="block">
+                <span class="label">Plantilla</span>
+                <select v-model="templateId" class="field">
+                  <option value="">Todas las plantillas</option>
+                  <option v-for="template in templates" :key="template.id" :value="template.id">
+                    {{ template.name }}
+                  </option>
+                </select>
+              </label>
+
+              <label class="block">
+                <span class="label">Estado</span>
+                <select v-model="status" class="field">
+                  <option value="">Todos los estados</option>
+                  <option v-for="(label, value) in STATUS_LABELS" :key="value" :value="value">
+                    {{ label }}
+                  </option>
+                </select>
+              </label>
+
+              <label class="block">
+                <span class="label">Ordenar por</span>
+                <select v-model="sort" class="field">
+                  <option value="updated">Última edición</option>
+                  <option value="created">Más recientes</option>
+                  <option value="title">Título (A-Z)</option>
+                </select>
+              </label>
+
+              <button
+                v-if="advancedFilterCount || sort !== 'updated'"
+                type="button"
+                class="text-[12.5px] font-medium text-danger hover:underline"
+                @click="clearAdvancedFilters"
+              >
+                Limpiar filtros
+              </button>
+            </div>
+          </template>
+        </BaseDropdown>
+
+        <!-- Papelera -->
         <button
           type="button"
-          :class="['btn btn-sm', view === 'trash' ? 'btn-primary' : 'btn-outline']"
+          :class="['tool-btn', view === 'trash' ? '!bg-accent-soft !text-accent' : '']"
+          :title="view === 'trash' ? 'Volver a documentos' : 'Papelera'"
+          :aria-label="view === 'trash' ? 'Volver a documentos' : 'Papelera'"
           @click="view = view === 'active' ? 'trash' : 'active'"
         >
-          <Trash2 class="size-4" />
-          {{ view === 'trash' ? 'Volver' : 'Papelera' }}
+          <component :is="view === 'trash' ? ArrowLeft : Trash2" class="size-4" />
         </button>
-
-        <button type="button" class="btn btn-outline lg:hidden" @click="filtersOpen = !filtersOpen">
-          <SlidersHorizontal class="size-4" />
-          Filtros
-        </button>
-
-        <div :class="['items-center gap-2', filtersOpen ? 'flex' : 'hidden lg:flex']">
-          <select v-model="templateId" class="field w-auto min-w-[190px]">
-            <option value="">Todas las plantillas</option>
-            <option v-for="template in templates" :key="template.id" :value="template.id">
-              {{ template.name }}
-            </option>
-          </select>
-          <select v-model="status" class="field w-auto min-w-[145px]">
-            <option value="">Todos los estados</option>
-            <option v-for="(label, value) in STATUS_LABELS" :key="value" :value="value">{{ label }}</option>
-          </select>
-          <select v-model="sort" class="field w-auto min-w-[140px]">
-            <option value="updated">Última edición</option>
-            <option value="created">Más recientes</option>
-            <option value="title">Título (A-Z)</option>
-          </select>
-        </div>
-        </div>
-
-        <!-- Filtro por fechas -->
-        <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3">
-          <div class="flex w-full items-center gap-2 text-[12.5px] font-medium text-ink-muted xl:w-auto">
-            <CalendarDays class="size-4 text-accent" />
-            Filtrar por fecha
-          </div>
-
-          <select v-model="dateField" class="field w-auto min-w-[160px]">
-            <option value="updated">Última edición</option>
-            <option value="created">Fecha de creación</option>
-          </select>
-
-          <label class="flex items-center gap-2 text-[12.5px] text-ink-muted">
-            Desde
-            <input v-model="dateFrom" type="date" class="field w-auto" :max="dateTo || undefined" />
-          </label>
-          <label class="flex items-center gap-2 text-[12.5px] text-ink-muted">
-            Hasta
-            <input v-model="dateTo" type="date" class="field w-auto" :min="dateFrom || undefined" />
-          </label>
-
-          <div class="flex flex-wrap items-center gap-1.5">
-            <button
-              v-for="preset in [
-                { value: 'today', label: 'Hoy' },
-                { value: '7d', label: '7 días' },
-                { value: 'month', label: 'Este mes' },
-                { value: 'lastMonth', label: 'Mes anterior' },
-                { value: 'year', label: 'Este año' },
-              ]"
-              :key="preset.value"
-              type="button"
-              class="rounded-full border border-hairline bg-surface px-2.5 py-1 text-[12px] font-medium text-ink-muted transition-colors hover:border-accent/40 hover:text-accent"
-              @click="applyDatePreset(preset.value as DatePreset)"
-            >
-              {{ preset.label }}
-            </button>
-            <button
-              v-if="dateFrom || dateTo"
-              type="button"
-              class="px-1 text-[12.5px] font-medium text-danger hover:underline"
-              @click="clearDates"
-            >
-              Limpiar
-            </button>
-          </div>
-
-          <p v-if="dateRangeInvalid" class="text-[12.5px] font-medium text-danger xl:ml-auto">
-            La fecha inicial no puede ser posterior a la final.
-          </p>
-        </div>
       </div>
 
       <div v-if="loading" class="grid place-items-center py-20">
