@@ -48,7 +48,8 @@
     "demo:review": "tsx scripts/review-demo.ts",
     "smoke:pdf-bands": "tsx scripts/pdf-band-image-smoke.ts",
     "smoke:draft": "tsx scripts/draft-local-smoke.ts",
-    "setup": "npm run db:up && npm run db:migrate && npm run db:seed"
+    "setup": "npm run db:up && npm run db:migrate && npm run db:seed",
+    "smoke:variables": "tsx scripts/variable-spacing-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

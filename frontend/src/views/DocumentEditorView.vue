@@ -631,6 +631,23 @@ function chromePayload(kind: ChromeKind): ChromeConfig | null {
   return { ...current, content };
 }
 
+/**
+ * Estado del botón Guardar. Después de la vista previa el documento ya está
+ * guardado: el botón debe decirlo, no quedarse como un «Guardar» gris.
+ */
+const saveButtonLabel = computed(() => {
+  if (saving.value) return 'Guardando…';
+  if (dirty.value) return 'Guardar';
+  if (isNew.value) return 'Guardar';
+  return 'Guardado';
+});
+
+const saveButtonTitle = computed(() => {
+  if (dirty.value) return 'Guardar en el servidor';
+  if (isNew.value) return 'Aún no hay cambios que guardar';
+  return 'Todo guardado';
+});
+
 const saveLabel = computed(() => {
   if (saving.value) return 'Guardando…';
   if (isNew.value) {
@@ -1433,12 +1450,13 @@ onBeforeUnmount(() => {
         type="button"
         class="btn btn-ghost btn-sm"
         :disabled="saving || !dirty"
-        :title="dirty ? 'Guardar en el servidor' : 'No hay cambios que guardar'"
+        :title="saveButtonTitle"
         aria-label="Guardar"
         @click="save()"
       >
-        <Save class="size-3.5" />
-        <span class="hidden sm:inline">Guardar</span>
+        <Check v-if="!dirty && !isNew && !saving" class="size-3.5 text-success" />
+        <Save v-else class="size-3.5" />
+        <span class="hidden sm:inline">{{ saveButtonLabel }}</span>
       </button>
 
       <button

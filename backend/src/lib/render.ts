@@ -57,11 +57,56 @@ export function formatValue(value: unknown, type?: string): string {
   return String(value);
 }
 
+/** Espacio duro: el HTML no lo colapsa y el texto conserva la alineación. */
+const NBSP = '\u00A0';
+
+/**
+ * Conserva los espacios que el usuario escribió en un campo.
+ *
+ * HTML colapsa los espacios múltiples y las sangrías. Para que una observación
+ * con columnas alineadas se vea igual en el editor, la vista previa, el PDF y
+ * el DOCX, se convierten en espacios duros solo los que importan: las
+ * sangrías de cada línea y las secuencias de dos o más espacios. Un espacio
+ * normal entre palabras sigue siendo normal para que el texto pueda partirse.
+ */
+export function preserveSpacing(value: string): string {
+  return value
+    .replace(/\t/g, NBSP.repeat(4))
+    .replace(/^ +/gm, (spaces) => NBSP.repeat(spaces.length))
+    .replace(/ {2,}/g, (spaces) => NBSP.repeat(spaces.length));
+}
+
 export function interpolateText(text: string, values: VariableValues): string {
   return text.replace(PLACEHOLDER, (_match, path: string) => {
     const value = getPath(values, path);
-    return value === undefined ? '' : formatValue(value);
+    return value === undefined ? '' : preserveSpacing(formatValue(value));
   });
+}
+
+/**
+ * Convierte los saltos de línea de un valor en nodos `hardBreak`.
+ *
+ * Un `\n` dentro de un nodo de texto no produce un salto en HTML ni en DOCX:
+ * el navegador lo colapsa y el exportador de Word solo entiende `hardBreak`.
+ * Al expandirlo aquí, la vista previa, el PDF, el HTML y el DOCX coinciden.
+ */
+function withHardBreaks(node: JSONContent): JSONContent {
+  if (!node.content) return node;
+
+  const content: JSONContent[] = [];
+  for (const child of node.content) {
+    if (child.type === 'text' && child.text?.includes('\n')) {
+      child.text.split('\n').forEach((part, index) => {
+        if (index > 0) content.push({ type: 'hardBreak' });
+        if (part) content.push({ ...child, text: part });
+      });
+      continue;
+    }
+    content.push(child.type === 'text' ? child : withHardBreaks(child));
+  }
+
+  node.content = content;
+  return node;
 }
 
 /** Clona una fila de tabla sustituyendo el índice 0 por el de cada elemento. */
@@ -126,7 +171,7 @@ export function interpolateDoc(content: JSONContent, values: VariableValues): JS
     return node;
   };
 
-  return walk(clone);
+  return withHardBreaks(walk(clone));
 }
 
 /**
