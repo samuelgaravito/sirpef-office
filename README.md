@@ -194,7 +194,7 @@ producción añade `--profile tls` y define `SIRPEF_DOMAIN`.
 | `SVA_SERVER_URL` | — | URL del portal/API de SVA. Obligatoria si `AUTH_MODE` no es `local`. |
 | `SVA_API_KEY` | — | `key_backend` del sistema SirpefOffice creado en SVA. |
 | `SVA_SYNC_INTERVAL_MS` | `600000` | Frecuencia del sync de usuarios (10 min). |
-| `CHROME_PATH` | `/usr/bin/google-chrome` | Navegador usado para generar PDF. |
+| `CHROME_PATH` | `/usr/bin/google-chrome` | Navegador usado para generar PDF. Si la ruta no existe, se prueba con `chromium` y `google-chrome` del sistema. Ajustes → Sistema comprueba el estado real. |
 | `EXPORT_DIR` | `./data/exports` | Directorio temporal de exportaciones. |
 | `AI_PROVIDER` | `none` | `openai` \| `anthropic` \| `gemini` \| `ollama` \| `none`. Se puede sobrescribir desde **Ajustes → Asistente de IA**. |
 
@@ -661,6 +661,7 @@ cd backend
 | `node scripts/page-break-export-smoke.mjs` | Comprueba el salto de página manual de extremo a extremo: HTML con `data-page-break`, PDF de 2 páginas y DOCX con salto real. |
 | `npm run smoke:pdf-bands` | Regresión de imágenes globales de cabecera/pie: el PDF tiene las mismas páginas que el layout, las imágenes conservan su posición en mm y ninguna hoja desborda (no requiere API ni base de datos). |
 | `npm run smoke:draft` | Regresión del borrador local del documento nuevo: al abrir una plantilla y volver a entrar el cuerpo no aparece en blanco, el borrador conserva lo escrito y los borradores heredados se reparan (necesita la API y la web de desarrollo levantadas). |
+| `npm run smoke:variables` | Regresión de espacios y saltos de línea en variables: las observaciones con varias líneas, sangrías o columnas alineadas llegan igual a la vista previa, al PDF y al DOCX. |
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 | `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, prefijo opcional (en blanco la serie numera sin etiqueta), sin «código automático», aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |
