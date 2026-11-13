@@ -21,6 +21,7 @@ import {
   getDocumentAccess,
 } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
+import { assertDocumentDataComplete } from '../../lib/document-data.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
@@ -539,6 +540,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
 
     const { document } = await assertDocument(user.sub, body.documentId, 'editor');
     assertDocumentMutable(document);
+    await assertDocumentDataComplete(document);
 
     if (document.version !== body.expectedVersion) {
       throw conflict('El documento cambió desde que abriste el envío', {
@@ -703,6 +705,7 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
 
     if (!document || document.deletedAt) throw notFound('Documento no encontrado');
     assertDocumentMutable(document);
+    await assertDocumentDataComplete(document);
 
     if (document.version !== body.expectedVersion) {
       throw conflict('El documento cambió desde que lo abriste', {

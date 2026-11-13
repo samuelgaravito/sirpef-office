@@ -534,7 +534,7 @@ onUnmounted(() => {
                     <span class="min-w-0 flex-1">
                       <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
                       <span class="text-meta block">
-                        {{ draft.docNumber ?? 'Borrador' }} · {{ relativeTime(draft.updatedAt) }}
+                        {{ draft.docNumber ?? 'En preparación' }} · {{ relativeTime(draft.updatedAt) }}
                       </span>
                     </span>
                     <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />

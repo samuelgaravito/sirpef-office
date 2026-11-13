@@ -13,8 +13,8 @@ export const DOC_TYPE_LABELS: Record<DocType, string> = {
 };
 
 export const STATUS_LABELS: Record<DocumentStatus, string> = {
-  draft: 'Borrador',
-  in_review: 'Pendiente de aprobación',
+  draft: 'En preparación',
+  in_review: 'Esperando aprobación',
   final: 'Final',
   archived: 'Archivado',
   sent: 'Enviado',
@@ -43,7 +43,7 @@ export const STATUS_STYLES: Record<DocumentStatus, string> = {
 };
 
 export const INBOX_STATUS_LABELS: Record<InboxMessageStatus, string> = {
-  pending_approval: 'Pendiente de aprobación',
+  pending_approval: 'Esperando aprobación',
   sent: 'Aprobado y enviado',
   rejected: 'Rechazado',
   cancelled: 'Anulado',

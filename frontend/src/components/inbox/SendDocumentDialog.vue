@@ -71,7 +71,7 @@ const versionChanged = computed(
     props.sentVersion !== null &&
     props.sentVersion !== props.expectedVersion,
 );
-const title = computed(() => (isApprove.value ? 'Aprobar y enviar' : 'Enviar documento'));
+const title = computed(() => (isApprove.value ? 'Aprobar y enviar' : 'Revisar y enviar'));
 const description = computed(() =>
   isApprove.value
     ? 'Confirma el envío y los destinatarios. Al aprobar, el documento quedará bloqueado como solo lectura.'

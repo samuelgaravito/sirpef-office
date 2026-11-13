@@ -2,12 +2,13 @@
 import { useEditor } from '@tiptap/vue-3';
 import {
   ArrowLeft,
+  ArrowRight,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Cloud,
   CloudOff,
-  Download,
   Eye,
   FileCode2,
   FileText,
@@ -43,7 +44,6 @@ import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
 import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
-import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { errorMessage as explainError } from '@/lib/error-message';
@@ -306,6 +306,46 @@ const sendPrefill = ref<{ subject: string; body: string; recipientIds: string[] 
 });
 const data = ref<VariableValues>({});
 const schema = ref<DocumentDetailResponse['templateSchema']>([]);
+/** Nombre del modelo con el que nació el documento (para la barra de pasos). */
+const modelName = ref<string | null>(null);
+
+/** Campos obligatorios que faltan; bloquean el envío hasta completarse. */
+const missingRequired = computed(() =>
+  schema.value.filter((variable) => {
+    if (!variable.required) return false;
+    const value = data.value[variable.key];
+    if (variable.type === 'table') return !Array.isArray(value) || value.length === 0;
+    if (variable.type === 'checkbox') return false;
+    if (typeof value === 'string') return value.trim() === '';
+    return value === undefined || value === null;
+  }),
+);
+
+/** Lleva el foco al primer campo obligatorio que falta. */
+function focusMissingVariable(): void {
+  const first = missingRequired.value[0];
+  if (!first) return;
+  if (window.innerWidth < 1024) mobileDataOpen.value = true;
+  window.setTimeout(() => {
+    const input = document.getElementById(`var-${first.key}`);
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    (input as HTMLElement | null)?.focus();
+  }, 120);
+}
+
+/**
+ * Aviso previo al envío: evita llegar a la API con huecos y tener que
+ * corregir después de un error poco comprensible.
+ */
+function warnMissingRequired(): boolean {
+  if (missingRequired.value.length === 0) return false;
+  const labels = missingRequired.value.map((variable) => variable.label);
+  toast.warning(
+    `Completa ${labels.length === 1 ? 'este dato obligatorio' : `estos ${labels.length} datos obligatorios`}: ${labels.slice(0, 4).join(', ')}${labels.length > 4 ? '…' : ''}`,
+  );
+  focusMissingVariable();
+  return true;
+}
 const design = ref<DesignTokens | null>(null);
 const shares = ref<ShareRecord[]>([]);
 const ownerName = ref('');
@@ -594,9 +634,7 @@ function chromePayload(kind: ChromeKind): ChromeConfig | null {
 const saveLabel = computed(() => {
   if (saving.value) return 'Guardando…';
   if (isNew.value) {
-    return dirty.value
-      ? 'Borrador local · pulsa Guardar para crearlo'
-      : 'Sin guardar · no se creará hasta que pulses Guardar';
+    return dirty.value ? 'Borrador en este navegador · sin guardar' : 'Borrador en este navegador';
   }
   if (conflict.value) return 'Conflicto de versión';
   if (dirty.value) return 'Cambios sin guardar';
@@ -632,6 +670,7 @@ async function load(): Promise<void> {
     reviewExpanded.value = false;
     data.value = response.document.data ?? {};
     schema.value = response.templateSchema ?? [];
+    modelName.value = response.templateName;
     design.value = response.design?.tokens ?? response.document.designTokens ?? null;
     shares.value = response.shares ?? [];
     ownerName.value = response.document.ownerName;
@@ -728,6 +767,7 @@ async function hydrateNewDocument(): Promise<void> {
       description.value = draft?.description ?? (template.description ?? '').slice(0, 500);
       docType.value = template.docType;
       schema.value = template.schema ?? [];
+      modelName.value = template.name;
       data.value = { ...defaultData(template.schema ?? []), ...(draft?.data ?? {}) };
       design.value = response.design?.tokens ?? null;
       inheritedChrome.value = response.inheritedChrome;
@@ -760,6 +800,7 @@ async function hydrateNewDocument(): Promise<void> {
       description.value = draft?.description ?? '';
       docType.value = 'blank';
       schema.value = [];
+      modelName.value = null;
       data.value = draft?.data ?? {};
       design.value = null;
       inheritedChrome.value = null;
@@ -945,6 +986,8 @@ async function openSendDialog(prefill?: {
   recipientIds?: string[];
 }): Promise<void> {
   if (!canEdit.value || pendingMessage.value) return;
+  // Los datos obligatorios se comprueban antes de crear o enviar nada.
+  if (warnMissingRequired()) return;
   sendMode.value = 'send';
   approveMessageId.value = null;
 
@@ -988,6 +1031,7 @@ function consumePendingSend(): void {
 /** Abre la aprobación del envío pendiente sin salir del editor. */
 async function openApproveDialog(): Promise<void> {
   if (!reviewMessage.value) return;
+  if (warnMissingRequired()) return;
   if (dirty.value) await save();
   if (dirty.value || conflict.value) return;
 
@@ -1088,7 +1132,19 @@ function useAutoDescription(): void {
   markDirty();
 }
 
+/**
+ * Un borrador no tiene número definitivo. El archivo sale con la marca
+ * «(previsto)»; conviene avisar antes de que lo impriman o lo envíen.
+ */
+function confirmProvisionalNumber(): boolean {
+  if (docNumber.value) return true;
+  return window.confirm(
+    'Este documento todavía no tiene número definitivo: en el archivo aparecerá «(previsto)». ¿Quieres descargarlo igualmente?',
+  );
+}
+
 async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
+  if (!confirmProvisionalNumber()) return;
   let id = documentId.value;
   if (!id) {
     if (!isNew.value) return;
@@ -1109,6 +1165,7 @@ async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
 }
 
 async function printPreview(): Promise<void> {
+  if (!confirmProvisionalNumber()) return;
   let id = documentId.value;
   if (!id) {
     if (!isNew.value) return;
@@ -1411,112 +1468,140 @@ onBeforeUnmount(() => {
         Enviar
       </button>
 
-      <button
-        v-if="canEdit"
-        type="button"
-        class="btn btn-ghost btn-sm hidden sm:inline-flex"
-        :disabled="saving"
-        @click="saveAndExit"
-      >
-        <Save class="size-3.5" />
-        Guardar
-      </button>
-
-      <button
-        v-if="!locked"
-        type="button"
-        :class="['tool-btn', chromeOpen ? 'is-active' : '']"
-        title="Editar cabecera y pie de página"
-        @click="toggleChromeMode"
-      >
-        <PanelTop class="size-4" />
-      </button>
-
-      <button type="button" class="tool-btn" title="Historial de versiones" @click="openHistory()">
-        <History class="size-4" />
-      </button>
-
-      <button
-        type="button"
-        :class="['tool-btn', previewMode ? 'is-active' : '']"
-        :title="previewMode ? 'Volver a editar' : 'Vista previa con los datos aplicados'"
-        @click="togglePreview"
-      >
-        <component
-          :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye"
-          :class="['size-4', loadingPreview ? 'animate-spin' : '']"
-        />
-      </button>
-
-      <button
-        v-if="permission === 'owner' && !locked"
-        type="button"
-        class="tool-btn"
-        title="Compartir"
-        @click="shareOpen = true"
-      >
-        <Share2 class="size-4" />
-      </button>
-
-      <BaseDropdown align="right" width="w-52">
+      <BaseDropdown align="right" width="w-64">
         <template #trigger>
-          <button type="button" class="btn btn-outline btn-sm">
-            <Download class="size-3.5" />
-            <span class="hidden sm:inline">Exportar</span>
-            <ChevronDown class="size-3" />
-          </button>
-        </template>
-        <template #content>
-          <p v-if="!canExport" class="px-2.5 py-2 text-[12.5px] leading-snug text-ink-muted">
-            {{ EXPORT_FORBIDDEN_MESSAGE }}
-          </p>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
-            <FileText class="size-4" />
-            PDF
-          </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
-            <FileText class="size-4" />
-            Word (.docx)
-          </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
-            <FileCode2 class="size-4" />
-            HTML
-          </button>
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-            @click="printPreview"
-          >
-            <Printer class="size-4" />
-            Vista de impresión
-          </button>
-        </template>
-      </BaseDropdown>
-
-      <BaseDropdown align="right" width="w-56">
-        <template #trigger>
-          <button type="button" class="tool-btn" aria-label="Más acciones">
+          <button type="button" class="tool-btn" aria-label="Más acciones" title="Más acciones">
             <MoreHorizontal class="size-4" />
           </button>
         </template>
         <template #content>
-          <button v-if="canEdit" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="save(true)">
+          <button
+            v-if="canEdit"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            :disabled="saving"
+            @click="save()"
+          >
+            <Save class="size-4" />
+            Guardar ahora
+          </button>
+          <button
+            v-if="canEdit"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="save(true)"
+          >
             <Save class="size-4" />
             Guardar punto de control
           </button>
-          <button v-if="canEdit" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="findOpen = true">
+          <button
+            v-if="canEdit"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="findOpen = true"
+          >
             <Search class="size-4" />
             Buscar y reemplazar
           </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="saveAsTemplate">
+          <button
+            v-if="canEdit && !locked"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="toggleChromeMode"
+          >
+            <PanelTop class="size-4" />
+            Cabecera y pie
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="openHistory()"
+          >
+            <History class="size-4" />
+            Historial de versiones
+          </button>
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="togglePreview"
+          >
+            <component :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye" :class="['size-4', loadingPreview ? 'animate-spin' : '']" />
+            {{ previewMode ? 'Volver a editar' : 'Vista previa' }}
+          </button>
+          <button
+            v-if="permission === 'owner' && !locked"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="shareOpen = true"
+          >
+            <Share2 class="size-4" />
+            Compartir
+          </button>
+
+          <div class="my-1 border-t border-hairline" />
+          <p class="px-2.5 pb-1 pt-1 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
+            Descargar
+          </p>
+          <p v-if="!canExport" class="px-2.5 py-1.5 text-[12.5px] leading-snug text-ink-muted">
+            {{ EXPORT_FORBIDDEN_MESSAGE }}
+          </p>
+          <template v-else>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
+              <FileText class="size-4" />
+              PDF
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
+              <FileText class="size-4" />
+              Word (.docx)
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
+              <FileCode2 class="size-4" />
+              HTML
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="printPreview">
+              <Printer class="size-4" />
+              Vista de impresión
+            </button>
+          </template>
+
+          <div class="my-1 border-t border-hairline" />
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="saveAsTemplate"
+          >
             <FileText class="size-4" />
             Guardar como plantilla
           </button>
         </template>
       </BaseDropdown>
-
-      <UserAvatar :name="auth.user?.name" :src="auth.user?.avatarUrl" size="sm" class="ml-1 hidden sm:inline-flex" />
     </header>
+
+    <!-- Ruta del documento: dónde estoy y qué falta para terminar -->
+    <nav
+      v-if="!locked && !previewMode"
+      class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-hairline bg-surface px-4 py-1.5 text-[12.5px]"
+      aria-label="Pasos del documento"
+    >
+      <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">
+        <Check class="size-3" />
+        1. Modelo<template v-if="modelName">: {{ modelName }}</template>
+      </span>
+      <ChevronRight class="size-3 shrink-0 text-ink-subtle" />
+      <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-0.5 font-semibold text-accent">
+        2. Contenido
+      </span>
+      <ChevronRight class="size-3 shrink-0 text-ink-subtle" />
+      <button
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 font-medium text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
+        :disabled="!canEdit || saving"
+        @click="openSendDialog()"
+      >
+        3. Revisar y enviar
+        <ArrowRight class="size-3" />
+      </button>
+    </nav>
 
     <!-- Aviso de conflicto -->
     <div v-if="conflict" class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[13.5px] text-danger">
