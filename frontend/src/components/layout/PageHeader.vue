@@ -25,7 +25,10 @@ const closePanel = inject(PANEL_CLOSE, null);
     ]"
   >
     <div class="min-w-0">
-      <h1 class="truncate text-[22px] font-semibold tracking-tight text-ink">{{ title }}</h1>
+      <div class="flex items-center gap-2.5">
+        <span v-if="embedded" class="h-5 w-1 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+        <h1 class="truncate text-[22px] font-semibold tracking-tight text-ink">{{ title }}</h1>
+      </div>
       <p v-if="subtitle" class="text-description mt-1">{{ subtitle }}</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">

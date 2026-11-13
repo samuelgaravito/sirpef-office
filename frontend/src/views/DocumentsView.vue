@@ -176,7 +176,8 @@ onMounted(() => {
 
     <div class="mx-auto max-w-[1200px] px-5 pb-14 pt-2 sm:px-8">
       <!-- Barra de filtros -->
-      <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center">
+      <div class="mb-5 rounded-xl border border-hairline bg-[#f8fafc] p-2.5">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div class="relative flex-1">
           <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
           <input v-model="search" class="field pl-9" placeholder="Buscar por título o descripción…" />
@@ -231,6 +232,7 @@ onMounted(() => {
             <option value="created">Más recientes</option>
             <option value="title">Título (A-Z)</option>
           </select>
+        </div>
         </div>
       </div>
 

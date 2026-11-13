@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
   >
     <div
       ref="panel"
-      class="relative flex h-full w-full max-w-[1360px] flex-col overflow-hidden border border-hairline bg-canvas shadow-[0_30px_80px_rgb(4_30_66/0.35)] outline-none sm:h-[min(96vh,1100px)] sm:rounded-xl"
+      class="relative flex h-full w-full max-w-[1360px] flex-col overflow-hidden border border-hairline bg-[#eef2f7] shadow-[0_30px_80px_rgb(4_30_66/0.35)] outline-none sm:h-[min(96vh,1100px)] sm:rounded-xl"
       role="dialog"
       aria-modal="true"
       :aria-label="label || title"

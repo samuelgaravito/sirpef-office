@@ -347,11 +347,11 @@ onMounted(load);
         <article
           v-for="template in filtered"
           :key="template.id"
-          class="card group flex flex-col transition-shadow hover:shadow-pop"
+          class="card group flex flex-col overflow-hidden transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop"
         >
           <button
             type="button"
-            class="flex justify-center overflow-hidden px-2.5 pt-2.5"
+            class="flex justify-center overflow-hidden border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
             :class="{ 'cursor-default': view === 'trash' }"
             :aria-label="mode === 'use' ? `Crear documento con ${template.name}` : `Abrir ${template.name}`"
             @click="useTemplateCard(template)"
@@ -376,7 +376,7 @@ onMounted(load);
                 class="min-w-0 flex-1 text-left"
                 @click="useTemplateCard(template)"
               >
-                <p class="truncate text-[15px] font-medium">{{ template.name }}</p>
+                <p class="truncate text-[15px] font-medium transition-colors group-hover:text-accent">{{ template.name }}</p>
                 <p class="text-meta mt-0.5 flex items-center gap-1.5 truncate">
                   <span class="truncate">{{ docTypeLabel(template.docType) }} · v{{ template.version }}</span>
                   <span
