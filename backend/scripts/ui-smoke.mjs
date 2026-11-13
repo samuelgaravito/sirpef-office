@@ -413,6 +413,12 @@ async function main() {
       ),
       { timeout: 15000 },
     );
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('[role="dialog"] button')).some((button) =>
+        button.textContent?.includes('Hoja en blanco'),
+      ),
+      { timeout: 15000 },
+    );
     await clickText(page, 'button', 'Hoja en blanco');
     await page.waitForFunction(() => location.pathname.startsWith('/documents/'), {
       timeout: 20000,
