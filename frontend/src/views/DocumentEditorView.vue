@@ -1428,6 +1428,33 @@ onBeforeUnmount(() => {
         <Lock class="size-3 opacity-60" />
       </span>
 
+      <button
+        v-if="canEdit"
+        type="button"
+        class="btn btn-ghost btn-sm"
+        :disabled="saving || !dirty"
+        :title="dirty ? 'Guardar en el servidor' : 'No hay cambios que guardar'"
+        aria-label="Guardar"
+        @click="save()"
+      >
+        <Save class="size-3.5" />
+        <span class="hidden sm:inline">Guardar</span>
+      </button>
+
+      <button
+        type="button"
+        :class="['btn btn-outline btn-sm', previewMode ? 'is-active' : '']"
+        :title="previewMode ? 'Volver a editar' : 'Vista previa con los datos aplicados'"
+        aria-label="Vista previa"
+        @click="togglePreview"
+      >
+        <component
+          :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye"
+          :class="['size-3.5', loadingPreview ? 'animate-spin' : '']"
+        />
+        <span class="hidden sm:inline">{{ previewMode ? 'Volver a editar' : 'Vista previa' }}</span>
+      </button>
+
       <RouterLink
         v-if="pendingMessage && auth.canSeeMenu('inbox')"
         :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }"
@@ -1479,16 +1506,6 @@ onBeforeUnmount(() => {
             v-if="canEdit"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-            :disabled="saving"
-            @click="save()"
-          >
-            <Save class="size-4" />
-            Guardar ahora
-          </button>
-          <button
-            v-if="canEdit"
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="save(true)"
           >
             <Save class="size-4" />
@@ -1519,14 +1536,6 @@ onBeforeUnmount(() => {
           >
             <History class="size-4" />
             Historial de versiones
-          </button>
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-            @click="togglePreview"
-          >
-            <component :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye" :class="['size-4', loadingPreview ? 'animate-spin' : '']" />
-            {{ previewMode ? 'Volver a editar' : 'Vista previa' }}
           </button>
           <button
             v-if="permission === 'owner' && !locked"
@@ -1618,17 +1627,9 @@ onBeforeUnmount(() => {
     >
       <Cloud class="size-4 shrink-0" />
       <span class="flex-1">
-        Este documento aún no está en el servidor: el borrador se guarda solo en este navegador.
+        Este documento aún no está en el servidor: se guarda solo en este navegador.
+        Pulsa <strong class="font-semibold text-ink">Guardar</strong> para crearlo y que no se pierda.
       </span>
-      <button
-        type="button"
-        class="btn btn-outline btn-sm"
-        :disabled="saving || !dirty || !canEdit"
-        @click="save()"
-      >
-        <Save class="size-3.5" />
-        {{ saving ? 'Guardando…' : 'Guardar en el servidor' }}
-      </button>
     </div>
 
     <!-- Panel de revisión del envío pendiente -->

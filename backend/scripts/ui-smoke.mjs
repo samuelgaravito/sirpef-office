@@ -24,7 +24,24 @@ async function shot(page, name) {
 /** Abre el menú «⋯» del editor, donde viven las acciones secundarias. */
 async function openActions(page) {
   await page.click('button[aria-label="Más acciones"]');
-  await wait(250);
+  await wait(300);
+}
+
+/** Pulsa una acción dentro del menú «⋯» ya abierto. */
+async function clickMenu(page, text) {
+  const clicked = await page.evaluate((label) => {
+    const panel = Array.from(document.querySelectorAll('div.z-50')).find((element) =>
+      element.textContent?.includes('Descargar'),
+    );
+    const button = Array.from(panel?.querySelectorAll('button') ?? []).find((item) =>
+      (item.textContent ?? '').trim().includes(label),
+    );
+    if (!button) return false;
+    button.click();
+    return true;
+  }, text);
+  if (!clicked) throw new Error(`No se encontró «${text}» en el menú de acciones`);
+  await wait(300);
 }
 
 async function clickText(page, selector, text) {
@@ -326,14 +343,25 @@ async function main() {
     });
     console.log(`  · estado de guardado: ${saveLabel || '(no visible)'}`);
 
+    console.log('→ Guardar en el servidor');
+    await page.click('button[aria-label="Guardar"]');
+    await page.waitForFunction(
+      () => /^\/documents\/[0-9a-f-]{36}$/.test(location.pathname),
+      { timeout: 20000 },
+    );
+    await page.waitForSelector('.doc-paged-flow .tiptap');
+    await wait(900);
+    console.log('  · el borrador se materializa y el editor sigue disponible');
+
     console.log('→ Historial de versiones');
     await openActions(page);
-    await clickText(page, 'button', 'Historial de versiones');
+    await clickMenu(page, 'Historial de versiones');
     await page.waitForSelector('text/Historial de versiones');
     await wait(1400);
     await shot(page, '11-historial');
     await page.click('button[aria-label="Cerrar historial"]');
-    await wait(400);
+    await page.waitForFunction(() => !document.querySelector('button[aria-label="Cerrar historial"]'));
+    await wait(600);
 
     console.log('→ Rellenar datos del formulario');
     await page.type('input#var-nombre', 'Ana Torres Quispe');
@@ -343,8 +371,7 @@ async function main() {
     await shot(page, '12-datos-rellenos');
 
     console.log('→ Vista previa con datos');
-    await openActions(page);
-    await clickText(page, 'button', 'Vista previa');
+    await page.click('button[aria-label="Vista previa"]');
     await page.waitForSelector('iframe[title="Vista previa del documento"]', { timeout: 20000 });
     await wait(1500);
     await shot(page, '13-vista-previa');
@@ -356,8 +383,7 @@ async function main() {
     console.log(previewText ? '  · los datos aparecen en la vista previa' : '  · ¡los datos NO aparecen!');
 
     console.log('→ Volver a editar y buscar');
-    await openActions(page);
-    await clickText(page, 'button', 'Volver a editar');
+    await page.click('button[aria-label="Vista previa"]');
     await page.waitForSelector('.doc-paged-flow .tiptap');
     await page.keyboard.down('Control');
     await page.keyboard.press('f');
