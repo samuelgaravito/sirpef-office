@@ -106,6 +106,11 @@ const listQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(24),
   sort: z.enum(['updated', 'created', 'title']).default('updated'),
+  /** Campo sobre el que se aplica el rango de fechas. */
+  dateField: z.enum(['created', 'updated']).default('updated'),
+  /** Límites ISO ya convertidos desde el día local del navegador. */
+  dateFrom: z.iso.datetime().optional(),
+  dateTo: z.iso.datetime().optional(),
 });
 
 const shareSchema = z.object({
@@ -311,6 +316,21 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
           ilike(sql`${documents.data}::text`, pattern),
         ),
       );
+    }
+
+    if (
+      query.dateFrom &&
+      query.dateTo &&
+      new Date(query.dateFrom).getTime() > new Date(query.dateTo).getTime()
+    ) {
+      throw badRequest('La fecha inicial no puede ser posterior a la fecha final');
+    }
+
+    if (query.dateFrom || query.dateTo) {
+      const column =
+        query.dateField === 'created' ? documents.createdAt : documents.updatedAt;
+      if (query.dateFrom) where = and(where, gte(column, new Date(query.dateFrom)));
+      if (query.dateTo) where = and(where, lte(column, new Date(query.dateTo)));
     }
 
     const order =

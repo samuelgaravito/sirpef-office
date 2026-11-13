@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
+import { CalendarDays, FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -32,6 +32,9 @@ const templateId = ref('');
 const templates = ref<TemplateSummary[]>([]);
 const status = ref<DocumentStatus | ''>('');
 const sort = ref<'updated' | 'created' | 'title'>('updated');
+const dateField = ref<'created' | 'updated'>('updated');
+const dateFrom = ref('');
+const dateTo = ref('');
 const filtersOpen = ref(false);
 const view = ref<'active' | 'trash'>('active');
 
@@ -42,11 +45,77 @@ const pickerOpen = ref(false);
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)));
 
+const dateRangeInvalid = computed(
+  () => Boolean(dateFrom.value && dateTo.value && dateFrom.value > dateTo.value),
+);
+
+function formatDateInput(value: string): string {
+  if (!value) return '';
+  return new Date(`${value}T00:00:00`).toLocaleDateString('es-PE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+const dateSummary = computed(() => {
+  if (!dateFrom.value && !dateTo.value) return '';
+  if (dateFrom.value && dateTo.value) {
+    return ` · del ${formatDateInput(dateFrom.value)} al ${formatDateInput(dateTo.value)}`;
+  }
+  if (dateFrom.value) return ` · desde el ${formatDateInput(dateFrom.value)}`;
+  return ` · hasta el ${formatDateInput(dateTo.value)}`;
+});
+
 const subtitle = computed(() =>
   view.value === 'trash'
     ? `${total.value} documento${total.value === 1 ? '' : 's'} en la papelera`
-    : `${total.value} documento${total.value === 1 ? '' : 's'} en tu espacio de trabajo`,
+    : `${total.value} documento${total.value === 1 ? '' : 's'} en tu espacio de trabajo${dateSummary.value}`,
 );
+
+/** Convierte un día local en el instante UTC de su inicio o su final. */
+function startOfDayIso(value: string): string {
+  return new Date(`${value}T00:00:00`).toISOString();
+}
+
+function endOfDayIso(value: string): string {
+  return new Date(`${value}T23:59:59.999`).toISOString();
+}
+
+function toDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+type DatePreset = 'today' | '7d' | 'month' | 'lastMonth' | 'year';
+
+/** Atajos de fecha calculados en el calendario local, no en UTC. */
+function applyDatePreset(preset: DatePreset): void {
+  const now = new Date();
+  let from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let to = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (preset === '7d') {
+    from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  } else if (preset === 'month') {
+    from = new Date(now.getFullYear(), now.getMonth(), 1);
+  } else if (preset === 'lastMonth') {
+    from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    to = new Date(now.getFullYear(), now.getMonth(), 0);
+  } else if (preset === 'year') {
+    from = new Date(now.getFullYear(), 0, 1);
+  }
+
+  dateFrom.value = toDateInput(from);
+  dateTo.value = toDateInput(to);
+}
+
+function clearDates(): void {
+  dateFrom.value = '';
+  dateTo.value = '';
+}
 
 let searchTimer: number | undefined;
 
@@ -72,6 +141,11 @@ async function loadTemplates(): Promise<void> {
 }
 
 async function load(): Promise<void> {
+  // Con un rango invertido no se consulta: el aviso ya explica qué corregir.
+  if (dateRangeInvalid.value) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
     const data = await api.get<ListResponse<DocumentSummary>>('/documents', {
@@ -83,6 +157,9 @@ async function load(): Promise<void> {
       q: search.value.trim() || undefined,
       templateId: templateId.value || undefined,
       status: status.value || undefined,
+      dateField: dateFrom.value || dateTo.value ? dateField.value : undefined,
+      dateFrom: dateFrom.value ? startOfDayIso(dateFrom.value) : undefined,
+      dateTo: dateTo.value ? endOfDayIso(dateTo.value) : undefined,
     });
     documents.value = data.items;
     total.value = data.total ?? data.items.length;
@@ -99,6 +176,12 @@ watch(scope, () => {
 });
 
 watch([templateId, status, sort], () => {
+  page.value = 1;
+  void load();
+});
+
+watch([dateField, dateFrom, dateTo], () => {
+  if (dateRangeInvalid.value) return;
   page.value = 1;
   void load();
 });
@@ -233,6 +316,58 @@ onMounted(() => {
             <option value="title">Título (A-Z)</option>
           </select>
         </div>
+        </div>
+
+        <!-- Filtro por fechas -->
+        <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-hairline pt-3">
+          <div class="flex w-full items-center gap-2 text-[12.5px] font-medium text-ink-muted xl:w-auto">
+            <CalendarDays class="size-4 text-accent" />
+            Filtrar por fecha
+          </div>
+
+          <select v-model="dateField" class="field w-auto min-w-[160px]">
+            <option value="updated">Última edición</option>
+            <option value="created">Fecha de creación</option>
+          </select>
+
+          <label class="flex items-center gap-2 text-[12.5px] text-ink-muted">
+            Desde
+            <input v-model="dateFrom" type="date" class="field w-auto" :max="dateTo || undefined" />
+          </label>
+          <label class="flex items-center gap-2 text-[12.5px] text-ink-muted">
+            Hasta
+            <input v-model="dateTo" type="date" class="field w-auto" :min="dateFrom || undefined" />
+          </label>
+
+          <div class="flex flex-wrap items-center gap-1.5">
+            <button
+              v-for="preset in [
+                { value: 'today', label: 'Hoy' },
+                { value: '7d', label: '7 días' },
+                { value: 'month', label: 'Este mes' },
+                { value: 'lastMonth', label: 'Mes anterior' },
+                { value: 'year', label: 'Este año' },
+              ]"
+              :key="preset.value"
+              type="button"
+              class="rounded-full border border-hairline bg-surface px-2.5 py-1 text-[12px] font-medium text-ink-muted transition-colors hover:border-accent/40 hover:text-accent"
+              @click="applyDatePreset(preset.value as DatePreset)"
+            >
+              {{ preset.label }}
+            </button>
+            <button
+              v-if="dateFrom || dateTo"
+              type="button"
+              class="px-1 text-[12.5px] font-medium text-danger hover:underline"
+              @click="clearDates"
+            >
+              Limpiar
+            </button>
+          </div>
+
+          <p v-if="dateRangeInvalid" class="text-[12.5px] font-medium text-danger xl:ml-auto">
+            La fecha inicial no puede ser posterior a la final.
+          </p>
         </div>
       </div>
 
