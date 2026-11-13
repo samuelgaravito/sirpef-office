@@ -44,13 +44,13 @@ function openDocument(): void {
 <template>
   <article
     :class="[
-      'card group flex flex-col overflow-hidden border-l-[3px] transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop',
+      'card group flex flex-col border-l-[3px] transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop',
       STATUS_ACCENTS[document.status],
     ]"
   >
     <button
       type="button"
-      class="flex justify-center overflow-hidden border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 text-left shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
+      class="flex justify-center overflow-hidden rounded-t-[7px] border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 text-left shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
       :class="{ 'cursor-default': trashed }"
       @click="openDocument"
     >

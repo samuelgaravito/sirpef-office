@@ -347,11 +347,11 @@ onMounted(load);
         <article
           v-for="template in filtered"
           :key="template.id"
-          class="card group flex flex-col overflow-hidden transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop"
+          class="card group flex flex-col transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop"
         >
           <button
             type="button"
-            class="flex justify-center overflow-hidden border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
+            class="flex justify-center overflow-hidden rounded-t-[7px] border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
             :class="{ 'cursor-default': view === 'trash' }"
             :aria-label="mode === 'use' ? `Crear documento con ${template.name}` : `Abrir ${template.name}`"
             @click="useTemplateCard(template)"
