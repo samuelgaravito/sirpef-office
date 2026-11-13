@@ -21,12 +21,10 @@ const isLocked = computed(
   () => Boolean(props.document.lockedAt) || props.document.status === 'sent',
 );
 
-/** Número del documento o, si es borrador, el previsto. */
+/** Número del documento o, si es borrador, el previsto (con su aviso en el título). */
 const numberLabel = computed(() => {
   if (props.document.docNumber) return props.document.docNumber;
-  if (props.document.numberingPreview) {
-    return `${props.document.numberingPreview.number} · previsto`;
-  }
+  if (props.document.numberingPreview) return props.document.numberingPreview.number;
   return docTypeLabel(props.document.docType);
 });
 
@@ -68,7 +66,7 @@ function openDocument(): void {
         <p v-if="document.description || document.autoDescription" class="text-description mt-0.5 line-clamp-2">
           {{ document.description || document.autoDescription }}
         </p>
-        <p class="text-meta mt-0.5 flex items-center gap-1 truncate">
+        <p class="text-meta mt-0.5 flex items-center gap-1">
           <span class="truncate" :title="numberTitle">{{ numberLabel }}</span>
           <span aria-hidden="true">·</span>
           <span class="shrink-0">

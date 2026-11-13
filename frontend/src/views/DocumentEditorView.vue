@@ -1796,6 +1796,9 @@ onBeforeUnmount(() => {
             ? 'Documento rechazado. Es de solo lectura: ya no se puede editar.'
             : 'Documento aprobado y enviado. Es de solo lectura: ya no se puede editar, borrar ni restaurar.'
         }}
+        <template v-if="status !== 'rejected'">
+          Si necesitas cambiarlo, pide a quien lo aprobó que lo devuelva para corrección.
+        </template>
         <template v-if="!canExport"> La exportación está reservada al administrador.</template>
         <template v-else> Puedes exportarlo en PDF, Word o HTML.</template>
       </span>

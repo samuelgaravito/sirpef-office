@@ -54,6 +54,11 @@ function selectNone(user: UserMenuAssignment): void {
   drafts[user.id] = ['home'];
 }
 
+/** Atajo para el personal de secretaría: solo lo que usa a diario. */
+function selectSecretaria(user: UserMenuAssignment): void {
+  drafts[user.id] = ['home', 'inbox', 'documents'];
+}
+
 async function load(): Promise<void> {
   loading.value = true;
   try {
@@ -105,7 +110,7 @@ onMounted(load);
         <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-center gap-2">
             <Users class="size-4 text-ink-muted" />
-            <h2 class="text-[14px] font-semibold">Asignación por usuario</h2>
+            <h2 class="text-[16px] font-semibold">Asignación por usuario</h2>
           </div>
           <label class="relative block w-full sm:w-72">
             <Search class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
@@ -118,9 +123,11 @@ onMounted(load);
           </label>
         </div>
 
-        <p class="mb-4 rounded-lg bg-surface-muted px-3 py-2.5 text-[12px] leading-relaxed text-ink-muted">
+        <p class="text-description mb-4 rounded-lg bg-surface-muted px-3 py-2.5">
           «Inicio» siempre está visible. «Ajustes» se abre desde el avatar y no forma parte de
-          esta configuración. Los usuarios de SVA aparecen tras la sincronización.
+          esta configuración. Usa el atajo <strong class="font-semibold text-ink">Secretaría</strong>
+          para dejar solo Inicio, Bandeja y Documentos. Los usuarios de SVA aparecen tras la
+          sincronización.
         </p>
 
         <div v-if="loading" class="grid place-items-center py-12">
@@ -128,13 +135,13 @@ onMounted(load);
         </div>
 
         <div v-else-if="filtered.length === 0" class="py-10 text-center">
-          <p class="text-[13px] text-ink-muted">No hay usuarios que coincidan con la búsqueda.</p>
+          <p class="text-description">No hay usuarios que coincidan con la búsqueda.</p>
         </div>
 
         <div v-else class="overflow-x-auto">
           <table class="w-full min-w-[720px] border-collapse text-left">
             <thead>
-              <tr class="border-b border-hairline text-[11px] uppercase tracking-wide text-ink-subtle">
+              <tr class="border-b border-hairline text-[12px] uppercase tracking-wide text-ink-subtle">
                 <th class="px-2 py-2.5 font-semibold">Usuario</th>
                 <th v-for="menu in MENU_CATALOG" :key="menu.key" class="px-2 py-2.5 text-center font-semibold">
                   {{ menu.label }}
@@ -149,11 +156,11 @@ onMounted(load);
                     <UserAvatar :name="user.name" :src="user.avatarUrl" size="sm" />
                     <div class="min-w-0">
                       <div class="flex items-center gap-1.5">
-                        <p class="truncate text-[13px] font-medium">{{ user.name }}</p>
+                        <p class="truncate text-[14px] font-medium">{{ user.name }}</p>
                         <span v-if="!user.isActive" class="chip !bg-danger-soft !text-danger">Inactivo</span>
                       </div>
-                      <p class="truncate text-[11.5px] text-ink-muted">{{ user.email }}</p>
-                      <p class="mt-0.5 text-[10.5px] uppercase tracking-wide text-ink-subtle">
+                      <p class="truncate text-[12.5px] text-ink-muted">{{ user.email }}</p>
+                      <p class="mt-0.5 text-[12px] uppercase tracking-wide text-ink-subtle">
                         {{ user.role === 'admin' ? 'Administrador' : 'Miembro' }}
                         · {{ user.authProvider === 'sva' ? 'SVA' : 'Local' }}
                       </p>
@@ -176,7 +183,7 @@ onMounted(load);
                   <div class="flex items-center justify-end gap-1.5">
                     <button
                       type="button"
-                      class="text-[11.5px] font-medium text-ink-muted hover:text-ink"
+                      class="text-[12.5px] font-medium text-ink-muted hover:text-ink"
                       @click="selectAll(user)"
                     >
                       Todos
@@ -184,14 +191,22 @@ onMounted(load);
                     <span class="text-ink-subtle">/</span>
                     <button
                       type="button"
-                      class="text-[11.5px] font-medium text-ink-muted hover:text-ink"
+                      class="text-[12.5px] font-medium text-ink-muted hover:text-ink"
                       @click="selectNone(user)"
                     >
                       Ninguno
                     </button>
                     <button
                       type="button"
-                      class="btn btn-primary ml-1 !px-2.5 !py-1.5 text-[11.5px]"
+                      class="text-[12.5px] font-medium text-accent hover:underline"
+                      title="Marca Inicio, Bandeja y Documentos; oculta Plantillas, Diseños y Ajustes"
+                      @click="selectSecretaria(user)"
+                    >
+                      Secretaría
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-primary ml-1 !px-2.5 !py-1.5 text-[12.5px]"
                       :disabled="saving[user.id]"
                       @click="save(user)"
                     >
