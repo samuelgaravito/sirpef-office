@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, BellOff, BellRing, Check, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Sparkles, Trash2, UserRound, Users, Zap } from 'lucide-vue-next';
+import { Bell, BellOff, BellRing, Check, CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Server, Sparkles, Trash2, UserRound, Users, XCircle, Zap } from 'lucide-vue-next';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
@@ -201,6 +201,39 @@ async function removeKey(): Promise<void> {
     toast.success('Clave eliminada');
   } catch (error) {
     toast.failure(error, 'No se pudo eliminar la clave');
+  }
+}
+
+interface DiagnosticCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+const diagnostics = ref<DiagnosticCheck[]>([]);
+const diagnosticsAt = ref<string | null>(null);
+const diagnosticsLoading = ref(false);
+
+/** Comprueba Chrome, base de datos y carpeta de exportación. */
+async function runDiagnostics(): Promise<void> {
+  if (diagnosticsLoading.value) return;
+  diagnosticsLoading.value = true;
+  try {
+    const data = await api.get<{ checks: DiagnosticCheck[]; generatedAt: string }>(
+      '/system/diagnostics',
+    );
+    diagnostics.value = data.checks;
+    diagnosticsAt.value = data.generatedAt;
+    if (data.checks.every((check) => check.ok)) {
+      toast.success('Todo listo para generar PDF y vistas previas');
+    } else {
+      toast.warning('Hay algo que revisar en el sistema');
+    }
+  } catch (error) {
+    toast.failure(error, 'No se pudo comprobar el sistema');
+  } finally {
+    diagnosticsLoading.value = false;
   }
 }
 
@@ -467,6 +500,47 @@ onMounted(() => {
             </div>
           </div>
         </template>
+      </section>
+
+      <!-- Diagnóstico del sistema (solo administradores) -->
+      <section v-if="auth.isAdmin" class="card mt-5 p-5">
+        <header class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <Server class="size-4 text-ink-muted" />
+            <h2 class="text-[14px] font-semibold">Sistema</h2>
+          </div>
+          <button
+            type="button"
+            class="btn btn-outline btn-sm"
+            :disabled="diagnosticsLoading"
+            @click="runDiagnostics"
+          >
+            <component
+              :is="diagnosticsLoading ? Loader2 : RefreshCw"
+              :class="['size-4', diagnosticsLoading ? 'animate-spin' : '']"
+            />
+            {{ diagnosticsLoading ? 'Comprobando…' : 'Comprobar el sistema' }}
+          </button>
+        </header>
+
+        <p class="text-description mt-1">
+          Verifica que el servidor puede generar PDF y vistas previas. Si Chrome falla, aquí
+          verás la ruta y el motivo exacto.
+        </p>
+
+        <ul v-if="diagnostics.length > 0" class="mt-3 divide-y divide-hairline">
+          <li v-for="check in diagnostics" :key="check.key" class="flex items-start gap-2.5 py-2.5">
+            <CheckCircle2 v-if="check.ok" class="mt-0.5 size-4 shrink-0 text-success" />
+            <XCircle v-else class="mt-0.5 size-4 shrink-0 text-danger" />
+            <div class="min-w-0 flex-1">
+              <p class="text-[13.5px] font-medium">{{ check.label }}</p>
+              <p class="text-meta mt-0.5 break-words">{{ check.detail }}</p>
+            </div>
+          </li>
+        </ul>
+        <p v-if="diagnosticsAt" class="text-meta mt-2">
+          Última comprobación: {{ new Date(diagnosticsAt).toLocaleString('es-PE') }}
+        </p>
       </section>
 
       <!-- Acerca de -->

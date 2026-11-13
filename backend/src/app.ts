@@ -17,6 +17,7 @@ import { inboxRoutes } from './modules/inbox/routes.js';
 import { menuRoutes } from './modules/menus/routes.js';
 import { numberingRoutes } from './modules/numbering/routes.js';
 import { realtimeRoutes } from './modules/realtime/routes.js';
+import { systemRoutes } from './modules/system/routes.js';
 import { templateRoutes } from './modules/templates/routes.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
@@ -87,6 +88,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(exportRoutes, { prefix: '/api/documents' });
   await app.register(inboxRoutes, { prefix: '/api/inbox' });
   await app.register(realtimeRoutes, { prefix: '/api' });
+  await app.register(systemRoutes, { prefix: '/api/system' });
 
   app.setNotFoundHandler((request, reply) => {
     reply.status(404).send({

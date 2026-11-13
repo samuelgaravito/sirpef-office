@@ -11,7 +11,7 @@ import type {
 import { packBlocks } from '@sirpefoffice/shared';
 import type { Page } from 'puppeteer-core';
 
-import { getBrowser } from './browser.js';
+import { getBrowser, withTimeout } from './browser.js';
 import { internal } from './errors.js';
 import { buildDocumentHtml, prepareContent } from './render.js';
 
@@ -172,16 +172,28 @@ export async function paginateDocument(options: PaginateOptions): Promise<Pagina
       mode: 'screen',
     });
 
-    await page.setContent(html, { waitUntil: 'load' });
-    await page.evaluate('document.fonts.ready.then(() => true)');
-    await page.evaluate(async () => {
-      await Promise.all(
-        Array.from(document.images).map((image) =>
-          image.decode ? image.decode().catch(() => undefined) : Promise.resolve(),
-        ),
-      );
-      await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
-    });
+    await withTimeout(
+      page.setContent(html, { waitUntil: 'load' }),
+      30_000,
+      'Chrome tardó demasiado en medir el documento',
+    );
+    await withTimeout(
+      page.evaluate('document.fonts.ready.then(() => true)'),
+      15_000,
+      'Chrome tardó demasiado en cargar las fuentes al medir el documento',
+    );
+    await withTimeout(
+      page.evaluate(async () => {
+        await Promise.all(
+          Array.from(document.images).map((image) =>
+            image.decode ? image.decode().catch(() => undefined) : Promise.resolve(),
+          ),
+        );
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
+      }),
+      15_000,
+      'Chrome tardó demasiado en cargar las imágenes al medir el documento',
+    );
 
     const measured = await measurePage(page);
 
