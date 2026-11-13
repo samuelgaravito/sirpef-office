@@ -98,7 +98,7 @@ function choose(templateId: string | null): void {
 
       <button
         type="button"
-        class="flex w-full items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface px-4 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent-soft/30"
+        class="flex w-full items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface px-4 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent-soft"
         @click="choose(null)"
       >
         <span class="grid size-10 shrink-0 place-items-center rounded-lg bg-surface-muted text-ink-muted">

@@ -60,7 +60,7 @@ const steps = [
 <template>
   <section
     v-if="visible"
-    class="rounded-xl border border-accent/25 bg-accent-soft/40 p-4 sm:p-5"
+    class="rounded-xl border border-accent/25 bg-[#f3f7fd] p-4 sm:p-5"
   >
     <header class="flex items-start justify-between gap-3">
       <div>
@@ -82,7 +82,7 @@ const steps = [
       <div
         v-for="step in steps"
         :key="step.title"
-        class="rounded-lg border border-accent/15 bg-surface/80 p-3"
+        class="rounded-lg border border-accent/15 bg-surface p-3"
       >
         <component :is="step.icon" class="size-4 text-accent" />
         <p class="mt-1.5 text-[13.5px] font-semibold text-ink">{{ step.title }}</p>
