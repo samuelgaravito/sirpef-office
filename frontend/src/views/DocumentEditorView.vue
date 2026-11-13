@@ -46,6 +46,7 @@ import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { useUiMode } from '@/composables/useUiMode';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import {
@@ -97,6 +98,7 @@ const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const auth = useAuthStore();
+const { essential } = useUiMode();
 const { refresh: refreshInbox } = useInboxBadge();
 
 const documentId = computed(() => normalizeRouteId(route.params.id));
@@ -1328,10 +1330,21 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onBeforeRouteLeave(async () => {
-  // Un documento nuevo sin guardar no se crea: el borrador local sigue en el
-  // navegador y se puede recuperar la próxima vez.
+  // Un documento nuevo se materializa al salir: así aparece en Documentos y no
+  // depende de que alguien recuerde pulsar Guardar. Si la API falla, el
+  // borrador local sigue disponible en «Continuar donde lo dejé».
   if (isNew.value) {
     flushLocalDraft();
+    if (!dirty.value) return true;
+
+    const created = await new Promise<string | null>((resolve) => {
+      const timer = window.setTimeout(() => resolve(null), 4000);
+      void materialize(false).then((id) => {
+        window.clearTimeout(timer);
+        resolve(id);
+      });
+    });
+    if (created) toast.success('Borrador guardado en el servidor');
     return true;
   }
   if (!dirty.value || !canEdit.value) return true;
@@ -1521,7 +1534,7 @@ onBeforeUnmount(() => {
         </template>
         <template #content>
           <button
-            v-if="canEdit"
+            v-if="!essential && canEdit"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="save(true)"
@@ -1530,7 +1543,7 @@ onBeforeUnmount(() => {
             Guardar punto de control
           </button>
           <button
-            v-if="canEdit"
+            v-if="!essential && canEdit"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="findOpen = true"
@@ -1539,7 +1552,7 @@ onBeforeUnmount(() => {
             Buscar y reemplazar
           </button>
           <button
-            v-if="canEdit && !locked"
+            v-if="!essential && canEdit && !locked"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="toggleChromeMode"
@@ -1548,6 +1561,7 @@ onBeforeUnmount(() => {
             Cabecera y pie
           </button>
           <button
+            v-if="!essential"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="openHistory()"
@@ -1556,7 +1570,7 @@ onBeforeUnmount(() => {
             Historial de versiones
           </button>
           <button
-            v-if="permission === 'owner' && !locked"
+            v-if="!essential && permission === 'owner' && !locked"
             type="button"
             class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
             @click="shareOpen = true"
@@ -1565,7 +1579,7 @@ onBeforeUnmount(() => {
             Compartir
           </button>
 
-          <div class="my-1 border-t border-hairline" />
+          <div v-if="!essential" class="my-1 border-t border-hairline" />
           <p class="px-2.5 pb-1 pt-1 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
             Descargar
           </p>
@@ -1581,7 +1595,7 @@ onBeforeUnmount(() => {
               <FileText class="size-4" />
               Word (.docx)
             </button>
-            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
+            <button v-if="!essential" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
               <FileCode2 class="size-4" />
               HTML
             </button>
@@ -1591,15 +1605,17 @@ onBeforeUnmount(() => {
             </button>
           </template>
 
-          <div class="my-1 border-t border-hairline" />
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-            @click="saveAsTemplate"
-          >
-            <FileText class="size-4" />
-            Guardar como plantilla
-          </button>
+          <template v-if="!essential">
+            <div class="my-1 border-t border-hairline" />
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+              @click="saveAsTemplate"
+            >
+              <FileText class="size-4" />
+              Guardar como plantilla
+            </button>
+          </template>
         </template>
       </BaseDropdown>
     </header>

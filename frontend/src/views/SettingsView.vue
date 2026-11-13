@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Bell, BellOff, BellRing, Check, CheckCircle2, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Server, Sparkles, Trash2, UserRound, Users, XCircle, Zap } from 'lucide-vue-next';
+import { Bell, BellOff, BellRing, Check, CheckCircle2, ClipboardCopy, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Server, Sparkles, Trash2, UserRound, Users, XCircle, Zap } from 'lucide-vue-next';
 import { computed, onMounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
@@ -9,12 +9,14 @@ import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
 import { useNotifications } from '@/composables/useNotifications';
 import { useToast } from '@/composables/useToast';
+import { useUiMode } from '@/composables/useUiMode';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { useAuthStore } from '@/stores/auth';
 
 const auth = useAuthStore();
 const toast = useToast();
 const notifications = useNotifications();
+const { essential, setEssential } = useUiMode();
 const {
   permission: notifyPermission,
   muted: notifyMuted,
@@ -237,6 +239,23 @@ async function runDiagnostics(): Promise<void> {
   }
 }
 
+/** Copia un informe listo para pegar en un correo de soporte. */
+async function copyDiagnostics(): Promise<void> {
+  const report = {
+    generado: diagnosticsAt.value ?? new Date().toISOString(),
+    usuario: auth.user?.email ?? null,
+    navegador: navigator.userAgent,
+    url: window.location.href,
+    comprobaciones: diagnostics.value,
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    toast.success('Informe copiado al portapapeles');
+  } catch {
+    toast.error('El navegador no permitió copiar el informe');
+  }
+}
+
 onMounted(() => {
   profileName.value = auth.user?.name ?? '';
   void loadAi();
@@ -351,6 +370,30 @@ onMounted(() => {
         </div>
 
         <p class="mt-3 text-[12px] leading-relaxed text-ink-subtle">{{ notificationStatus }}</p>
+      </section>
+
+      <!-- Interfaz -->
+      <section class="card mt-5 p-5">
+        <header class="mb-4 flex items-center gap-2">
+          <Sparkles class="size-4 text-ink-muted" />
+          <h2 class="text-[14px] font-semibold">Interfaz</h2>
+        </header>
+
+        <label class="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            class="mt-0.5 size-4 accent-[var(--color-accent)]"
+            :checked="essential"
+            @change="setEssential(($event.target as HTMLInputElement).checked)"
+          />
+          <span class="min-w-0">
+            <span class="block text-[13.5px] font-medium text-ink">Solo lo esencial</span>
+            <span class="text-description mt-0.5 block">
+              Deja en el editor solo Guardar, Vista previa, Enviar y las descargas. Oculta
+              historial, cabecera y pie, compartir y formatos técnicos.
+            </span>
+          </span>
+        </label>
       </section>
 
       <!-- SVA (solo administradores) -->
@@ -509,18 +552,29 @@ onMounted(() => {
             <Server class="size-4 text-ink-muted" />
             <h2 class="text-[14px] font-semibold">Sistema</h2>
           </div>
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            :disabled="diagnosticsLoading"
-            @click="runDiagnostics"
-          >
-            <component
-              :is="diagnosticsLoading ? Loader2 : RefreshCw"
-              :class="['size-4', diagnosticsLoading ? 'animate-spin' : '']"
-            />
-            {{ diagnosticsLoading ? 'Comprobando…' : 'Comprobar el sistema' }}
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              v-if="diagnostics.length > 0"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="copyDiagnostics"
+            >
+              <ClipboardCopy class="size-4" />
+              Copiar informe
+            </button>
+            <button
+              type="button"
+              class="btn btn-outline btn-sm"
+              :disabled="diagnosticsLoading"
+              @click="runDiagnostics"
+            >
+              <component
+                :is="diagnosticsLoading ? Loader2 : RefreshCw"
+                :class="['size-4', diagnosticsLoading ? 'animate-spin' : '']"
+              />
+              {{ diagnosticsLoading ? 'Comprobando…' : 'Comprobar el sistema' }}
+            </button>
+          </div>
         </header>
 
         <p class="text-description mt-1">

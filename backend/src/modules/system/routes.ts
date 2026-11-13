@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
 
@@ -16,8 +17,18 @@ interface DiagnosticCheck {
   detail: string;
 }
 
+/**
+ * Identificador del proceso. Cambia con cada despliegue o reinicio, y permite
+ * avisar al navegador de que hay una versión nueva sin depender del build.
+ */
+const BOOT_ID = randomUUID();
+const APP_VERSION = process.env.APP_VERSION ?? 'dev';
+
 /** Comprobaciones que puede lanzar un administrador desde Ajustes. */
 export async function systemRoutes(app: FastifyInstance): Promise<void> {
+  /** Público: el cliente lo consulta para detectar una versión nueva. */
+  app.get('/version', async () => ({ bootId: BOOT_ID, version: APP_VERSION }));
+
   app.get('/diagnostics', async (request) => {
     await requireAdmin(request);
 

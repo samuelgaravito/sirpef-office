@@ -71,7 +71,7 @@ onBeforeUnmount(() => {
       >
         <div
           :class="[
-            'card flex max-h-[calc(100dvh-2rem)] w-full flex-col sm:max-h-[calc(100dvh-3rem)]',
+            'card flex max-h-[calc(100vh-2rem)] w-full flex-col sm:max-h-[calc(100vh-3rem)]',
             widths[size],
           ]"
           role="document"

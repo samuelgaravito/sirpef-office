@@ -17,6 +17,7 @@ import { useRoute, useRouter } from 'vue-router';
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
+import OnboardingCard from '@/components/home/OnboardingCard.vue';
 import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
@@ -485,6 +486,8 @@ onUnmounted(() => {
         v-if="canSeeDocuments || canSeeInbox"
         class="mx-auto mt-6 w-full max-w-[1280px] px-4 sm:px-6 lg:px-8"
       >
+        <OnboardingCard v-if="canSeeDocuments" class="mb-4" @create="pickerOpen = true" />
+
         <div class="grid gap-4 lg:grid-cols-2">
           <!-- Continuar donde lo dejé -->
           <div v-if="canSeeDocuments" class="card p-4">
