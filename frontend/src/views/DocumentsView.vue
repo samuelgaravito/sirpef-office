@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowLeft, CalendarDays, ChevronDown, FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
@@ -14,10 +14,21 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useToast } from '@/composables/useToast';
 import { api } from '@/api/client';
+import {
+  DATE_PRESETS,
+  dateFilterLabel,
+  endOfDayIso,
+  formatDayLabel,
+  isPresetActive,
+  presetRange,
+  startOfDayIso,
+  type DatePreset,
+} from '@/lib/date-presets';
 import { STATUS_LABELS } from '@/lib/labels';
 import type { DocumentStatus, DocumentSummary, ListResponse, TemplateSummary } from '@/types';
 
 const router = useRouter();
+const route = useRoute();
 const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 
@@ -31,14 +42,19 @@ const search = ref('');
 const scope = ref<'all' | 'mine' | 'shared'>('all');
 const templateId = ref('');
 const templates = ref<TemplateSummary[]>([]);
-const status = ref<DocumentStatus | ''>('');
+/** El panel estadístico puede abrir el listado ya filtrado por estado. */
+const statusParam = typeof route.query.status === 'string' ? route.query.status : '';
+const status = ref<DocumentStatus | ''>(
+  statusParam in STATUS_LABELS ? (statusParam as DocumentStatus) : '',
+);
 const sort = ref<'updated' | 'created' | 'title'>('updated');
 const dateField = ref<'created' | 'updated'>('updated');
 /** Permite cerrar el panel de fecha al elegir un atajo. */
 const dateDropdown = ref<{ close: () => void } | null>(null);
 const dateFrom = ref('');
 const dateTo = ref('');
-const view = ref<'active' | 'trash'>('active');
+/** `?view=trash` abre directamente la papelera. */
+const view = ref<'active' | 'trash'>(route.query.view === 'trash' ? 'trash' : 'active');
 
 const deleting = ref<DocumentSummary | null>(null);
 const removing = ref(false);
@@ -51,22 +67,13 @@ const dateRangeInvalid = computed(
   () => Boolean(dateFrom.value && dateTo.value && dateFrom.value > dateTo.value),
 );
 
-function formatDateInput(value: string): string {
-  if (!value) return '';
-  return new Date(`${value}T00:00:00`).toLocaleDateString('es-PE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
-}
-
 const dateSummary = computed(() => {
   if (!dateFrom.value && !dateTo.value) return '';
   if (dateFrom.value && dateTo.value) {
-    return ` · del ${formatDateInput(dateFrom.value)} al ${formatDateInput(dateTo.value)}`;
+    return ` · del ${formatDayLabel(dateFrom.value)} al ${formatDayLabel(dateTo.value)}`;
   }
-  if (dateFrom.value) return ` · desde el ${formatDateInput(dateFrom.value)}`;
-  return ` · hasta el ${formatDateInput(dateTo.value)}`;
+  if (dateFrom.value) return ` · desde el ${formatDayLabel(dateFrom.value)}`;
+  return ` · hasta el ${formatDayLabel(dateTo.value)}`;
 });
 
 const subtitle = computed(() =>
@@ -75,53 +82,6 @@ const subtitle = computed(() =>
     : `${total.value} documento${total.value === 1 ? '' : 's'} en tu espacio de trabajo${dateSummary.value}`,
 );
 
-/** Convierte un día local en el instante UTC de su inicio o su final. */
-function startOfDayIso(value: string): string {
-  return new Date(`${value}T00:00:00`).toISOString();
-}
-
-function endOfDayIso(value: string): string {
-  return new Date(`${value}T23:59:59.999`).toISOString();
-}
-
-function toDateInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-type DatePreset = 'today' | '7d' | 'month' | 'lastMonth' | 'year';
-
-/** Atajos de fecha calculados en el calendario local, no en UTC. */
-const datePresets: { value: DatePreset; label: string }[] = [
-  { value: 'today', label: 'Hoy' },
-  { value: '7d', label: '7 días' },
-  { value: 'month', label: 'Este mes' },
-  { value: 'lastMonth', label: 'Mes anterior' },
-  { value: 'year', label: 'Este año' },
-];
-
-/** Rango local de cada atajo, sin tocar el estado. */
-function presetRange(preset: DatePreset): { from: string; to: string } {
-  const now = new Date();
-  let from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  let to = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  if (preset === '7d') {
-    from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
-  } else if (preset === 'month') {
-    from = new Date(now.getFullYear(), now.getMonth(), 1);
-  } else if (preset === 'lastMonth') {
-    from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    to = new Date(now.getFullYear(), now.getMonth(), 0);
-  } else if (preset === 'year') {
-    from = new Date(now.getFullYear(), 0, 1);
-  }
-
-  return { from: toDateInput(from), to: toDateInput(to) };
-}
-
 function applyDatePreset(preset: DatePreset): void {
   const range = presetRange(preset);
   dateFrom.value = range.from;
@@ -129,23 +89,9 @@ function applyDatePreset(preset: DatePreset): void {
   dateDropdown.value?.close();
 }
 
-function isPresetActive(preset: DatePreset): boolean {
-  const range = presetRange(preset);
-  return dateFrom.value === range.from && dateTo.value === range.to;
-}
-
 const dateFilterActive = computed(() => Boolean(dateFrom.value || dateTo.value));
 
-const dateButtonLabel = computed(() => {
-  if (!dateFrom.value && !dateTo.value) return 'Fecha';
-  if (dateFrom.value && dateTo.value) {
-    if (dateFrom.value === dateTo.value) return `Fecha: ${formatDateInput(dateFrom.value)}`;
-    return `Fecha: ${formatDateInput(dateFrom.value)} – ${formatDateInput(dateTo.value)}`;
-  }
-  return dateFrom.value
-    ? `Fecha: desde ${formatDateInput(dateFrom.value)}`
-    : `Fecha: hasta ${formatDateInput(dateTo.value)}`;
-});
+const dateButtonLabel = computed(() => dateFilterLabel(dateFrom.value, dateTo.value));
 
 /** Cuántos filtros del panel avanzado están activos. */
 const advancedFilterCount = computed(
@@ -357,12 +303,12 @@ onMounted(() => {
               </p>
               <div class="mt-1.5 grid grid-cols-2 gap-1.5">
                 <button
-                  v-for="preset in datePresets"
+                  v-for="preset in DATE_PRESETS"
                   :key="preset.value"
                   type="button"
                   :class="[
                     'rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] font-medium transition-colors',
-                    isPresetActive(preset.value)
+                    isPresetActive(preset.value, dateFrom, dateTo)
                       ? 'border-accent/40 bg-accent-soft text-accent'
                       : 'border-hairline bg-surface text-ink-muted hover:border-accent/40 hover:text-accent',
                   ]"

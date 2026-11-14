@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ArrowRight,
+  BarChart3,
   Clock,
   FileText,
   Inbox,
@@ -19,6 +20,7 @@ import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
 import OnboardingCard from '@/components/home/OnboardingCard.vue';
 import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
+import WorkspaceStatsDialog from '@/components/home/WorkspaceStatsDialog.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
@@ -40,6 +42,8 @@ const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
 /** Selector de modelo: la puerta de entrada para crear un documento. */
 const pickerOpen = ref(false);
+/** Panel estadístico que se abre desde el círculo del gauge. */
+const statsOpen = ref(false);
 
 /** Punto de la ventana desde el que "nace" el panel del módulo. */
 const panelOrigin = ref<{ x: number; y: number } | null>(null);
@@ -427,13 +431,26 @@ onUnmounted(() => {
                 </button>
               </div>
 
-              <div v-if="canSeeDocuments" class="mt-5 flex flex-wrap gap-2 lg:hidden">
-                <span class="hero-stat">
-                  <strong>{{ displayedDocuments }}</strong> documentos
-                </span>
-                <span v-if="drafts" class="hero-stat">
-                  <strong>{{ drafts }}</strong> en borrador
-                </span>
+              <div
+                v-if="canSeeDocuments || canSeeTemplates || canSeeDesigns"
+                class="mt-5 flex flex-wrap gap-2 lg:hidden"
+              >
+                <template v-if="canSeeDocuments">
+                  <span class="hero-stat">
+                    <strong>{{ displayedDocuments }}</strong> documentos
+                  </span>
+                  <span v-if="drafts" class="hero-stat">
+                    <strong>{{ drafts }}</strong> en borrador
+                  </span>
+                </template>
+                <button
+                  type="button"
+                  class="hero-stat transition-colors hover:bg-white/15"
+                  @click="statsOpen = true"
+                >
+                  <BarChart3 class="size-3.5" />
+                  Ver estadísticas
+                </button>
               </div>
 
               <ActivityFocus
@@ -459,6 +476,7 @@ onUnmounted(() => {
                 :templates="counts.templates"
                 :designs="counts.designs"
                 :loading="shellLoading"
+                @open-stats="statsOpen = true"
               />
             </div>
           </div>
@@ -625,6 +643,8 @@ onUnmounted(() => {
       @close="pickerOpen = false"
       @create="onCreate"
     />
+
+    <WorkspaceStatsDialog :open="statsOpen" @close="statsOpen = false" />
 
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">

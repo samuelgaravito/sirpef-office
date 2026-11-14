@@ -271,6 +271,98 @@ export interface DocumentSummary {
   deletedAt?: string | null;
 }
 
+/* ─────────────────────────── Estadísticas ────────────────────────────── */
+
+export interface StatsTemplateUsage {
+  /** `null` cuando los documentos no tienen plantilla o fue eliminada. */
+  id: string | null;
+  name: string;
+  count: number;
+  isShared: boolean;
+}
+
+export interface StatsMonthPoint {
+  /** Mes en formato `YYYY-MM`. */
+  month: string;
+  created: number;
+  approved: number;
+}
+
+/**
+ * Resumen estadístico del espacio del usuario: **propios + compartidos**, con
+ * el mismo criterio de visibilidad que el listado de documentos.
+ *
+ * El filtro opcional de fechas limita por **fecha de creación** los documentos,
+ * las plantillas y los diseños que cuentan. Sin filtro, el total coincide con
+ * el gauge de inicio (`docs` incluye borradores; el segmento «Documentos» del
+ * gráfico es `documents - drafts`).
+ */
+export interface WorkspaceStats {
+  generatedAt: string;
+  totals: {
+    /** Documentos + plantillas + diseños del periodo (o del histórico). */
+    elements: number;
+    documents: number;
+    drafts: number;
+    /** Enviados, aprobados, finales y archivados. */
+    official: number;
+    /** Documentos en la papelera del propio usuario (estado actual). */
+    trashed: number;
+    templates: number;
+    designs: number;
+  };
+  topTemplates: StatsTemplateUsage[];
+  /** Meses del periodo elegido, o los últimos 12 si no hay filtro. */
+  monthly: StatsMonthPoint[];
+  approvals: {
+    /** Pendientes ahora: globales para un admin, propios para un miembro. */
+    pending: number;
+    /** Resultados de los envíos del propio usuario dentro del periodo. */
+    approved: number;
+    rejected: number;
+    /** `approved / (approved + rejected)`; `null` si no hay resultados. */
+    approvalRate: number | null;
+    /** Horas medias entre el envío y la aprobación; `null` sin datos. */
+    avgHours: number | null;
+  };
+  health: {
+    /** Borradores visibles sin tocar en los últimos 30 días (hoy). */
+    staleDrafts: number;
+  };
+}
+
+/* ─────────────────────── Detalle de estadísticas ─────────────────────── */
+
+export const STATS_DETAIL_KINDS = ['template', 'approved', 'rejected', 'pending'] as const;
+
+export type StatsDetailKind = (typeof STATS_DETAIL_KINDS)[number];
+
+/** Fila de la lista que se abre al pulsar un valor del panel. */
+export interface StatsDetailItem {
+  documentId: string;
+  /** Mensaje de la bandeja asociado; `null` en documentos por plantilla. */
+  messageId: string | null;
+  title: string;
+  docNumber: string | null;
+  docType: DocType;
+  status: DocumentStatus;
+  ownerName: string;
+  templateName: string | null;
+  /** Fecha del criterio: creación del documento o resolución del envío. */
+  date: string;
+  /** Asunto del envío, solo en aprobaciones y pendientes. */
+  subject: string | null;
+  /** Quién aprobó o rechazó el envío; `null` mientras está pendiente. */
+  resolvedByName: string | null;
+}
+
+export interface StatsDetailPage {
+  items: StatsDetailItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 /* ───────────────────────────── Bandeja ───────────────────────────────── */
 
 export const INBOX_MESSAGE_STATUSES = [

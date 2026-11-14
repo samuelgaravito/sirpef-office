@@ -962,6 +962,8 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `POST` | `/inbox/:id/reject` | Rechaza con motivo. Acepta `allowEdit` (por defecto `true`): con edición el memo vuelve a borrador; sin edición queda cerrado y bloqueado. |
 | `POST` | `/inbox/:id/cancel` | El remitente cancela un envío pendiente. |
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
+| `GET` | `/stats/overview?dateFrom=<ISO>&dateTo=<ISO>` | Resumen del espacio (propios + compartidos, mismo criterio que `/documents?scope=all`): totales, plantillas más usadas, actividad mensual y resultados de aprobación. El filtro limita por fecha de creación de documentos, plantillas y diseños; sin fechas abarca todo el histórico. |
+| `GET` | `/stats/detail?kind=template\|approved\|rejected\|pending&templateId=<uuid\|none>&dateFrom=<ISO>&dateTo=<ISO>&page=1&pageSize=10` | Documentos detrás de un valor del panel: los de una plantilla, los envíos aprobados/rechazados del usuario o la cola de pendientes. Cada `kind` replica el criterio de su contador para que el total coincida. |
 | `GET/POST` | `/templates` | Listado y creación (acepta `header`/`footer` y `numbering`). |
 | `GET/PATCH/DELETE` | `/templates/:id` | Detalle con `chrome`/`inheritedChrome` y edición de bandas y numeración. |
 | `GET` | `/numbering` | Series de numeración con su último emitido y próximo número (la serie se identifica por su `id`). |

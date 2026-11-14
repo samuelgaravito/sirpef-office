@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { X } from 'lucide-vue-next';
-import { onBeforeUnmount, onMounted, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
+import { isTopModal, registerModal, unregisterModal } from '@/lib/modal-stack';
 import { lockScroll, unlockScroll } from '@/lib/scroll-lock';
 
 const props = withDefaults(
@@ -11,11 +12,17 @@ const props = withDefaults(
     description?: string;
     size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl';
     closeOnBackdrop?: boolean;
+    /** Al abrir, lleva el foco al botón de cerrar (útil en modales anidados). */
+    autoFocusClose?: boolean;
   }>(),
-  { size: 'md', closeOnBackdrop: true },
+  { size: 'md', closeOnBackdrop: true, autoFocusClose: false },
 );
 
 const emit = defineEmits<{ close: [] }>();
+
+/** Identidad estable para saber si este modal es el superior de la pila. */
+const modalId = Symbol('base-modal');
+const card = ref<HTMLElement | null>(null);
 
 const widths = {
   sm: 'max-w-sm',
@@ -27,8 +34,11 @@ const widths = {
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape' || !props.open) return;
-  // Solo cierra el modal superior: evita que el panel que lo contiene también
-  // se cierre al propagarse el evento hasta su listener de `window`.
+  // Solo cierra el modal superior: si hay un detalle encima, el panel de
+  // debajo no debe cerrarse también.
+  if (!isTopModal(modalId)) return;
+  // Evita que el panel que lo contiene también se cierre al propagarse el
+  // evento hasta su listener de `window`.
   event.stopPropagation();
   emit('close');
 }
@@ -42,11 +52,28 @@ function setScrollLocked(locked: boolean): void {
   else unlockScroll();
 }
 
-watch(() => props.open, setScrollLocked, { immediate: true });
+watch(
+  () => props.open,
+  async (open) => {
+    setScrollLocked(open);
+    if (!open) {
+      unregisterModal(modalId);
+      return;
+    }
+
+    registerModal(modalId);
+    if (props.autoFocusClose) {
+      await nextTick();
+      card.value?.querySelector<HTMLButtonElement>('button[aria-label="Cerrar"]')?.focus();
+    }
+  },
+  { immediate: true },
+);
 
 onMounted(() => document.addEventListener('keydown', onKeydown));
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown);
+  unregisterModal(modalId);
   setScrollLocked(false);
 });
 </script>
@@ -70,6 +97,7 @@ onBeforeUnmount(() => {
         @mousedown.self="closeOnBackdrop && emit('close')"
       >
         <div
+          ref="card"
           :class="[
             'card flex max-h-[calc(100vh-2rem)] w-full flex-col sm:max-h-[calc(100vh-3rem)]',
             widths[size],
