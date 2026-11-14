@@ -1,6 +1,8 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 
+import { stashAiPrompt } from '@/lib/ai-prompt';
+
 /**
  * Clave compartida del botón que está abriendo el editor.
  * `null` = inactivo, `blank` = hoja en blanco, otro valor = id de plantilla.
@@ -16,7 +18,7 @@ export function useCreateDocument() {
 
   async function createDocument(
     templateId?: string,
-    options: { ai?: boolean } = {},
+    options: { ai?: boolean; prompt?: string } = {},
   ): Promise<void> {
     if (creating.value) return;
 
@@ -28,6 +30,9 @@ export function useCreateDocument() {
         typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
           ? crypto.randomUUID()
           : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // El encargo no viaja en la URL: el editor lo consume y lo envía una vez.
+      if (options.ai && options.prompt) stashAiPrompt(chatId, options.prompt);
 
       await router.push({
         name: 'document-new',

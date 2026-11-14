@@ -70,6 +70,8 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   `smoke:errors:db` sí necesita PostgreSQL real.
 - `npm run smoke:ai-draft` prueba el asistente de redacción con un `fetch` simulado →
   **no necesita proveedor ni base de datos**.
+- `npm run smoke:ai-template` prueba la elección de plantilla con un `fetch` simulado →
+  **no necesita proveedor ni base de datos**.
 - `npm run smoke:*` restantes (inbox, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean

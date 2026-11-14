@@ -575,15 +575,18 @@ Configuración (solo administradores) en **Ajustes → Asistente de IA**:
 | Ollama | `baseUrl` (`http://localhost:11434`), `model` (`llama3.1` por defecto) |
 
 La configuración se guarda en la tabla `app_settings` (clave `ai`), tiene prioridad sobre
-las variables de entorno y **nunca devuelve la API key al navegador**. El botón
+las variables de entorno y **nunca devuelve la API key al navegador**.
+
 Hay dos formas de usar la IA:
 
-- **Asistente de redacción** (botón **Asistente** o **Crear con IA**): eliges una plantilla
-  y describes el encargo. El asistente devuelve el documento completo (título, variables y
-  cuerpo TipTap) y lo aplica a la hoja; a partir de ahí puedes pedir cambios («más breve»,
-  «añade una tabla», «cambia al destinatario») sin salir del editor. Usa la estructura de
-  la plantilla, sus instrucciones, su **perfil de estilo** y, opcionalmente, extractos de
-  documentos aprobados. La propuesta no se guarda hasta que pulsas **Guardar**.
+- **Asistente de redacción** (la barra de IA del panel de trabajo, encima de las tarjetas):
+  describes el encargo en lenguaje natural y la IA elige la plantilla que mejor encaja; el
+  editor se abre con el asistente y ese mensaje ya enviado. Dentro del editor, el botón
+  **Asistente** permite seguir pidiendo cambios («más breve», «añade una tabla», «cambia al
+  destinatario») sin salir de la hoja. Devuelve el documento completo (título, variables y
+  cuerpo TipTap) y lo aplica; usa la estructura de la plantilla, sus instrucciones, su
+  **perfil de estilo** y, opcionalmente, extractos de documentos aprobados. La propuesta no
+  se guarda hasta que pulsas **Guardar**.
 - **Rellenar con IA** del panel de datos: envía el esquema, los valores actuales y las
   instrucciones de cada variable, y mezcla el JSON resultante **solo en los campos del
   formulario**.
@@ -677,6 +680,7 @@ cd backend
 | `npm run smoke:variables` | Regresión de espacios y saltos de línea en variables: las observaciones con varias líneas, sangrías o columnas alineadas llegan igual a la vista previa, al PDF y al DOCX. |
 | `npm run smoke:dates` | Con la API levantada, comprueba el filtro por fechas de Documentos: rango de hoy, rango vacío de mañana, fecha de creación y error claro si la fecha inicial es posterior a la final. |
 | `npm run smoke:ai-draft` | Regresión del asistente de redacción sin proveedor ni base de datos: sobre JSON con vallas, saneado TipTap, coacción de variables, cuerpo redactable y descarte del correlativo. |
+| `npm run smoke:ai-template` | Regresión de la elección de plantilla desde un encargo: validación del id propuesto por el modelo, caída a la heurística con JSON roto o id inventado, sin proveedor y con una sola plantilla. |
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 | `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, prefijo opcional (en blanco la serie numera sin etiqueta), sin «código automático», aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |

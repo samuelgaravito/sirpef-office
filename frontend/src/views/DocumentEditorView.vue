@@ -48,6 +48,7 @@ import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
+import { takeAiPrompt } from '@/lib/ai-prompt';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import {
@@ -1573,6 +1574,13 @@ onMounted(async () => {
 
   loadAssistantChat();
   if (route.query.ai === '1') assistantOpen.value = true;
+
+  // Encargo escrito en el panel de trabajo: se envía una sola vez al llegar.
+  const pendingPrompt = takeAiPrompt(chatSessionId.value);
+  if (pendingPrompt) {
+    assistantOpen.value = true;
+    void sendAssistantMessage(pendingPrompt);
+  }
 });
 
 onBeforeUnmount(() => {

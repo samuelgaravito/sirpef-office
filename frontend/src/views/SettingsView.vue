@@ -7,6 +7,7 @@ import PageHeader from '@/components/layout/PageHeader.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
+import { useAiStatus } from '@/composables/useAiStatus';
 import { useNotifications } from '@/composables/useNotifications';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
@@ -17,6 +18,7 @@ const auth = useAuthStore();
 const toast = useToast();
 const notifications = useNotifications();
 const { essential, setEssential } = useUiMode();
+const { load: refreshAiStatus } = useAiStatus();
 const {
   permission: notifyPermission,
   muted: notifyMuted,
@@ -173,6 +175,7 @@ async function saveAi(): Promise<void> {
       ...(ai.apiKey ? { apiKey: ai.apiKey } : {}),
     });
     Object.assign(ai, data.settings, { apiKey: '' });
+    void refreshAiStatus(true);
     toast.success('Configuración de IA guardada');
   } catch (error) {
     toast.failure(error, 'No se pudo guardar la configuración');
@@ -200,6 +203,7 @@ async function removeKey(): Promise<void> {
   try {
     const data = await api.del<{ settings: AiSettings }>('/ai/key');
     Object.assign(ai, data.settings, { apiKey: '' });
+    void refreshAiStatus(true);
     toast.success('Clave eliminada');
   } catch (error) {
     toast.failure(error, 'No se pudo eliminar la clave');

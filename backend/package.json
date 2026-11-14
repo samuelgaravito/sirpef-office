@@ -51,7 +51,8 @@
     "setup": "npm run db:up && npm run db:migrate && npm run db:seed",
     "smoke:variables": "tsx scripts/variable-spacing-smoke.ts",
     "smoke:dates": "tsx scripts/documents-dates-smoke.ts",
-    "smoke:ai-draft": "tsx scripts/ai-draft-smoke.ts"
+    "smoke:ai-draft": "tsx scripts/ai-draft-smoke.ts",
+    "smoke:ai-template": "tsx scripts/ai-template-choice-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

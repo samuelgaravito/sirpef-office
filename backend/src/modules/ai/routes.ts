@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -6,7 +6,7 @@ import { AI_DRAFT_MAX_MESSAGES, plainTextFromContent } from '@sirpefoffice/share
 import type { AiDraftMessage, JSONContent, VariableDef } from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
-import { documents, templates } from '../../db/schema.js';
+import { documents, templateShares, templates } from '../../db/schema.js';
 import { assertDocument, assertDocumentMutable, getTemplateAccess } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
@@ -22,6 +22,7 @@ import {
   testConnection,
   toPublicConfig,
 } from './service.js';
+import { chooseTemplate, MAX_TEMPLATE_CANDIDATES } from './template-choice.js';
 
 const configSchema = z.object({
   provider: z.enum(['none', 'openai', 'anthropic', 'gemini', 'ollama']).optional(),
@@ -58,6 +59,10 @@ const documentDraftSchema = draftSchema.extend({
 const generateSchema = z.object({
   overwrite: z.boolean().optional(),
   instructions: z.string().max(4000).optional(),
+});
+
+const chooseTemplateSchema = z.object({
+  prompt: z.string().trim().min(3).max(2_000),
 });
 
 
@@ -148,6 +153,53 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const config = await loadConfig();
     const result = await testConnection(config);
     return result;
+  });
+
+  /**
+   * Elige la plantilla que mejor sirve de molde para un encargo escrito en
+   * lenguaje natural. No crea nada: la interfaz navega al editor con ella.
+   */
+  app.post('/ai/choose-template', async (request) => {
+    const user = await authenticate(request);
+    const body = chooseTemplateSchema.parse(request.body ?? {});
+
+    // Misma visibilidad que el listado de plantillas: propias, compartidas
+    // con este usuario y compartidas con todo el mundo.
+    const sharedWithMe = inArray(
+      templates.id,
+      db
+        .select({ templateId: templateShares.templateId })
+        .from(templateShares)
+        .where(eq(templateShares.userId, user.sub)),
+    );
+    const sharedGlobal = and(
+      eq(templates.isShared, true),
+      sql`${templates.ownerId} <> ${user.sub}`,
+    );
+
+    // Solo las activas: una plantilla inactiva no se puede usar para redactar.
+    const candidates = await db
+      .select({
+        id: templates.id,
+        name: templates.name,
+        docType: templates.docType,
+        description: templates.description,
+        aiInstructions: templates.aiInstructions,
+        updatedAt: templates.updatedAt,
+      })
+      .from(templates)
+      .where(
+        and(
+          or(eq(templates.ownerId, user.sub), sharedWithMe, sharedGlobal),
+          eq(templates.isActive, true),
+          isNull(templates.deletedAt),
+        ),
+      )
+      .orderBy(desc(templates.updatedAt))
+      .limit(MAX_TEMPLATE_CANDIDATES);
+
+    const config = await loadConfig();
+    return chooseTemplate(config, body.prompt, candidates);
   });
 
   /**

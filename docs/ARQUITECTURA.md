@@ -949,7 +949,27 @@ POST /api/documents/:id/ai/draft
 Si el proveedor no está configurado, las rutas responden `400 AI_NOT_CONFIGURED` y la UI
 oculta el asistente (`aiConfigured === false`).
 
-### 8.4 Proveedores
+### 8.4 Elección de plantilla desde el panel de trabajo
+
+La barra del panel de trabajo (`AiPromptBar`) permite escribir el encargo en lenguaje
+natural: la IA elige la plantilla y el editor abre el asistente con ese primer mensaje.
+
+```text
+POST /api/ai/choose-template  { prompt }
+  → { templateId, templateName, docType, reason, source: 'unica' | 'ia' | 'heuristica' }
+```
+
+- Solo entran plantillas **activas** y visibles para el usuario (propias, compartidas con
+  él o compartidas con todo el mundo), con la misma regla que el listado de plantillas.
+- Con una sola candidata no se consulta al modelo (`source = 'unica'`). Con varias, el
+  modelo recibe id, nombre, tipo, descripción e instrucciones y responde un JSON con
+  `templateId`; la elección se valida contra la lista.
+- Si el JSON es inválido o el id no existe, se resuelve por palabras clave (sinónimos por
+  `docType`, nombre y descripción). Sin proveedor configurado siempre se usa esa heurística.
+- El encargo se guarda en `sessionStorage` bajo el identificador de la conversación y el
+  editor lo envía una sola vez al montarse: no viaja en la URL ni sobrevive a una recarga.
+
+### 8.5 Proveedores
 
 | Proveedor | Endpoint | Notas |
 | --- | --- | --- |
@@ -1014,6 +1034,7 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `GET/PUT` | `/ai/settings` | Configuración (admin). |
 | `DELETE` | `/ai/key` | Borra la clave. |
 | `POST` | `/ai/test` | Prueba de conexión. |
+| `POST` | `/ai/choose-template` | Elige la plantilla que mejor encaja con un encargo escrito (no crea nada). |
 | `POST` | `/documents/:id/ai/generate` | Rellena variables con IA. |
 | `POST` | `/templates/:templateId/ai/draft` | Asistente: propone un documento completo desde una plantilla (no guarda). |
 | `POST` | `/templates/:id/ai/style` | Deduce un perfil de estilo de documentos aprobados; devuelve el texto sin guardarlo. |

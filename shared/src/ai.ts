@@ -7,7 +7,7 @@
  * desacoplada y no hace falta una tabla de conversaciones para empezar.
  */
 
-import type { JSONContent, VariableDef, VariableValues } from './types.js';
+import type { DocType, JSONContent, VariableDef, VariableValues } from './types.js';
 
 /** Límites que comparten la validación del servidor y la interfaz. */
 export const AI_DRAFT_MAX_MESSAGES = 24;
@@ -46,6 +46,17 @@ export interface AiDraftResult {
   warnings: string[];
   /** Modelo que generó la propuesta (para mostrarlo en la interfaz). */
   model: string;
+}
+
+/** Elección de plantilla a partir de un encargo escrito en lenguaje natural. */
+export interface AiTemplateChoice {
+  templateId: string;
+  templateName: string;
+  docType: DocType;
+  /** Explicación breve, en español, de por qué encaja esa plantilla. */
+  reason: string;
+  /** Origen de la elección: única plantilla, el modelo o la heurística. */
+  source: 'unica' | 'ia' | 'heuristica';
 }
 
 /* ────────────────────── Saneado del contenido TipTap ─────────────────── */

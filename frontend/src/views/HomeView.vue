@@ -11,25 +11,28 @@ import {
   Plus,
   Search,
   Send,
-  Sparkles,
 } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
+import AiPromptBar from '@/components/home/AiPromptBar.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
 import OnboardingCard from '@/components/home/OnboardingCard.vue';
 import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
 import WorkspaceStatsDialog from '@/components/home/WorkspaceStatsDialog.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
+import { useAiStatus } from '@/composables/useAiStatus';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { describeError } from '@/lib/error-message';
 import { relativeTime } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
+import type { AiTemplateChoice } from '@sirpefoffice/shared';
 import type { DocumentSummary, InboxMessageSummary, ListResponse } from '@/types';
 
 const auth = useAuthStore();
@@ -38,13 +41,16 @@ const route = useRoute();
 const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
+const { status: aiStatus, loading: aiLoading, load: loadAiStatus } = useAiStatus();
+
+/** Encargo enviado desde la barra de IA: se está eligiendo plantilla. */
+const aiPromptBusy = ref(false);
+const aiPromptError = ref('');
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
 /** Selector de modelo: la puerta de entrada para crear un documento. */
 const pickerOpen = ref(false);
-/** El selector abre en modo asistente: exige plantilla y no ofrece hoja en blanco. */
-const pickerAiMode = ref(false);
 /** Panel estadístico que se abre desde el círculo del gauge. */
 const statsOpen = ref(false);
 
@@ -334,13 +340,36 @@ function openModule(name: string): void {
 }
 
 /** El selector entrega `null` para la hoja en blanco. */
-function openPicker(ai = false): void {
-  pickerAiMode.value = ai;
+function openPicker(): void {
   pickerOpen.value = true;
 }
 
 function onCreate(templateId: string | null): void {
-  void createDocument(templateId ?? undefined, { ai: pickerAiMode.value });
+  void createDocument(templateId ?? undefined);
+}
+
+/**
+ * La IA elige la plantilla que mejor encaja con el encargo y el editor abre el
+ * asistente con ese primer mensaje ya enviado. Si falla, el texto se conserva.
+ */
+async function onAiPrompt(prompt: string): Promise<void> {
+  if (aiPromptBusy.value) return;
+  if (!aiStatus.value?.configured) {
+    aiPromptError.value = 'La IA no está configurada. Actívala en Ajustes para redactar.';
+    return;
+  }
+
+  aiPromptBusy.value = true;
+  aiPromptError.value = '';
+  try {
+    const choice = await api.post<AiTemplateChoice>('/ai/choose-template', { prompt });
+    toast.success(`Plantilla elegida: ${choice.templateName}`);
+    await createDocument(choice.templateId, { ai: true, prompt });
+  } catch (error) {
+    aiPromptError.value = describeError(error, 'No se pudo elegir la plantilla').message;
+  } finally {
+    aiPromptBusy.value = false;
+  }
 }
 
 /** Recuerda de qué tile sale el panel para anclar la animación. */
@@ -365,7 +394,10 @@ watch(totalCount, () => {
   if (canSeeInbox.value) void loadPending();
 });
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadAiStatus();
+});
 
 onUnmounted(() => {
   if (countFrame !== undefined) cancelAnimationFrame(countFrame);
@@ -432,15 +464,6 @@ onUnmounted(() => {
                 <button
                   type="button"
                   class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
-                  :disabled="creating !== null"
-                  @click="openPicker(true)"
-                >
-                  <Sparkles class="size-4" />
-                  Crear con IA
-                </button>
-                <button
-                  type="button"
-                  class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
                   @click="openModule('documents')"
                 >
                   <Search class="size-4" />
@@ -496,6 +519,20 @@ onUnmounted(() => {
                 @open-stats="statsOpen = true"
               />
             </div>
+          </div>
+
+          <div
+            v-if="canSeeDocuments"
+            class="relative mx-auto mt-9 w-full max-w-[820px] sm:mt-10"
+          >
+            <AiPromptBar
+              :configured="aiStatus?.configured === true"
+              :checking="aiLoading && aiStatus === null"
+              :model="aiStatus?.model ?? null"
+              :busy="aiPromptBusy"
+              :error="aiPromptError"
+              @submit="onAiPrompt"
+            />
           </div>
         </div>
 
@@ -657,7 +694,6 @@ onUnmounted(() => {
 
     <NewDocumentDialog
       :open="pickerOpen"
-      :ai-mode="pickerAiMode"
       @close="pickerOpen = false"
       @create="onCreate"
     />
