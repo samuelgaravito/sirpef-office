@@ -77,7 +77,7 @@ async function postJson(url: string, headers: Record<string, string>, body: unkn
   }
 }
 
-function assertConfigured(config: AiConfig): void {
+export function assertConfigured(config: AiConfig): void {
   if (config.provider === 'none') {
     throw new AppError(
       400,

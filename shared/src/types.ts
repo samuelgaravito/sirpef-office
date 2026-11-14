@@ -54,6 +54,14 @@ export interface VariableDef {
   columns?: { key: string; label: string; type?: 'text' | 'number' | 'money' | 'date' }[];
   /** Texto de ayuda para la IA al rellenar esta variable. */
   aiHint?: string;
+  /**
+   * Marca el campo como **cuerpo redactable**.
+   *
+   * Cuando el asistente redacta el documento, el bloque que contiene
+   * `{{clave}}` se sustituye por contenido TipTap rico (párrafos, listas,
+   * tablas…). El resto de la plantilla se conserva.
+   */
+  bodySlot?: boolean;
 }
 
 /** Valores resueltos de las variables de un documento. */

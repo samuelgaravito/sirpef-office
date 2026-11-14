@@ -89,6 +89,7 @@ export const variableDefSchema = z
       )
       .optional(),
     aiHint: z.string().max(1000).optional(),
+    bodySlot: z.boolean().optional(),
   })
   .refine((variable) => variable.key !== DOCUMENT_NUMBER_VARIABLE, {
     message: `La clave "${DOCUMENT_NUMBER_VARIABLE}" está reservada para el sistema`,

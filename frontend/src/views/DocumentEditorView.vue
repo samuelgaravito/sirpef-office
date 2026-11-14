@@ -33,6 +33,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
+import AssistantPanel from '@/components/ai/AssistantPanel.vue';
 import DocumentSheet from '@/components/editor/DocumentSheet.vue';
 import EditorToolbar from '@/components/editor/EditorToolbar.vue';
 import FindReplacePanel from '@/components/editor/FindReplacePanel.vue';
@@ -52,12 +53,16 @@ import { PaginationExtension } from '@/lib/pagination/extension';
 import {
   buildAutoDescription,
   clampChromeWidth,
+  contentHasVariable,
   createEditorExtensions,
   DOCUMENT_NUMBER_VARIABLE,
   emptyChrome,
   NUMBERING_MESSAGES,
+  resolveBodyVariable,
 } from '@sirpefoffice/shared';
 import type {
+  AiDraftMessage,
+  AiDraftResult,
   ChromeConfig,
   ChromeKind,
   ChromeSource,
@@ -113,6 +118,10 @@ const templateId = computed(() => {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 });
 const originMessageId = computed(() => normalizeRouteId(route.query.message));
+/** Identificador efímero de la conversación del asistente en un documento nuevo. */
+const chatSessionId = computed(() =>
+  typeof route.query.chat === 'string' && route.query.chat.trim() ? route.query.chat.trim() : null,
+);
 const fromInbox = computed(
   () => route.query.from === 'inbox' && Boolean(originMessageId.value),
 );
@@ -313,7 +322,7 @@ const modelName = ref<string | null>(null);
 
 /** Campos obligatorios que faltan; bloquean el envío hasta completarse. */
 const missingRequired = computed(() =>
-  schema.value.filter((variable) => {
+  effectiveSchema.value.filter((variable) => {
     if (!variable.required) return false;
     const value = data.value[variable.key];
     if (variable.type === 'table') return !Array.isArray(value) || value.length === 0;
@@ -358,6 +367,17 @@ const lastSavedAt = ref<Date | null>(null);
 const conflict = ref(false);
 const aiConfigured = ref(false);
 const generating = ref(false);
+/** El contenido actual viene de una propuesta del asistente. */
+const aiApplied = ref(false);
+
+/* ─────────────────── Asistente de redacción conversacional ─────────────────── */
+const assistantOpen = ref(false);
+const assistantMessages = ref<AiDraftMessage[]>([]);
+const assistantBusy = ref(false);
+const assistantError = ref('');
+const assistantWarnings = ref<string[]>([]);
+const assistantQuestions = ref<string[]>([]);
+const assistantModel = ref<string | null>(null);
 
 const historyOpen = ref(false);
 const shareOpen = ref(false);
@@ -468,6 +488,21 @@ const editor = useEditor({
 function syncEditorContent(): void {
   currentContent.value = readEditorContent(editor.value);
 }
+
+/**
+ * Esquema visible en el panel de datos.
+ *
+ * Cuando el asistente integra el cuerpo redactable en la hoja, el marcador
+ * `{{clave}}` desaparece del contenido: el campo deja de mostrarse para no
+ * duplicar la edición (la prosa ya vive en el documento).
+ */
+const effectiveSchema = computed(() => {
+  if (loading.value) return schema.value;
+  const body = resolveBodyVariable(schema.value);
+  return schema.value.filter(
+    (variable) => !(body && variable.key === body.key && !contentHasVariable(currentContent.value, variable.key)),
+  );
+});
 
 /* ─────────────────── Cabecera y pie editables ─────────────────── */
 
@@ -884,12 +919,28 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
       content: readEditorContent(editor.value),
       header: chromePayload('header'),
       footer: chromePayload('footer'),
+      ...(aiApplied.value ? { ai: true } : {}),
     });
 
     const created = response.document;
+
+    // La conversación del asistente sobrevive a la materialización: se mueve
+    // de la clave de «documento nuevo» a la del documento ya creado.
+    try {
+      const previousKey = assistantStorageKey.value;
+      const chat = localStorage.getItem(previousKey);
+      if (chat) {
+        localStorage.setItem(`sirpef:ai-chat:doc:${created.id}`, chat);
+        localStorage.removeItem(previousKey);
+      }
+    } catch {
+      /* almacenamiento no disponible */
+    }
+
     clearLocalDraft();
     dirty.value = false;
     conflict.value = false;
+    aiApplied.value = false;
     version.value = created.version;
     docNumber.value = created.docNumber;
     numberingPreview.value = created.numberingPreview ?? null;
@@ -944,6 +995,7 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
         description: description.value.trim(),
         expectedVersion: version.value,
         checkpoint,
+        ...(aiApplied.value && !checkpoint ? { ai: true } : {}),
       },
     );
 
@@ -951,6 +1003,7 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
     lastSavedAt.value = new Date(response.updatedAt);
     dirty.value = false;
     conflict.value = false;
+    aiApplied.value = false;
 
     if (checkpoint) toast.success('Punto de control guardado');
   } catch (error) {
@@ -1234,6 +1287,140 @@ async function generateWithAI(): Promise<void> {
   }
 }
 
+/** Clave local de la conversación, separada por documento o plantilla. */
+const assistantStorageKey = computed(() =>
+  isNew.value
+    ? `sirpef:ai-chat:new:${templateId.value ?? 'blank'}:${chatSessionId.value ?? 'default'}`
+    : `sirpef:ai-chat:doc:${documentId.value ?? 'blank'}`,
+);
+
+const assistantEnabled = computed(
+  () =>
+    aiConfigured.value &&
+    canEdit.value &&
+    (Boolean(documentId.value) || (isNew.value && Boolean(templateId.value))),
+);
+
+const assistantDisabledReason = computed(() => {
+  if (!aiConfigured.value) {
+    return 'Configura el proveedor de IA en Ajustes para usar el asistente.';
+  }
+  if (!canEdit.value) return 'Este documento es de solo lectura.';
+  if (isNew.value && !templateId.value) {
+    return 'Elige una plantilla para que el asistente redacte con su estructura.';
+  }
+  return '';
+});
+
+function loadAssistantChat(): void {
+  try {
+    const raw = localStorage.getItem(assistantStorageKey.value);
+    if (!raw) {
+      assistantMessages.value = [];
+      return;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    assistantMessages.value = parsed
+      .filter(
+        (item): item is AiDraftMessage =>
+          !!item &&
+          typeof item === 'object' &&
+          ((item as AiDraftMessage).role === 'user' || (item as AiDraftMessage).role === 'assistant') &&
+          typeof (item as AiDraftMessage).content === 'string',
+      )
+      .slice(-20);
+  } catch {
+    assistantMessages.value = [];
+  }
+}
+
+watch(
+  assistantMessages,
+  (messages) => {
+    try {
+      if (messages.length === 0) localStorage.removeItem(assistantStorageKey.value);
+      else localStorage.setItem(assistantStorageKey.value, JSON.stringify(messages.slice(-20)));
+    } catch {
+      /* almacenamiento no disponible */
+    }
+  },
+  { deep: true },
+);
+
+/** Aplica la propuesta de la IA al editor sin guardarla en el servidor. */
+function applyAiDraft(draft: AiDraftResult['document']): void {
+  if (!canEdit.value) return;
+  if (draft.title) title.value = draft.title;
+  if (draft.description !== undefined) description.value = draft.description;
+  aiApplied.value = true;
+  data.value = { ...draft.data };
+  editor.value?.commands.setContent(draft.content, { emitUpdate: false });
+  syncEditorContent();
+  previewHtml.value = '';
+  dirty.value = true;
+  markDirty();
+}
+
+/** Envía una instrucción al asistente y aplica la propuesta resultante. */
+async function sendAssistantMessage(instruction: string): Promise<void> {
+  const text = instruction.trim();
+  if (!text || assistantBusy.value) return;
+
+  if (!assistantEnabled.value) {
+    assistantError.value = assistantDisabledReason.value;
+    return;
+  }
+
+  const content = readEditorContent(editor.value);
+  const messages: AiDraftMessage[] = [
+    ...assistantMessages.value,
+    { role: 'user', content: text },
+  ];
+  assistantMessages.value = messages;
+  assistantError.value = '';
+  assistantWarnings.value = [];
+  assistantQuestions.value = [];
+  assistantBusy.value = true;
+
+  try {
+    const payload = {
+      messages,
+      current: {
+        title: title.value,
+        description: description.value,
+        content,
+        data: data.value,
+      },
+    };
+
+    const result =
+      isNew.value || !documentId.value
+        ? await api.post<AiDraftResult>(
+            `/templates/${templateId.value}/ai/draft`,
+            payload,
+          )
+        : await api.post<AiDraftResult>(`/documents/${documentId.value}/ai/draft`, {
+            ...payload,
+            // Detecta si otra sesión guardó mientras conversábamos.
+            expectedVersion: version.value,
+          });
+
+    applyAiDraft(result.document);
+    assistantMessages.value = [
+      ...messages,
+      { role: 'assistant', content: result.reply },
+    ];
+    assistantWarnings.value = result.warnings ?? [];
+    assistantQuestions.value = result.questions ?? [];
+    assistantModel.value = result.model ?? null;
+  } catch (error) {
+    assistantError.value = explainError(error, 'No se pudo redactar con IA');
+  } finally {
+    assistantBusy.value = false;
+  }
+}
+
 /** Alterna entre el editor y la vista renderizada con los datos aplicados. */
 async function togglePreview(): Promise<void> {
   if (previewMode.value) {
@@ -1296,7 +1483,7 @@ async function saveAsTemplate(): Promise<void> {
       description: `Creada desde «${title.value}»`,
       docType: docType.value,
       designId: null,
-      schema: schema.value,
+      schema: effectiveSchema.value,
       body: readEditorContent(editor.value),
       // La plantilla nueva conserva el marco visible del documento.
       header: chromePayload('header') ?? headerConfig.value,
@@ -1383,6 +1570,9 @@ onMounted(async () => {
   } catch {
     aiConfigured.value = false;
   }
+
+  loadAssistantChat();
+  if (route.query.ai === '1') assistantOpen.value = true;
 });
 
 onBeforeUnmount(() => {
@@ -1484,6 +1674,18 @@ onBeforeUnmount(() => {
           :class="['size-3.5', loadingPreview ? 'animate-spin' : '']"
         />
         <span class="hidden sm:inline">{{ previewMode ? 'Volver a editar' : 'Vista previa' }}</span>
+      </button>
+
+      <button
+        v-if="aiConfigured && canEdit"
+        type="button"
+        :class="['btn btn-outline btn-sm', assistantOpen ? 'is-active' : '']"
+        :title="assistantOpen ? 'Cerrar asistente de redacción' : 'Redactar con el asistente'"
+        aria-label="Asistente de redacción"
+        @click="assistantOpen = !assistantOpen"
+      >
+        <Sparkles class="size-3.5" />
+        <span class="hidden sm:inline">Asistente</span>
       </button>
 
       <RouterLink
@@ -1922,6 +2124,26 @@ onBeforeUnmount(() => {
         </button>
       </main>
 
+      <!-- Asistente de redacción (escritorio) -->
+      <aside
+        v-if="assistantOpen"
+        class="hidden w-[380px] shrink-0 border-l border-hairline bg-surface xl:flex xl:flex-col"
+      >
+        <AssistantPanel
+          :messages="assistantMessages"
+          :busy="assistantBusy"
+          :error="assistantError"
+          :warnings="assistantWarnings"
+          :questions="assistantQuestions"
+          :model="assistantModel"
+          :template-name="modelName"
+          :enabled="assistantEnabled"
+          :disabled-reason="assistantDisabledReason"
+          @close="assistantOpen = false"
+          @send="sendAssistantMessage"
+        />
+      </aside>
+
       <!-- Panel de datos -->
       <aside class="hidden w-[336px] shrink-0 border-l border-hairline bg-surface lg:flex lg:flex-col">
         <!-- Mensaje del revisor mientras se corrige -->
@@ -2024,7 +2246,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="min-h-0 flex-1">
           <VariablePanel
-            :schema="schema"
+            :schema="effectiveSchema"
             :model-value="data"
             :disabled="!canEdit"
             :ai-enabled="aiConfigured && canEdit"
@@ -2037,6 +2259,29 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
+
+    <!-- Asistente de redacción móvil -->
+    <Teleport to="body">
+      <div
+        v-if="assistantOpen"
+        class="fixed inset-0 z-[90] flex flex-col bg-surface xl:hidden"
+      >
+        <AssistantPanel
+          input-id="assistant-input-mobile"
+          :messages="assistantMessages"
+          :busy="assistantBusy"
+          :error="assistantError"
+          :warnings="assistantWarnings"
+          :questions="assistantQuestions"
+          :model="assistantModel"
+          :template-name="modelName"
+          :enabled="assistantEnabled"
+          :disabled-reason="assistantDisabledReason"
+          @close="assistantOpen = false"
+          @send="sendAssistantMessage"
+        />
+      </div>
+    </Teleport>
 
     <!-- Panel de datos móvil -->
     <Teleport to="body">
@@ -2088,7 +2333,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="min-h-0 flex-1 overflow-hidden">
             <VariablePanel
-              :schema="schema"
+              :schema="effectiveSchema"
               :model-value="data"
               :disabled="!canEdit"
               :ai-enabled="aiConfigured && canEdit"

@@ -68,6 +68,8 @@ import {
 
 const createSchema = z.object({
   title: z.string().trim().min(1).max(240).optional(),
+  /** El contenido inicial viene de una propuesta del asistente. */
+  ai: z.boolean().optional(),
   description: z.string().trim().max(500).optional(),
   templateId: z.uuid().nullable().optional(),
   designId: z.uuid().nullable().optional(),
@@ -92,6 +94,8 @@ const contentSchema = z.object({
   /** Fuerza la creación de una entrada en el historial. */
   checkpoint: z.boolean().optional(),
   note: z.string().max(500).optional(),
+  /** La versión nace de una propuesta del asistente de redacción. */
+  ai: z.boolean().optional(),
 });
 
 const listQuery = z.object({
@@ -677,7 +681,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       content: created.content,
       data: created.data,
       title: created.title,
-      kind: 'manual',
+      kind: body.ai ? 'ai' : 'manual',
       note: 'Documento creado',
       createdBy: user.sub,
     });
@@ -755,11 +759,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     await saveVersion(
       id,
       user.sub,
-      body.checkpoint ? 'manual' : 'auto',
-      body.note ?? (body.checkpoint ? 'Punto de control' : ''),
+      body.ai ? 'ai' : body.checkpoint ? 'manual' : 'auto',
+      body.note ??
+        (body.ai
+          ? 'Redacción con el asistente de IA'
+          : body.checkpoint
+            ? 'Punto de control'
+            : ''),
     );
 
-    if (body.checkpoint) {
+    if (body.ai) {
+      await logActivity(user.sub, 'document', id, 'ai_drafted', { version: updated.version });
+    } else if (body.checkpoint) {
       await logActivity(user.sub, 'document', id, 'checkpoint', { version: updated.version });
     }
 

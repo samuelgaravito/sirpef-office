@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   Send,
+  Sparkles,
 } from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -42,6 +43,8 @@ const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
 /** Selector de modelo: la puerta de entrada para crear un documento. */
 const pickerOpen = ref(false);
+/** El selector abre en modo asistente: exige plantilla y no ofrece hoja en blanco. */
+const pickerAiMode = ref(false);
 /** Panel estadístico que se abre desde el círculo del gauge. */
 const statsOpen = ref(false);
 
@@ -331,8 +334,13 @@ function openModule(name: string): void {
 }
 
 /** El selector entrega `null` para la hoja en blanco. */
+function openPicker(ai = false): void {
+  pickerAiMode.value = ai;
+  pickerOpen.value = true;
+}
+
 function onCreate(templateId: string | null): void {
-  void createDocument(templateId ?? undefined);
+  void createDocument(templateId ?? undefined, { ai: pickerAiMode.value });
 }
 
 /** Recuerda de qué tile sale el panel para anclar la animación. */
@@ -413,13 +421,22 @@ onUnmounted(() => {
                   type="button"
                   class="btn bg-white text-navy hover:bg-white/90"
                   :disabled="creating !== null"
-                  @click="pickerOpen = true"
+                  @click="openPicker()"
                 >
                   <component
                     :is="creating === 'blank' ? Loader2 : Plus"
                     :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
                   />
                   {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
+                  :disabled="creating !== null"
+                  @click="openPicker(true)"
+                >
+                  <Sparkles class="size-4" />
+                  Crear con IA
                 </button>
                 <button
                   type="button"
@@ -575,7 +592,7 @@ onUnmounted(() => {
               </ul>
               <p v-else class="text-description mt-3">
                 Todavía no tienes documentos.
-                <button type="button" class="font-medium text-accent hover:underline" @click="pickerOpen = true">
+                <button type="button" class="font-medium text-accent hover:underline" @click="openPicker()">
                   Crea el primero
                 </button>
               </p>
@@ -640,6 +657,7 @@ onUnmounted(() => {
 
     <NewDocumentDialog
       :open="pickerOpen"
+      :ai-mode="pickerAiMode"
       @close="pickerOpen = false"
       @create="onCreate"
     />

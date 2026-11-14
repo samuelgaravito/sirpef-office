@@ -42,6 +42,7 @@ import {
   nextNumberValue,
   normalizeNumberingPrefix,
   NUMBERING_MESSAGES,
+  resolveBodyVariable,
   SYSTEM_VARIABLES,
 } from '@sirpefoffice/shared';
 import type {
@@ -94,6 +95,10 @@ const designId = ref<string | null>(null);
 const isShared = ref(false);
 const isActive = ref(true);
 const aiInstructions = ref('');
+const aiStyle = ref('');
+const derivingStyle = ref(false);
+/** Campo que el asistente usará como cuerpo redactable (marcado o deducido). */
+const inferredBody = computed(() => resolveBodyVariable(schema.value));
 const schema = ref<VariableDef[]>([]);
 const designs = ref<DesignRecord[]>([]);
 const templateVersion = ref(1);
@@ -467,6 +472,7 @@ async function load(): Promise<void> {
       templateIsShared.value = template.isShared;
       isActive.value = template.isActive;
       aiInstructions.value = template.aiInstructions ?? '';
+      aiStyle.value = template.aiStyle ?? '';
       schema.value = template.schema ?? [];
       templateVersion.value = template.version;
       templateOwnerId.value = template.ownerId;
@@ -520,6 +526,7 @@ async function reloadTemplate(): Promise<void> {
     templateHeader.value = template.header ?? null;
     templateFooter.value = template.footer ?? null;
     aiInstructions.value = template.aiInstructions ?? '';
+    aiStyle.value = template.aiStyle ?? '';
     editor.value?.commands.setContent(template.body, { emitUpdate: false });
     dirty.value = false;
     toast.success('Versión restaurada');
@@ -580,6 +587,41 @@ function insertVariable(key: string): void {
   activeEditor.value?.chain().focus().insertContent(`{{${key}}}`).run();
 }
 
+/** Al cambiar el tipo, un campo que deja de ser texto largo pierde el rol de cuerpo. */
+function onVariableTypeChange(variable: VariableDef): void {
+  if (variable.type !== 'longtext') variable.bodySlot = false;
+  dirty.value = true;
+}
+
+/** Solo un campo puede ser el cuerpo redactable de la plantilla. */
+function setBodySlot(variable: VariableDef): void {
+  if (variable.bodySlot) {
+    for (const other of schema.value) {
+      if (other !== variable) other.bodySlot = false;
+    }
+  }
+  dirty.value = true;
+}
+
+/**
+ * Pide a la IA un perfil de estilo a partir de documentos aprobados. No se
+ * guarda hasta que el usuario revise y pulse Guardar.
+ */
+async function deriveStyleFromApproved(): Promise<void> {
+  if (isNew.value || !templateId.value || derivingStyle.value) return;
+  derivingStyle.value = true;
+  try {
+    const data = await api.post<{ style: string }>(`/templates/${templateId.value}/ai/style`);
+    aiStyle.value = data.style;
+    dirty.value = true;
+    toast.success('Perfil de estilo deducido. Revísalo y guarda la plantilla.');
+  } catch (error) {
+    toast.failure(error, 'No se pudo deducir el estilo');
+  } finally {
+    derivingStyle.value = false;
+  }
+}
+
 async function save(): Promise<void> {
   if (saving.value) return;
   if (!canEdit.value) {
@@ -626,6 +668,7 @@ async function save(): Promise<void> {
       header: templateHeader.value,
       footer: templateFooter.value,
       aiInstructions: aiInstructions.value || null,
+      aiStyle: aiStyle.value || null,
       ...(isOwner.value
         ? {
             docType: docType.value,
@@ -1009,7 +1052,7 @@ onMounted(() => {
                 />
 
                 <div class="mt-1.5 flex items-center gap-1.5">
-                  <select v-model="variable.type" class="field h-8 flex-1 !text-[12px]" @change="dirty = true">
+                  <select v-model="variable.type" class="field h-8 flex-1 !text-[12px]" @change="onVariableTypeChange(variable)">
                     <option v-for="type in variableTypes" :key="type.value" :value="type.value">{{ type.label }}</option>
                   </select>
                   <label class="flex shrink-0 items-center gap-1 text-[11px] text-ink-muted">
@@ -1032,6 +1075,19 @@ onMounted(() => {
                   placeholder="Indicación para la IA (opcional)"
                   @input="dirty = true"
                 />
+
+                <label
+                  v-if="variable.type === 'longtext'"
+                  class="mt-1.5 flex items-center gap-1.5 text-[11px] text-ink-muted"
+                >
+                  <input
+                    v-model="variable.bodySlot"
+                    type="checkbox"
+                    class="accent-[var(--color-accent)]"
+                    @change="setBodySlot(variable)"
+                  />
+                  Cuerpo redactable por IA
+                </label>
               </div>
             </div>
             </fieldset>
@@ -1287,6 +1343,48 @@ onMounted(() => {
               Estas instrucciones se envían junto con los datos del formulario cuando generas el
               documento con IA. Configura el proveedor en
               <RouterLink :to="{ name: 'settings' }" class="text-accent hover:underline">Ajustes</RouterLink>.
+            </p>
+
+            <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+              <label class="label">Perfil de estilo para el asistente</label>
+              <button
+                v-if="!isNew"
+                type="button"
+                class="btn btn-ghost btn-sm"
+                :disabled="derivingStyle || !canEdit"
+                title="Analiza documentos aprobados de esta plantilla para proponer un perfil"
+                @click="deriveStyleFromApproved"
+              >
+                <Loader2 v-if="derivingStyle" class="size-3.5 animate-spin" />
+                <Sparkles v-else class="size-3.5" />
+                {{ derivingStyle ? 'Analizando…' : 'Deducir de aprobados' }}
+              </button>
+            </div>
+            <textarea
+              v-model="aiStyle"
+              class="field min-h-[140px]"
+              placeholder="Ej.: Tratamiento de usted, voz institucional, párrafos de 3-4 líneas, cierre con solicitud concreta. Evitar adjetivos grandilocuentes."
+              :disabled="!canEdit"
+              @input="dirty = true"
+            />
+            <p class="mt-2 text-[11.5px] text-ink-muted">
+              El asistente usa este perfil, la estructura de la plantilla y (si existen) extractos
+              de documentos aprobados para mantener el mismo estilo. Marca un campo como
+              <strong class="font-medium text-ink">cuerpo redactable</strong> en la pestaña
+              Variables: la IA lo sustituirá por párrafos, listas o tablas reales.
+            </p>
+            <p v-if="inferredBody" class="mt-1 text-[11.5px] text-ink-muted">
+              Cuerpo redactable:
+              <strong class="font-medium text-ink">{{ inferredBody.label }}</strong>
+              <template v-if="inferredBody.bodySlot"> (marcado en Variables).</template>
+              <template v-else>
+                (deducido por ser el texto largo principal; puedes marcarlo en Variables para
+                fijarlo).
+              </template>
+            </p>
+            <p v-else class="mt-1 text-[11.5px] text-ink-subtle">
+              No hay un campo de texto largo para usar como cuerpo: la IA redactará dentro de los
+              bloques existentes.
             </p>
 
             <div class="mt-4 rounded-lg border border-hairline p-3">

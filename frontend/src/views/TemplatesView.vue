@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, LayoutTemplate, Loader2, MoreVertical, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Share2, Trash2, Wand2 } from 'lucide-vue-next';
+import { Copy, LayoutTemplate, Loader2, MoreVertical, Pencil, Plus, Power, PowerOff, RotateCcw, Search, Share2, Sparkles, Trash2, Wand2 } from 'lucide-vue-next';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -134,6 +134,13 @@ function useTemplateCard(template: TemplateSummary): void {
   }
   if (!template.isActive || creating.value !== null) return;
   void createDocument(template.id);
+}
+
+/** Abre el editor nuevo con el asistente de redacción ya desplegado. */
+function useTemplateWithAI(template: TemplateSummary): void {
+  if (view.value === 'trash' || mode.value !== 'use') return;
+  if (!template.isActive || creating.value !== null) return;
+  void createDocument(template.id, { ai: true });
 }
 
 async function clone(template: TemplateSummary): Promise<void> {
@@ -427,6 +434,15 @@ onMounted(load);
                       <component :is="creating === template.id ? Loader2 : Wand2" :class="['size-4', creating === template.id ? 'animate-spin' : '']" />
                       {{ creating === template.id ? 'Creando…' : 'Crear documento' }}
                     </button>
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-accent hover:bg-accent-soft disabled:cursor-wait disabled:opacity-60"
+                      :disabled="creating !== null || !template.isActive"
+                      @click="createDocument(template.id, { ai: true })"
+                    >
+                      <Sparkles class="size-4" />
+                      Redactar con IA
+                    </button>
                     <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="openTemplate(template.id)">
                       <Pencil class="size-4" />
                       {{ canEditTemplate(template) ? 'Editar' : 'Ver' }}
@@ -479,6 +495,18 @@ onMounted(load);
               <span class="text-meta">
                 {{ view === 'trash' ? `Eliminada ${relativeTime(template.deletedAt ?? template.updatedAt)}` : relativeTime(template.updatedAt) }}
               </span>
+              <div class="flex items-center gap-1">
+              <button
+                v-if="view === 'active' && mode === 'use'"
+                type="button"
+                class="btn btn-ghost btn-sm"
+                :disabled="creating !== null || !template.isActive"
+                title="Redactar este documento con el asistente"
+                @click="useTemplateWithAI(template)"
+              >
+                <Sparkles class="size-3.5" />
+                IA
+              </button>
               <button
                 v-if="view === 'active'"
                 type="button"
@@ -501,6 +529,7 @@ onMounted(load);
                         : 'Ver'
                 }}
               </button>
+              </div>
             </div>
           </div>
         </article>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FilePlus2, FileText, Loader2, Search, TriangleAlert } from 'lucide-vue-next';
+import { FilePlus2, FileText, Loader2, Search, Sparkles, TriangleAlert } from 'lucide-vue-next';
 import { computed, ref, watch } from 'vue';
 
 import { api } from '@/api/client';
@@ -17,7 +17,9 @@ import type { ListResponse, TemplateSummary } from '@/types';
  * documento nace ya con su plantilla, sus datos y su numeración. La hoja en
  * blanco queda al final y avisa de que no tendrá número correlativo.
  */
-const props = defineProps<{ open: boolean }>();
+const props = withDefaults(defineProps<{ open: boolean; aiMode?: boolean }>(), {
+  aiMode: false,
+});
 
 const emit = defineEmits<{
   close: [];
@@ -76,8 +78,12 @@ function choose(templateId: string | null): void {
 <template>
   <BaseModal
     :open="open"
-    title="Crear documento"
-    description="Elige el modelo. El documento se abrirá listo para rellenar y se numerará al aprobarlo."
+    :title="aiMode ? 'Redactar con IA' : 'Crear documento'"
+    :description="
+      aiMode
+        ? 'Elige la plantilla que servirá de molde. El asistente redactará el documento y podrás corregirlo conversando.'
+        : 'Elige el modelo. El documento se abrirá listo para rellenar y se numerará al aprobarlo.'
+    "
     size="2xl"
     @close="emit('close')"
   >
@@ -86,6 +92,14 @@ function choose(templateId: string | null): void {
     </div>
 
     <div v-else class="space-y-4">
+      <div v-if="aiMode" class="flex items-start gap-2 rounded-xl border border-accent/25 bg-accent-soft/60 px-3.5 py-2.5 text-[13px] text-ink">
+        <Sparkles class="mt-0.5 size-4 shrink-0 text-accent" />
+        <p class="leading-snug">
+          Cuéntale el encargo al asistente y él rellenará la estructura, los datos y el cuerpo.
+          Después podrás pedirle cambios sin salir del editor.
+        </p>
+      </div>
+
       <div v-if="templates.length > 6" class="relative">
         <Search class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-subtle" />
         <input
@@ -97,6 +111,7 @@ function choose(templateId: string | null): void {
       </div>
 
       <button
+        v-if="!aiMode"
         type="button"
         class="flex w-full items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface px-4 py-3 text-left transition-colors hover:border-accent/50 hover:bg-accent-soft"
         @click="choose(null)"
@@ -152,8 +167,10 @@ function choose(templateId: string | null): void {
         <p class="text-description mt-1">
           {{
             search
-              ? 'Prueba con otro nombre o crea una hoja en blanco.'
-              : 'Puedes empezar con una hoja en blanco, pero no tendrá numeración.'
+              ? 'Prueba con otro nombre.'
+              : aiMode
+                ? 'Crea una plantilla para que el asistente tenga una estructura sobre la que redactar.'
+                : 'Puedes empezar con una hoja en blanco, pero no tendrá numeración.'
           }}
         </p>
       </div>

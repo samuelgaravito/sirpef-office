@@ -50,7 +50,7 @@ y conservar el **historial de versiones** de cada documento.
 | Autoguardado | Guardado con *debounce*, indicador de estado (“Guardando…”, “Guardado ahora mismo”) y **versionado optimista** con detección de conflictos (HTTP 409). |
 | Búsqueda | Buscar y reemplazar en el documento (`Ctrl/Cmd + F`), con distinción de mayúsculas, contador de coincidencias y “reemplazar todo”. |
 | Exportación | PDF (Chrome headless), DOCX (`docx`) y HTML autocontenido, con los datos interpolados y el diseño aplicado. |
-| IA | OpenAI-compatible, Anthropic, Gemini y Ollama; rellena **solo las variables** del formulario (nunca sobrescribe el formato del cuerpo). Modo manual sin IA. |
+| IA | OpenAI-compatible, Anthropic, Gemini y Ollama. **Asistente de redacción**: escribes el encargo («un memo para la jefa sobre…») y construye el documento completo sobre la plantilla; después lo corriges conversando. También rellena variables desde el panel de datos. Modo manual sin IA. |
 | Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
 | Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso **en tiempo real** en la bandeja: una **campana flotante** con el asunto (que agrupa los avisos seguidos y se va sola a los pocos segundos) y, si el usuario lo autoriza, un **aviso del sistema** cuando no está mirando la aplicación. Además suben el badge y la marca **Nuevo**. Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
 | Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo opcional de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia enumeración —la serie es la dueña del prefijo y del contador—, así que sus números nunca se intercalan con los de otra aunque repitan prefijo. Con el prefijo en blanco la serie numera sin etiqueta (`0001-2026`). Incluye campos automáticos (fecha, firmante, cargo). |
@@ -576,10 +576,23 @@ Configuración (solo administradores) en **Ajustes → Asistente de IA**:
 
 La configuración se guarda en la tabla `app_settings` (clave `ai`), tiene prioridad sobre
 las variables de entorno y **nunca devuelve la API key al navegador**. El botón
-**Rellenar con IA** del panel de datos envía el esquema, los valores actuales y las
-instrucciones de cada variable, y mezcla el JSON resultante **solo en los campos del
-formulario**; el cuerpo y el formato del documento no se tocan. Antes de generar se puede
-probar la conexión con **Probar conexión**.
+Hay dos formas de usar la IA:
+
+- **Asistente de redacción** (botón **Asistente** o **Crear con IA**): eliges una plantilla
+  y describes el encargo. El asistente devuelve el documento completo (título, variables y
+  cuerpo TipTap) y lo aplica a la hoja; a partir de ahí puedes pedir cambios («más breve»,
+  «añade una tabla», «cambia al destinatario») sin salir del editor. Usa la estructura de
+  la plantilla, sus instrucciones, su **perfil de estilo** y, opcionalmente, extractos de
+  documentos aprobados. La propuesta no se guarda hasta que pulsas **Guardar**.
+- **Rellenar con IA** del panel de datos: envía el esquema, los valores actuales y las
+  instrucciones de cada variable, y mezcla el JSON resultante **solo en los campos del
+  formulario**.
+
+En la plantilla, marca un campo como **cuerpo redactable**: el asistente sustituirá su
+marcador `{{clave}}` por párrafos, listas o tablas reales. El perfil de estilo se edita en
+**Plantilla → IA → Perfil de estilo**; el botón **Deducir de aprobados** lo propone a
+partir de los documentos ya aprobados de esa plantilla. Antes de generar se puede probar
+la conexión con **Probar conexión**.
 
 ## Exportación
 
@@ -663,6 +676,7 @@ cd backend
 | `npm run smoke:draft` | Regresión del borrador local del documento nuevo: al abrir una plantilla y volver a entrar el cuerpo no aparece en blanco, el borrador conserva lo escrito y los borradores heredados se reparan (necesita la API y la web de desarrollo levantadas). |
 | `npm run smoke:variables` | Regresión de espacios y saltos de línea en variables: las observaciones con varias líneas, sangrías o columnas alineadas llegan igual a la vista previa, al PDF y al DOCX. |
 | `npm run smoke:dates` | Con la API levantada, comprueba el filtro por fechas de Documentos: rango de hoy, rango vacío de mañana, fecha de creación y error claro si la fecha inicial es posterior a la final. |
+| `npm run smoke:ai-draft` | Regresión del asistente de redacción sin proveedor ni base de datos: sobre JSON con vallas, saneado TipTap, coacción de variables, cuerpo redactable y descarte del correlativo. |
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 | `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, prefijo opcional (en blanco la serie numera sin etiqueta), sin «código automático», aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |

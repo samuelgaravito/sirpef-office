@@ -37,7 +37,9 @@ Principios:
    descarga.
 4. **Versionado optimista**: cada guardado envía la versión esperada; si otro cliente
    guardó antes, la API responde `409` con la versión actual.
-5. **La IA es un asistente de datos, no de formato**: solo rellena variables del esquema.
+5. **La IA tiene dos modos separados**: rellena variables del esquema
+   (`/ai/generate`) o propone el documento completo (`/ai/draft`) con validación TipTap.
+   En ambos casos respeta cabecera, pie, diseño y numeración.
 
 ---
 
@@ -159,8 +161,8 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 | `users` | `email` único, `password_hash`, `name`, `role`, `avatar_url` | `role` ∈ `admin`/`member`. |
 | `refresh_tokens` | `token_hash`, `user_id`, `expires_at`, `revoked_at`, `user_agent`, `ip` | Rotación: al refrescar se revoca el anterior y se inserta uno nuevo. |
 | `designs` | `tokens` JSONB, `is_shared`, `owner_id`, `is_current` | Los tokens siguen `DesignTokens`. El diseño conserva su formato histórico de encabezado/pie; se adapta a `ChromeConfig` al resolver. `is_current` marca el **diseño en uso** de la cuenta: es el que dibujan todas sus plantillas. Índice único parcial `(owner_id) WHERE is_current`: solo uno por cuenta. Los documentos guardan el diseño concreto y quedan congelados. |
-| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `is_shared`, `numbering_enabled` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y su serie la declara la propia serie (`numbering_series.template_id`). De la numeración solo queda aquí el interruptor: el prefijo, el número inicial, los dígitos y el reinicio anual viven en la serie. |
-| `template_versions` | `body`, `schema`, `header`, `footer`, `version`, `note` | Historial de plantillas; la instantánea incluye las bandas. |
+| `templates` | `body` JSONB, `schema` JSONB, `doc_type`, `design_id`, `header`, `footer`, `ai_instructions`, `ai_style`, `is_shared`, `numbering_enabled` | `schema: VariableDef[]`. `header`/`footer` son `ChromeConfig` o `null` (heredar del diseño). La numeración se activa por plantilla y su serie la declara la propia serie (`numbering_series.template_id`). De la numeración solo queda aquí el interruptor: el prefijo, el número inicial, los dígitos y el reinicio anual viven en la serie. |
+| `template_versions` | `body`, `schema`, `header`, `footer`, `ai_instructions`, `ai_style`, `version`, `note` | Historial de plantillas; la instantánea incluye las bandas y las instrucciones/perfil de IA. |
 | `documents` | `content` JSONB, `data` JSONB, `doc_number`, `numbering_series_id`, `numbering_prefix/year/value`, `version`, `status`, `design_id`, `template_id`, `header`, `footer`, `locked_at`, `locked_by` | `version` se incrementa en cada guardado real (un guardado idéntico no escribe). `doc_number` queda `NULL` mientras el documento es borrador y se asigna al oficializarlo. `numbering_*` guarda la identidad de la serie emisora. `header`/`footer` son sobrescrituras o `null` (heredar). `locked_at` sella el memo aprobado y enviado. |
 | `document_versions` | `version`, `content`, `data`, `header`, `footer`, `kind`, `created_by`, `note` | `kind` ∈ `auto/manual/ai/export/restore`; la instantánea permite restaurar las bandas. |
 | `document_shares` | `document_id`, `user_id`, `permission` | Único por par documento/usuario. |
@@ -171,6 +173,8 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 | `numbering_series` | `id` PK, `template_id` (FK, único), `template_name`, `prefix`, `start_value`, `padding`, `include_year` | **Única fuente de verdad de la enumeración.** Declara a su plantilla con `template_id` (índice único `numbering_series_template_id_unique_idx` → una enumeración por plantilla) y guarda su nombre en `template_name` como etiqueta legible, que se actualiza al renombrar la plantilla. Su contador y su suelo son exclusivos. El prefijo es la etiqueta visible del número, **puede repetirse** entre series y puede estar vacío (serie sin prefijo). Las plantillas sin numeración no ocupan serie. |
 | `document_counters` | `series_id` (FK), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
+
+`templates` guarda además `ai_instructions` (cómo rellenar) y `ai_style` (perfil de estilo del asistente). Las variables con `bodySlot` marcan el bloque que el asistente sustituye por contenido rico.
 
 Índices destacados: búsqueda por título (`ILIKE`), filtros por `owner_id`, `status`,
 `doc_type`, y `document_versions(document_id, version)` para el historial.
@@ -896,7 +900,7 @@ sola y el interruptor de Ajustes cambia el estado).
   (solo `hasApiKey`).
 - `POST /api/ai/test` hace una llamada mínima al proveedor y mide latencia.
 
-### 8.2 Generación
+### 8.2 Rellenado de variables
 
 ```text
 POST /api/documents/:id/ai/generate  { overwrite?: boolean }
@@ -910,11 +914,42 @@ POST /api/documents/:id/ai/generate  { overwrite?: boolean }
   └─ el cliente actualiza `version` para no provocar un 409
 ```
 
-El cuerpo y el formato del documento **no se modifican**: la IA solo rellena el
-formulario. Si el proveedor no está configurado, la ruta responde `400 AI_NOT_CONFIGURED`
-con un mensaje claro y la UI oculta el botón (`aiConfigured === false`).
+El cuerpo y el formato del documento **no se modifican** en esta ruta: la IA solo rellena
+el formulario.
 
-### 8.3 Proveedores
+### 8.3 Asistente de redacción
+
+El asistente es **sin estado en el servidor**: el cliente envía el historial y el estado
+actual en cada turno, y el servidor devuelve una propuesta completa sin guardarla.
+
+```text
+POST /api/templates/:templateId/ai/draft
+POST /api/documents/:id/ai/draft
+  { messages: [{ role: 'user'|'assistant', content }], current?: { title, description, content, data },
+    useExamples?: boolean, expectedVersion?: number }
+  → { reply, document: { title, description, content, data }, questions, warnings, model }
+```
+
+- `templates` exige acceso de uso y plantilla activa; `documents` exige permiso de edición,
+  documento mutable y, si llega `expectedVersion`, coincidencia (409 si no).
+- El prompt incluye el tipo de documento, el esquema de variables, el JSON (o esqueleto) de
+  la plantilla, el documento actual, las instrucciones y el **perfil de estilo**
+  (`templates.ai_style`) y, opcionalmente, extractos de documentos aprobados del usuario.
+- La respuesta se sanea con `sanitizeAiContent` (`shared/src/ai.ts`): solo nodos TipTap
+  permitidos, sin imágenes, HTML, enlaces ni atributos arbitrarios; se recortan profundidad,
+  número de nodos y longitud. Después se mezcla **solo** con variables del esquema y se
+  elimina la clave reservada del número correlativo.
+- `POST /api/templates/:id/ai/style` analiza hasta 3 documentos aprobados del usuario y devuelve un perfil de estilo editable; el editor lo guarda con el PATCH normal de la plantilla.
+- Si la plantilla tiene un campo marcado `bodySlot`, el bloque con `{{clave}}` se sustituye
+  por contenido rico; el campo deja de mostrarse en el panel de datos. El resto de la
+  plantilla (tablas de destinatario, firmas, cabecera y pie) se conserva.
+- El cliente aplica la propuesta al editor y el guardado sigue el flujo normal (incluido el
+  versionado optimista). No se consume número: el correlativo se asigna al aprobar.
+
+Si el proveedor no está configurado, las rutas responden `400 AI_NOT_CONFIGURED` y la UI
+oculta el asistente (`aiConfigured === false`).
+
+### 8.4 Proveedores
 
 | Proveedor | Endpoint | Notas |
 | --- | --- | --- |
@@ -980,6 +1015,9 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `DELETE` | `/ai/key` | Borra la clave. |
 | `POST` | `/ai/test` | Prueba de conexión. |
 | `POST` | `/documents/:id/ai/generate` | Rellena variables con IA. |
+| `POST` | `/templates/:templateId/ai/draft` | Asistente: propone un documento completo desde una plantilla (no guarda). |
+| `POST` | `/templates/:id/ai/style` | Deduce un perfil de estilo de documentos aprobados; devuelve el texto sin guardarlo. |
+| `POST` | `/documents/:id/ai/draft` | Asistente sobre un documento existente (no guarda; exige `expectedVersion` si se envía). |
 
 Errores uniformes:
 

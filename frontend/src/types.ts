@@ -64,6 +64,7 @@ export interface TemplateRecord {
   header: ChromeConfig | null;
   footer: ChromeConfig | null;
   aiInstructions: string | null;
+  aiStyle: string | null;
   isShared: boolean;
   isActive: boolean;
   /** Si la plantilla asigna número correlativo al crear documentos. */
