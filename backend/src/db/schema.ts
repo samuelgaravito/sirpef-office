@@ -175,6 +175,8 @@ export const templates = pgTable(
     footer: jsonb('footer').$type<ChromeConfig | null>(),
     /** Instrucciones para la IA: cómo rellenar esta plantilla. */
     aiInstructions: text('ai_instructions'),
+    /** Perfil de estilo para el asistente de redacción. */
+    aiStyle: text('ai_style'),
     version: integer('version').notNull().default(1),
     isShared: boolean('is_shared').notNull().default(false),
     /** Solo las plantillas activas se pueden usar para crear documentos. */
@@ -253,6 +255,7 @@ export const templateVersions = pgTable(
       header: ChromeConfig | null;
       footer: ChromeConfig | null;
       aiInstructions: string | null;
+      aiStyle: string | null;
       tokens: DesignTokens | null;
     }>().notNull(),
     note: text('note').notNull().default(''),

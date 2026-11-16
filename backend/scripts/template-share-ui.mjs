@@ -93,6 +93,8 @@ async function main() {
     await shot(page, '02-plantillas');
 
     console.log('→ Editor de plantilla');
+    await clickText(page, 'button', 'Administrar');
+    await wait(400);
     await page.click('article button');
     await page.waitForSelector('.tiptap', { timeout: 15000 });
     await wait(1000);

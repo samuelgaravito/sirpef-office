@@ -183,7 +183,7 @@ export const seedTemplates: SeedTemplate[] = [
       { key: 'asunto', label: 'Asunto', type: 'text', required: true },
       { key: 'fecha', label: 'Fecha', type: 'date', required: true },
       { key: 'referencia', label: 'Referencia', type: 'text' },
-      { key: 'cuerpo', label: 'Cuerpo del memorándum', type: 'longtext', required: true },
+      { key: 'cuerpo', label: 'Cuerpo del memorándum', type: 'longtext', required: true, bodySlot: true },
       { key: 'firma', label: 'Nombre del firmante', type: 'text' },
     ],
     aiInstructions:
@@ -445,7 +445,7 @@ export const seedTemplates: SeedTemplate[] = [
       { key: 'cargo_destinatario', label: 'Cargo', type: 'text' },
       { key: 'institucion', label: 'Institución', type: 'text' },
       { key: 'asunto', label: 'Asunto', type: 'text' },
-      { key: 'cuerpo', label: 'Cuerpo de la carta', type: 'longtext', required: true },
+      { key: 'cuerpo', label: 'Cuerpo de la carta', type: 'longtext', required: true, bodySlot: true },
       { key: 'remitente', label: 'Remitente', type: 'text' },
       { key: 'cargo_remitente', label: 'Cargo del remitente', type: 'text' },
     ],

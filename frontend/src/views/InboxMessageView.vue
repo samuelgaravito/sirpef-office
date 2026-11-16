@@ -322,7 +322,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <InboxStatusChip :status="message.status" :context="chipContext" size="md" />
             <span
               v-if="locked"
-              class="inline-flex items-center gap-1 rounded-full bg-surface-hover px-2 py-0.5 text-[11px] font-medium text-ink-subtle"
+              class="inline-flex items-center gap-1 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] font-medium text-ink-subtle"
             >
               <Lock class="size-3" />
               Solo lectura
@@ -354,7 +354,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <button
               v-if="message.body.length > 110"
               type="button"
-              class="mt-1 text-[11px] font-medium text-accent hover:underline"
+              class="mt-1 text-[12.5px] font-medium text-accent hover:underline"
               @click="noteExpanded = !noteExpanded"
             >
               {{ noteExpanded ? 'Ver menos' : 'Ver más' }}
@@ -386,13 +386,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <section v-if="showDecisionBlock" class="card p-4">
               <!-- Aprobador -->
               <template v-if="canApprove">
-                <p class="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-ink-subtle">
+                <p class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
                   <ShieldCheck class="size-3.5 text-warning" />
                   Tu decisión
                 </p>
 
                 <div v-if="message.body" class="mt-2.5">
-                  <p class="flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wide text-ink-subtle">
+                  <p class="flex items-center gap-1 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
                     <Send class="size-3" />
                     Nota del remitente
                   </p>
@@ -407,7 +407,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   <button
                     v-if="message.body.length > 110"
                     type="button"
-                    class="mt-1 text-[11px] font-medium text-accent hover:underline"
+                    class="mt-1 text-[12.5px] font-medium text-accent hover:underline"
                     @click="noteExpanded = !noteExpanded"
                   >
                     {{ noteExpanded ? 'Ver menos' : 'Ver más' }}
@@ -416,7 +416,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
                 <div
                   v-if="versionChanged"
-                  class="mt-2 rounded-lg border border-danger/20 bg-danger-soft/50 px-2.5 py-1.5 text-[11.5px] text-danger"
+                  class="mt-2 rounded-lg border border-danger/20 bg-danger-soft/50 px-2.5 py-1.5 text-[13px] text-danger"
                 >
                   <p class="flex items-start gap-1.5">
                     <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
@@ -439,7 +439,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
                 <div
                   v-if="showQueue"
-                  class="mt-3 flex items-center justify-between gap-2 rounded-lg border border-hairline px-2 py-1 text-[11px] text-ink-muted"
+                  class="mt-3 flex items-center justify-between gap-2 rounded-lg border border-hairline px-2 py-1 text-[12.5px] text-ink-muted"
                 >
                   <button
                     type="button"
@@ -460,7 +460,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   </button>
                 </div>
 
-                <div class="mt-3 flex items-center justify-between gap-2 text-[11px]">
+                <div class="mt-3 flex items-center justify-between gap-2 text-[12.5px]">
                   <button
                     type="button"
                     class="font-medium text-accent hover:underline"
@@ -469,7 +469,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                     Prefiero corregirlo yo →
                   </button>
                   <span
-                    class="grid size-5 cursor-help place-items-center rounded-full border border-hairline text-[10px] font-semibold text-ink-subtle"
+                    class="grid size-5 cursor-help place-items-center rounded-full border border-hairline text-[11.5px] font-semibold text-ink-subtle"
                     title="Atajos: A aprobar · R devolver · E editar · N siguiente"
                   >?</span>
                 </div>
@@ -477,10 +477,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
               <!-- Remitente con rechazo -->
               <template v-else-if="message.status === 'rejected'">
-                <p class="text-[11px] font-medium uppercase tracking-wide text-danger">
+                <p class="text-[12px] font-semibold uppercase tracking-wide text-danger">
                   Devuelto para corrección
                 </p>
-                <p class="mt-1 text-[11.5px] text-ink-muted">
+                <p class="mt-1 text-[13px] text-ink-muted">
                   <template v-if="message.approvedByName">por {{ message.approvedByName }}</template>
                   <template v-if="message.approvedAt"> · {{ formatDateTime(message.approvedAt) }}</template>
                 </p>
@@ -492,7 +492,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                 </p>
                 <p
                   v-if="!message.allowSenderEdit"
-                  class="mt-2 text-[11.5px] leading-snug text-ink-muted"
+                  class="mt-2 text-[13px] leading-snug text-ink-muted"
                 >
                   El documento quedó cerrado y no se puede editar.
                 </p>
@@ -518,7 +518,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
               <!-- Remitente esperando aprobación -->
               <template v-else-if="message.status === 'pending_approval' && message.isSender">
-                <p class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">
+                <p class="text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
                   Esperando aprobación
                 </p>
                 <p class="mt-1 text-[12px] leading-snug text-ink-muted">
@@ -541,11 +541,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
               <!-- Resultado de un envío -->
               <template v-else-if="message.status === 'sent'">
-                <p class="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-success">
+                <p class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-success">
                   <CheckCircle2 class="size-3.5" />
                   {{ message.isRecipient && !message.isSender ? 'Recibido' : 'Aprobado y enviado' }}
                 </p>
-                <p class="mt-1 text-[11.5px] leading-snug text-ink-muted">
+                <p class="mt-1 text-[13px] leading-snug text-ink-muted">
                   <template v-if="message.isRecipient && !message.isSender">
                     El documento quedó bloqueado como solo lectura.
                   </template>
@@ -574,7 +574,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                 class="flex w-full items-center justify-between gap-2 text-left"
                 @click="detailsOpen = !detailsOpen"
               >
-                <span class="text-[11px] font-medium uppercase tracking-wide text-ink-subtle">Detalles</span>
+                <span class="text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">Detalles</span>
                 <ChevronDown
                   :class="['size-3.5 text-ink-subtle transition-transform', detailsOpen ? 'rotate-180' : '']"
                 />
@@ -618,8 +618,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   <div v-for="recipient in message.recipients" :key="recipient.userId" class="flex items-center gap-2">
                     <UserAvatar :name="recipient.name" size="xs" />
                     <span class="min-w-0 flex-1 truncate text-ink">{{ recipient.name }}</span>
-                    <span v-if="recipient.readAt" class="text-[10.5px] text-success">Leído</span>
-                    <span v-else-if="message.status === 'sent'" class="text-[10.5px] text-ink-subtle">Sin leer</span>
+                    <span v-if="recipient.readAt" class="text-[12px] text-success">Leído</span>
+                    <span v-else-if="message.status === 'sent'" class="text-[12px] text-ink-subtle">Sin leer</span>
                   </div>
                 </dd>
               </dl>
@@ -651,7 +651,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   </button>
                 </template>
               </BaseDropdown>
-              <p v-else-if="locked" class="mt-3 rounded-lg bg-surface-muted px-3 py-2 text-[11px] leading-snug text-ink-subtle">
+              <p v-else-if="locked" class="mt-3 rounded-lg bg-surface-muted px-3 py-2 text-[12.5px] leading-snug text-ink-subtle">
                 Solo el administrador puede exportar este documento sellado.
               </p>
             </section>
@@ -672,7 +672,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
             <FileText class="size-4 shrink-0 text-accent" />
             <div class="min-w-0">
               <p class="truncate text-[13px] font-semibold text-ink">{{ message.document.title }}</p>
-              <p class="truncate text-[11px] text-ink-subtle">
+              <p class="text-meta truncate">
                 {{ message.subject }} · v{{ message.documentVersion }}
               </p>
             </div>
@@ -701,7 +701,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
           <div class="flex flex-wrap items-center gap-2 border-t border-hairline bg-surface px-4 py-2.5">
             <span
               :class="[
-                'mr-auto flex items-center gap-1.5 text-[11.5px]',
+                'mr-auto flex items-center gap-1.5 text-[13px]',
                 versionChanged ? 'font-medium text-danger' : 'text-ink-subtle',
               ]"
             >

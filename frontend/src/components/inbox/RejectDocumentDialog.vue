@@ -104,7 +104,7 @@ async function submit(): Promise<void> {
         Rechazar
       </button>
     </div>
-    <p class="mt-1.5 text-[11px] leading-snug text-ink-subtle">
+    <p class="text-meta mt-1.5 leading-snug">
       {{ allowEdit ? 'El asistente podrá corregirlo y reenviarlo.' : 'El documento quedará bloqueado como solo lectura.' }}
     </p>
 

@@ -5,7 +5,7 @@ import { computed } from 'vue';
 import DocumentPreview from '@/components/documents/DocumentPreview.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
-import { docTypeLabel, relativeTime, STATUS_LABELS, STATUS_STYLES } from '@/lib/labels';
+import { docTypeLabel, relativeTime, STATUS_ACCENTS, STATUS_LABELS, STATUS_STYLES } from '@/lib/labels';
 import type { DocumentSummary } from '@sirpefoffice/shared';
 
 const props = defineProps<{ document: DocumentSummary; showOwner?: boolean; trashed?: boolean }>();
@@ -21,12 +21,10 @@ const isLocked = computed(
   () => Boolean(props.document.lockedAt) || props.document.status === 'sent',
 );
 
-/** Número del documento o, si es borrador, el previsto. */
+/** Número del documento o, si es borrador, el previsto (con su aviso en el título). */
 const numberLabel = computed(() => {
   if (props.document.docNumber) return props.document.docNumber;
-  if (props.document.numberingPreview) {
-    return `${props.document.numberingPreview.number} · previsto`;
-  }
+  if (props.document.numberingPreview) return props.document.numberingPreview.number;
   return docTypeLabel(props.document.docType);
 });
 
@@ -44,10 +42,15 @@ function openDocument(): void {
 </script>
 
 <template>
-  <article class="card group flex flex-col transition-shadow hover:shadow-pop">
+  <article
+    :class="[
+      'card group flex flex-col border-l-[3px] transition-all hover:-translate-y-0.5 hover:border-accent/40 hover:shadow-pop',
+      STATUS_ACCENTS[document.status],
+    ]"
+  >
     <button
       type="button"
-      class="flex justify-center overflow-hidden px-2.5 pt-2.5 text-left"
+      class="flex justify-center overflow-hidden rounded-t-[7px] border-b border-hairline bg-[#e9eef5] px-2.5 pb-2.5 pt-2.5 text-left shadow-[inset_0_1px_3px_rgb(4_30_66/0.06)]"
       :class="{ 'cursor-default': trashed }"
       @click="openDocument"
     >
@@ -64,11 +67,11 @@ function openDocument(): void {
 
     <div class="flex flex-1 items-start gap-1.5 px-3 pb-2.5 pt-2.5">
       <button type="button" class="min-w-0 flex-1 text-left" @click="openDocument">
-        <p class="truncate text-[13px] font-medium text-ink">{{ document.title }}</p>
-        <p v-if="document.description || document.autoDescription" class="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-ink-muted">
+        <p class="truncate text-[15px] font-medium text-ink transition-colors group-hover:text-accent">{{ document.title }}</p>
+        <p v-if="document.description || document.autoDescription" class="text-description mt-0.5 line-clamp-2">
           {{ document.description || document.autoDescription }}
         </p>
-        <p class="mt-0.5 flex items-center gap-1 truncate text-[11.5px] text-ink-subtle">
+        <p class="text-meta mt-0.5 flex items-center gap-1">
           <span class="truncate" :title="numberTitle">{{ numberLabel }}</span>
           <span aria-hidden="true">·</span>
           <span class="shrink-0">
@@ -76,13 +79,14 @@ function openDocument(): void {
           </span>
         </p>
         <span
-          :class="['mt-1.5 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-medium', STATUS_STYLES[document.status]]"
+          :class="['mt-1.5 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] font-medium', STATUS_STYLES[document.status]]"
         >
+          <span class="size-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
           {{ STATUS_LABELS[document.status] }}
         </span>
         <span
           v-if="isLocked"
-          class="ml-1 mt-1.5 inline-flex items-center gap-0.5 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] font-medium text-ink-subtle"
+          class="ml-1 mt-1.5 inline-flex items-center gap-0.5 rounded-full bg-surface-hover px-1.5 py-0.5 text-[11.5px] font-medium text-ink-subtle"
         >
           <Lock class="size-2.5" />
           Solo lectura

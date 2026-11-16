@@ -20,14 +20,14 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
 
 <template>
   <section
-    class="dock grid grid-cols-1 gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline shadow-[0_18px_50px_rgb(2_21_46/0.18)] sm:grid-cols-2 xl:grid-cols-4"
+    class="dock grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4"
     aria-label="Módulos"
   >
     <button
       v-for="tile in tiles"
       :key="tile.key"
       type="button"
-      class="dock-item group relative overflow-hidden bg-surface px-5 py-4 text-left transition-colors duration-200 hover:bg-accent-soft/25"
+      class="dock-item group relative overflow-hidden rounded-2xl border border-hairline bg-surface px-5 py-4 text-left shadow-[0_10px_30px_rgb(2_21_46/0.08)] transition-all duration-200 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent-soft hover:shadow-[0_16px_40px_rgb(2_21_46/0.14)]"
       @pointerdown="emit('origin', $event)"
       @click="emit('open', tile.route)"
     >
@@ -48,8 +48,8 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
         </span>
       </div>
 
-      <p class="mt-3.5 text-[13.5px] font-semibold text-ink">{{ tile.label }}</p>
-      <p class="mt-0.5 line-clamp-2 min-h-[32px] text-[11.5px] leading-snug text-ink-muted">
+      <p class="mt-3.5 text-[15px] font-semibold text-ink">{{ tile.label }}</p>
+      <p class="mt-1 line-clamp-2 min-h-[40px] text-[13.5px] leading-snug text-ink-muted">
         {{ tile.description }}
       </p>
 
@@ -57,7 +57,7 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
         <span class="text-[19px] font-semibold leading-none tracking-tight text-ink">
           {{ tile.value }}
         </span>
-        <span class="truncate text-[11px] text-ink-subtle">{{ tile.caption }}</span>
+        <span class="truncate text-[12.5px] text-ink-muted">{{ tile.caption }}</span>
         <span
           v-if="tile.badge"
           class="ml-auto grid min-w-[18px] place-items-center rounded-full bg-accent px-1 py-0.5 text-[9.5px] font-bold leading-none text-white"

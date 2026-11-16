@@ -186,6 +186,11 @@ async function main() {
     await page.waitForSelector('article', { timeout: 15000 });
     await wait(1200);
 
+    // En modo «Usar» la tarjeta crea un documento; para editar hay que
+    // entrar en «Administrar».
+    await clickText(page, 'body', 'Administrar');
+    await wait(400);
+
     // Abre la primera plantilla propia.
     await page.click('article button');
     await page.waitForSelector('.tiptap', { timeout: 15000 });

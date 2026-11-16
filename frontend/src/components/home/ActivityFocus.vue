@@ -49,15 +49,15 @@ const updatedLabel = computed(() => {
             ]"
           />
         </span>
-        <p class="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-white/55">
+        <p class="text-[12px] font-semibold uppercase tracking-[0.14em] text-white/70">
           Bandeja
         </p>
-        <span class="text-[11.5px] font-medium text-white/80">{{ statusText }}</span>
+        <span class="text-[12.5px] font-medium text-white/85">{{ statusText }}</span>
       </div>
 
       <span
         v-if="updatedLabel"
-        class="flex items-center gap-1 text-[10.5px] text-white/40"
+        class="flex items-center gap-1 text-[12px] text-white/65"
       >
         <RefreshCw class="size-3" />
         {{ updatedLabel }}
@@ -87,10 +87,10 @@ const updatedLabel = computed(() => {
           <Inbox class="size-4 text-white/75" />
         </span>
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-[12.5px] font-semibold text-white">
+          <span class="block truncate text-[14px] font-semibold text-white">
             {{ item.subject || item.documentTitle }}
           </span>
-          <span class="mt-0.5 block truncate text-[10.5px] text-white/65">
+          <span class="mt-0.5 block truncate text-[12.5px] text-white/75">
             De {{ item.senderName }} · {{ relativeTime(item.sentAt ?? item.createdAt) }}
           </span>
         </span>
@@ -105,12 +105,12 @@ const updatedLabel = computed(() => {
       v-else-if="needsReview"
       class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/15 bg-white/10 px-3 py-2.5"
     >
-      <p class="text-[12.5px] text-white/75">
+      <p class="text-[13.5px] text-white/85">
         Tienes elementos por revisar en la bandeja.
       </p>
       <button
         type="button"
-        class="btn h-8 border border-white/20 bg-white/10 px-3 text-[12px] text-white hover:bg-white/20"
+        class="btn h-9 border border-white/20 bg-white/10 px-3 text-[13px] text-white hover:bg-white/20"
         @click="emit('openInbox')"
       >
         Abrir bandeja
@@ -119,7 +119,7 @@ const updatedLabel = computed(() => {
     </div>
 
     <!-- Calma -->
-    <div v-else class="mt-3 flex items-center gap-2 text-[12px] text-white/60">
+    <div v-else class="mt-3 flex items-center gap-2 text-[13px] text-white/75">
       <span class="calm grid size-7 place-items-center rounded-full bg-white/8">
         <CheckCircle2 class="size-4 text-mint" />
       </span>

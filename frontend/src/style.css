@@ -10,12 +10,14 @@
   /* ── Tinta (jerarquía de texto) ──────────────────────────────── */
   --color-ink: #041e42;
   --color-ink-muted: #55606c;
-  --color-ink-subtle: #94969e;
+  /* Antes #94969e (2,95:1 sobre blanco): no se leía a 11px. */
+  --color-ink-subtle: #667085;
   --color-ink-inverse: #ffffff;
 
   /* ── Acento (azul ownCloud) ──────────────────────────────────── */
-  --color-accent: #4e85c8;
-  --color-accent-hover: #3c6fb0;
+  /* Un paso más oscuro que el azul de marca: el texto pequeño necesita 4,5:1. */
+  --color-accent: #3c6fb0;
+  --color-accent-hover: #2f5f9e;
   --color-accent-soft: #e9f1fa;
   --color-accent-ink: #ffffff;
   --color-navy: #041e42;
@@ -69,8 +71,9 @@
     background: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
-    font-size: 14px;
-    line-height: 1.5;
+    /* La interfaz se lee de un vistazo: 15px de base y aire entre líneas. */
+    font-size: 15px;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
   }
 
@@ -107,9 +110,9 @@
   .btn {
     @apply inline-flex items-center justify-center gap-2 font-semibold select-none;
     border-radius: var(--radius-field);
-    height: 38px;
+    height: 40px;
     padding: 0 15px;
-    font-size: 13px;
+    font-size: 14px;
     white-space: nowrap;
     transition:
       background-color 160ms ease,
@@ -161,18 +164,18 @@
   }
 
   .btn-sm {
-    height: 30px;
-    padding: 0 10px;
-    font-size: 12px;
+    height: 32px;
+    padding: 0 11px;
+    font-size: 13px;
   }
 
   .field {
     @apply w-full bg-surface;
     border: 1px solid var(--color-hairline-strong);
     border-radius: var(--radius-field);
-    height: 38px;
+    height: 40px;
     padding: 0 12px;
-    font-size: 13px;
+    font-size: 14px;
     color: var(--color-ink);
   }
 
@@ -195,7 +198,24 @@
 
   .label {
     @apply mb-1.5 block font-medium text-ink-muted;
-    font-size: 12px;
+    font-size: 13px;
+  }
+
+  /**
+   * Descripciones y textos de apoyo. Es la clase que explica qué se está
+   * viendo: nunca por debajo de 13,5px y con contraste suficiente.
+   */
+  .text-description {
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--color-ink-muted);
+  }
+
+  /** Metadatos: fechas, contadores y datos secundarios. */
+  .text-meta {
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--color-ink-muted);
   }
 
   .card {
@@ -207,9 +227,9 @@
 
   .chip {
     @apply inline-flex items-center gap-1 rounded-full font-medium;
-    height: 22px;
+    height: 24px;
     padding: 0 9px;
-    font-size: 11px;
+    font-size: 12px;
     background: var(--color-surface-muted);
     color: var(--color-ink-muted);
   }

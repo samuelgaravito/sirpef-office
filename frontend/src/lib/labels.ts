@@ -13,8 +13,8 @@ export const DOC_TYPE_LABELS: Record<DocType, string> = {
 };
 
 export const STATUS_LABELS: Record<DocumentStatus, string> = {
-  draft: 'Borrador',
-  in_review: 'Pendiente de aprobación',
+  draft: 'En preparación',
+  in_review: 'Esperando aprobación',
   final: 'Final',
   archived: 'Archivado',
   sent: 'Enviado',
@@ -31,6 +31,18 @@ export const EXPORT_FORBIDDEN_MESSAGE =
 export const STATUS_ADMIN_ONLY_MESSAGE =
   'Solo los administradores pueden cambiar el estado del documento';
 
+/** Franja izquierda de las tarjetas: un color por estado, sin ruido. */
+export const STATUS_ACCENTS: Record<DocumentStatus, string> = {
+  draft: 'border-l-[#94a3b8]',
+  in_review: 'border-l-warning',
+  final: 'border-l-success',
+  archived: 'border-l-hairline-strong',
+  sent: 'border-l-accent',
+  approved: 'border-l-success',
+  rejected: 'border-l-danger',
+  cancelled: 'border-l-hairline-strong',
+};
+
 export const STATUS_STYLES: Record<DocumentStatus, string> = {
   draft: 'bg-surface-muted text-ink-muted',
   in_review: 'bg-warning-soft text-warning',
@@ -43,7 +55,7 @@ export const STATUS_STYLES: Record<DocumentStatus, string> = {
 };
 
 export const INBOX_STATUS_LABELS: Record<InboxMessageStatus, string> = {
-  pending_approval: 'Pendiente de aprobación',
+  pending_approval: 'Esperando aprobación',
   sent: 'Aprobado y enviado',
   rejected: 'Rechazado',
   cancelled: 'Anulado',

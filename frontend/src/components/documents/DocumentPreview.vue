@@ -182,7 +182,7 @@ onBeforeUnmount(() => {
       <div class="size-full bg-gradient-to-br from-white/70 via-transparent to-surface-muted/40" />
     </div>
 
-    <div v-if="loading" class="absolute inset-0 grid place-items-center bg-white/55">
+    <div v-if="loading" class="absolute inset-0 grid place-items-center bg-white/85">
       <span class="size-4 animate-spin rounded-full border-2 border-accent/25 border-t-accent" />
     </div>
   </div>

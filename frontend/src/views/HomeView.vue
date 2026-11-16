@@ -1,19 +1,39 @@
 <script setup lang="ts">
-import { FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 'lucide-vue-next';
+import {
+  ArrowRight,
+  BarChart3,
+  Clock,
+  FileText,
+  Inbox,
+  LayoutTemplate,
+  Loader2,
+  Palette,
+  Plus,
+  Search,
+  Send,
+} from 'lucide-vue-next';
 import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
+import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
 import ActivityFocus from '@/components/home/ActivityFocus.vue';
+import AiPromptBar from '@/components/home/AiPromptBar.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
+import OnboardingCard from '@/components/home/OnboardingCard.vue';
 import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
+import WorkspaceStatsDialog from '@/components/home/WorkspaceStatsDialog.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
+import { useAiStatus } from '@/composables/useAiStatus';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { describeError } from '@/lib/error-message';
+import { relativeTime } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import type { InboxMessageSummary, ListResponse } from '@/types';
+import type { AiTemplateChoice } from '@sirpefoffice/shared';
+import type { DocumentSummary, InboxMessageSummary, ListResponse } from '@/types';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -21,9 +41,18 @@ const route = useRoute();
 const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
+const { status: aiStatus, loading: aiLoading, load: loadAiStatus } = useAiStatus();
+
+/** Encargo enviado desde la barra de IA: se está eligiendo plantilla. */
+const aiPromptBusy = ref(false);
+const aiPromptError = ref('');
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
+/** Selector de modelo: la puerta de entrada para crear un documento. */
+const pickerOpen = ref(false);
+/** Panel estadístico que se abre desde el círculo del gauge. */
+const statsOpen = ref(false);
 
 /** Punto de la ventana desde el que "nace" el panel del módulo. */
 const panelOrigin = ref<{ x: number; y: number } | null>(null);
@@ -31,6 +60,56 @@ const panelOrigin = ref<{ x: number; y: number } | null>(null);
 const pendingItems = ref<InboxMessageSummary[]>([]);
 const pendingLoading = ref(false);
 const pendingUpdatedAt = ref<Date | null>(null);
+
+/** Últimos documentos en los que trabajó la persona (borradores o enviados). */
+const recentDocuments = ref<DocumentSummary[]>([]);
+/** Envíos propios esperando la aprobación del jefe. */
+const waitingApproval = ref<InboxMessageSummary[]>([]);
+/** Borradores que solo viven en este navegador (aún sin fila en el servidor). */
+const localDrafts = ref<LocalDraftItem[]>([]);
+const activityLoading = ref(false);
+
+interface LocalDraftItem {
+  key: string;
+  title: string;
+  savedAt: string;
+  templateId: string | null;
+}
+
+const DRAFT_PREFIX = 'sirpef:doc-draft:';
+
+/** Lee los borradores locales para que no queden escondidos en el navegador. */
+function readLocalDrafts(): LocalDraftItem[] {
+  const found: LocalDraftItem[] = [];
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (!key?.startsWith(DRAFT_PREFIX)) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const draft = JSON.parse(raw) as { title?: string; savedAt?: string };
+      const suffix = key.slice(DRAFT_PREFIX.length);
+      found.push({
+        key,
+        title: draft.title?.trim() || 'Documento sin título',
+        savedAt: draft.savedAt ?? '',
+        templateId: suffix === 'blank' ? null : suffix,
+      });
+    }
+  } catch {
+    // Almacenamiento no disponible: no hay borradores locales que mostrar.
+  }
+  return found
+    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+    .slice(0, 3);
+}
+
+function resumeLocalDraft(draft: LocalDraftItem): void {
+  void router.push({
+    name: 'document-new',
+    query: draft.templateId ? { template: draft.templateId } : {},
+  });
+}
 
 const displayedDocuments = ref(0);
 let countFrame: number | undefined;
@@ -164,6 +243,58 @@ async function loadPending(): Promise<void> {
   }
 }
 
+/** Últimos documentos y envíos esperando al jefe. */
+async function loadActivity(): Promise<void> {
+  activityLoading.value = true;
+  const tasks: Promise<unknown>[] = [];
+
+  if (canSeeDocuments.value) {
+    tasks.push(
+      api
+        .get<ListResponse<DocumentSummary>>('/documents', {
+          scope: 'all',
+          sort: 'updated',
+          pageSize: 5,
+        })
+        .then((data) => {
+          recentDocuments.value = data.items;
+        })
+        .catch(() => {
+          recentDocuments.value = [];
+        }),
+    );
+  }
+
+  if (canSeeInbox.value) {
+    tasks.push(
+      api
+        .get<ListResponse<InboxMessageSummary>>('/inbox', {
+          scope: 'sent',
+          status: 'pending_approval',
+          pageSize: 3,
+        })
+        .then((data) => {
+          waitingApproval.value = data.items;
+        })
+        .catch(() => {
+          waitingApproval.value = [];
+        }),
+    );
+  }
+
+  await Promise.allSettled(tasks);
+  localDrafts.value = readLocalDrafts();
+  activityLoading.value = false;
+}
+
+/**
+ * Los últimos 5 documentos. Los borradores locales ocupan su lugar para que
+ * la tarjeta nunca muestre más de cinco filas.
+ */
+const visibleRecentDocuments = computed(() =>
+  recentDocuments.value.slice(0, Math.max(0, 5 - localDrafts.value.length)),
+);
+
 async function load(): Promise<void> {
   shellLoading.value = true;
   try {
@@ -196,6 +327,7 @@ async function load(): Promise<void> {
       void refreshInbox();
       void loadPending();
     }
+    void loadActivity();
   } catch (error) {
     toast.failure(error, 'No se pudo cargar el panel de inicio');
   } finally {
@@ -205,6 +337,39 @@ async function load(): Promise<void> {
 
 function openModule(name: string): void {
   void router.push({ name });
+}
+
+/** El selector entrega `null` para la hoja en blanco. */
+function openPicker(): void {
+  pickerOpen.value = true;
+}
+
+function onCreate(templateId: string | null): void {
+  void createDocument(templateId ?? undefined);
+}
+
+/**
+ * La IA elige la plantilla que mejor encaja con el encargo y el editor abre el
+ * asistente con ese primer mensaje ya enviado. Si falla, el texto se conserva.
+ */
+async function onAiPrompt(prompt: string): Promise<void> {
+  if (aiPromptBusy.value) return;
+  if (!aiStatus.value?.configured) {
+    aiPromptError.value = 'La IA no está configurada. Actívala en Ajustes para redactar.';
+    return;
+  }
+
+  aiPromptBusy.value = true;
+  aiPromptError.value = '';
+  try {
+    const choice = await api.post<AiTemplateChoice>('/ai/choose-template', { prompt });
+    toast.success(`Plantilla elegida: ${choice.templateName}`);
+    await createDocument(choice.templateId, { ai: true, prompt });
+  } catch (error) {
+    aiPromptError.value = describeError(error, 'No se pudo elegir la plantilla').message;
+  } finally {
+    aiPromptBusy.value = false;
+  }
 }
 
 /** Recuerda de qué tile sale el panel para anclar la animación. */
@@ -219,13 +384,20 @@ function openMessage(id: string): void {
   void router.push({ name: 'inbox-message', params: { id } });
 }
 
+function openDocument(id: string): void {
+  void router.push({ name: 'document', params: { id } });
+}
+
 // Los contadores de la bandeja se refrescan por sondeo en `AppShell`; cuando
 // cambian, actualizamos también los chips del hero.
 watch(totalCount, () => {
   if (canSeeInbox.value) void loadPending();
 });
 
-onMounted(load);
+onMounted(() => {
+  void load();
+  void loadAiStatus();
+});
 
 onUnmounted(() => {
   if (countFrame !== undefined) cancelAnimationFrame(countFrame);
@@ -253,11 +425,11 @@ onUnmounted(() => {
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-3">
                 <span
-                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[11px] font-bold uppercase tracking-[0.18em] text-white"
+                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white"
                 >
                   SIRPEF
                 </span>
-                <span class="text-[10.5px] font-semibold uppercase tracking-[0.18em] text-white/55">
+                <span class="text-[12px] font-semibold uppercase tracking-[0.18em] text-white/70">
                   Panel de trabajo
                 </span>
               </div>
@@ -268,7 +440,7 @@ onUnmounted(() => {
                 {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
               </h1>
 
-              <p class="mt-4 max-w-lg text-[13.5px] leading-relaxed text-white/65 sm:text-[14.5px]">
+              <p class="mt-4 max-w-lg text-[15px] leading-relaxed text-white/80 sm:text-[16px]">
                 <template v-if="canSeeDocuments">
                   {{ displayedDocuments }} documento{{ displayedDocuments === 1 ? '' : 's' }} en tu
                   espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
@@ -281,13 +453,13 @@ onUnmounted(() => {
                   type="button"
                   class="btn bg-white text-navy hover:bg-white/90"
                   :disabled="creating !== null"
-                  @click="createDocument()"
+                  @click="openPicker()"
                 >
                   <component
                     :is="creating === 'blank' ? Loader2 : Plus"
                     :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
                   />
-                  {{ creating === 'blank' ? 'Creando…' : 'Nuevo documento' }}
+                  {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
                 </button>
                 <button
                   type="button"
@@ -299,13 +471,26 @@ onUnmounted(() => {
                 </button>
               </div>
 
-              <div v-if="canSeeDocuments" class="mt-5 flex flex-wrap gap-2 lg:hidden">
-                <span class="hero-stat">
-                  <strong>{{ displayedDocuments }}</strong> documentos
-                </span>
-                <span v-if="drafts" class="hero-stat">
-                  <strong>{{ drafts }}</strong> en borrador
-                </span>
+              <div
+                v-if="canSeeDocuments || canSeeTemplates || canSeeDesigns"
+                class="mt-5 flex flex-wrap gap-2 lg:hidden"
+              >
+                <template v-if="canSeeDocuments">
+                  <span class="hero-stat">
+                    <strong>{{ displayedDocuments }}</strong> documentos
+                  </span>
+                  <span v-if="drafts" class="hero-stat">
+                    <strong>{{ drafts }}</strong> en borrador
+                  </span>
+                </template>
+                <button
+                  type="button"
+                  class="hero-stat transition-colors hover:bg-white/15"
+                  @click="statsOpen = true"
+                >
+                  <BarChart3 class="size-3.5" />
+                  Ver estadísticas
+                </button>
               </div>
 
               <ActivityFocus
@@ -331,8 +516,23 @@ onUnmounted(() => {
                 :templates="counts.templates"
                 :designs="counts.designs"
                 :loading="shellLoading"
+                @open-stats="statsOpen = true"
               />
             </div>
+          </div>
+
+          <div
+            v-if="canSeeDocuments"
+            class="relative mx-auto mt-9 w-full max-w-[820px] sm:mt-10"
+          >
+            <AiPromptBar
+              :configured="aiStatus?.configured === true"
+              :checking="aiLoading && aiStatus === null"
+              :model="aiStatus?.model ?? null"
+              :busy="aiPromptBusy"
+              :error="aiPromptError"
+              @submit="onAiPrompt"
+            />
           </div>
         </div>
 
@@ -351,7 +551,7 @@ onUnmounted(() => {
         />
 
         <div
-          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[11.5px] text-ink-subtle"
+          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[12.5px] text-ink-muted"
         >
           <span>Accede a tus módulos desde aquí.</span>
           <span class="hidden sm:block">
@@ -360,15 +560,145 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <!-- Últimos documentos y avisos -->
+      <section
+        v-if="canSeeDocuments || canSeeInbox"
+        class="mx-auto mt-6 w-full max-w-[1280px] px-4 sm:px-6 lg:px-8"
+      >
+        <div class="grid gap-4 lg:grid-cols-2">
+          <!-- Continuar donde lo dejé -->
+          <div v-if="canSeeDocuments" class="card p-4">
+            <header class="flex items-start justify-between gap-2">
+              <div class="flex items-start gap-2">
+                <Clock class="mt-0.5 size-4 shrink-0 text-accent" />
+                <div>
+                  <h2 class="text-[15px] font-semibold">Continuar donde lo dejé</h2>
+                  <p class="text-meta">Últimos 5 documentos</p>
+                </div>
+              </div>
+              <RouterLink
+                :to="{ name: 'documents' }"
+                class="text-[12.5px] font-medium text-accent hover:underline"
+              >
+                Ver todos
+              </RouterLink>
+            </header>
+
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
+              <Loader2 class="size-3.5 animate-spin" />
+              Cargando…
+            </div>
+
+            <template v-else>
+              <ul
+                v-if="visibleRecentDocuments.length > 0 || localDrafts.length > 0"
+                class="mt-2 divide-y divide-hairline"
+              >
+                <li v-for="draft in localDrafts" :key="draft.key">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                    @click="resumeLocalDraft(draft)"
+                  >
+                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
+                      <span class="text-meta block">Solo en este navegador · {{ relativeTime(draft.savedAt) }}</span>
+                    </span>
+                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                  </button>
+                </li>
+                <li v-for="document in visibleRecentDocuments" :key="document.id">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                    @click="openDocument(document.id)"
+                  >
+                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[14px] font-medium">{{ document.title }}</span>
+                      <span class="text-meta block truncate">
+                        {{ document.docNumber ?? document.numberingPreview?.number ?? 'En preparación' }}
+                        · {{ relativeTime(document.updatedAt) }}
+                        <template v-if="document.ownerId !== auth.user?.id"> · De {{ document.ownerName }}</template>
+                      </span>
+                    </span>
+                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="text-description mt-3">
+                Todavía no tienes documentos.
+                <button type="button" class="font-medium text-accent hover:underline" @click="openPicker()">
+                  Crea el primero
+                </button>
+              </p>
+            </template>
+          </div>
+
+          <!-- Esperando al jefe -->
+          <div v-if="canSeeInbox" class="card p-4">
+            <header class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <Send class="size-4 text-warning" />
+                <h2 class="text-[15px] font-semibold">Esperando al jefe</h2>
+              </div>
+              <RouterLink
+                :to="{ name: 'inbox', query: { tab: 'sent' } }"
+                class="text-[12.5px] font-medium text-accent hover:underline"
+              >
+                Ver envíos
+              </RouterLink>
+            </header>
+
+            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
+              <Loader2 class="size-3.5 animate-spin" />
+              Cargando…
+            </div>
+            <ul v-else-if="waitingApproval.length > 0" class="mt-2 divide-y divide-hairline">
+              <li v-for="message in waitingApproval" :key="message.id">
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
+                  @click="openMessage(message.id)"
+                >
+                  <Send class="size-3.5 shrink-0 text-ink-subtle" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-[14px] font-medium">{{ message.documentTitle }}</span>
+                    <span class="text-meta block truncate">
+                      {{ message.subject }} · {{ relativeTime(message.createdAt) }}
+                    </span>
+                  </span>
+                  <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                </button>
+              </li>
+            </ul>
+            <p v-else class="text-description mt-3">
+              No hay envíos esperando aprobación.
+            </p>
+          </div>
+        </div>
+
+        <OnboardingCard v-if="canSeeDocuments" class="mt-4" @create="pickerOpen = true" />
+      </section>
+
       <section v-else-if="!shellLoading" class="card mx-auto mt-8 max-w-[1280px] p-8 text-center">
         <FileText class="mx-auto size-8 text-ink-subtle" />
         <h2 class="mt-3 text-[15px] font-semibold">Tu menú está vacío</h2>
-        <p class="mt-1 text-[13px] text-ink-muted">
+        <p class="text-description mt-1">
           Un administrador todavía no te asignó módulos. Puedes seguir entrando a Ajustes
           desde tu avatar.
         </p>
       </section>
     </div>
+
+    <NewDocumentDialog
+      :open="pickerOpen"
+      @close="pickerOpen = false"
+      @create="onCreate"
+    />
+
+    <WorkspaceStatsDialog :open="statsOpen" @close="statsOpen = false" />
 
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">

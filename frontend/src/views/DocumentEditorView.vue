@@ -2,12 +2,13 @@
 import { useEditor } from '@tiptap/vue-3';
 import {
   ArrowLeft,
+  ArrowRight,
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Cloud,
   CloudOff,
-  Download,
   Eye,
   FileCode2,
   FileText,
@@ -32,6 +33,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
+import AssistantPanel from '@/components/ai/AssistantPanel.vue';
 import DocumentSheet from '@/components/editor/DocumentSheet.vue';
 import EditorToolbar from '@/components/editor/EditorToolbar.vue';
 import FindReplacePanel from '@/components/editor/FindReplacePanel.vue';
@@ -43,20 +45,25 @@ import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
 import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
-import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
+import { useUiMode } from '@/composables/useUiMode';
+import { takeAiPrompt } from '@/lib/ai-prompt';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import {
   buildAutoDescription,
   clampChromeWidth,
+  contentHasVariable,
   createEditorExtensions,
   DOCUMENT_NUMBER_VARIABLE,
   emptyChrome,
   NUMBERING_MESSAGES,
+  resolveBodyVariable,
 } from '@sirpefoffice/shared';
 import type {
+  AiDraftMessage,
+  AiDraftResult,
   ChromeConfig,
   ChromeKind,
   ChromeSource,
@@ -97,6 +104,7 @@ const route = useRoute();
 const router = useRouter();
 const toast = useToast();
 const auth = useAuthStore();
+const { essential } = useUiMode();
 const { refresh: refreshInbox } = useInboxBadge();
 
 const documentId = computed(() => normalizeRouteId(route.params.id));
@@ -111,6 +119,10 @@ const templateId = computed(() => {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 });
 const originMessageId = computed(() => normalizeRouteId(route.query.message));
+/** Identificador efímero de la conversación del asistente en un documento nuevo. */
+const chatSessionId = computed(() =>
+  typeof route.query.chat === 'string' && route.query.chat.trim() ? route.query.chat.trim() : null,
+);
 const fromInbox = computed(
   () => route.query.from === 'inbox' && Boolean(originMessageId.value),
 );
@@ -306,6 +318,46 @@ const sendPrefill = ref<{ subject: string; body: string; recipientIds: string[] 
 });
 const data = ref<VariableValues>({});
 const schema = ref<DocumentDetailResponse['templateSchema']>([]);
+/** Nombre del modelo con el que nació el documento (para la barra de pasos). */
+const modelName = ref<string | null>(null);
+
+/** Campos obligatorios que faltan; bloquean el envío hasta completarse. */
+const missingRequired = computed(() =>
+  effectiveSchema.value.filter((variable) => {
+    if (!variable.required) return false;
+    const value = data.value[variable.key];
+    if (variable.type === 'table') return !Array.isArray(value) || value.length === 0;
+    if (variable.type === 'checkbox') return false;
+    if (typeof value === 'string') return value.trim() === '';
+    return value === undefined || value === null;
+  }),
+);
+
+/** Lleva el foco al primer campo obligatorio que falta. */
+function focusMissingVariable(): void {
+  const first = missingRequired.value[0];
+  if (!first) return;
+  if (window.innerWidth < 1024) mobileDataOpen.value = true;
+  window.setTimeout(() => {
+    const input = document.getElementById(`var-${first.key}`);
+    input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    (input as HTMLElement | null)?.focus();
+  }, 120);
+}
+
+/**
+ * Aviso previo al envío: evita llegar a la API con huecos y tener que
+ * corregir después de un error poco comprensible.
+ */
+function warnMissingRequired(): boolean {
+  if (missingRequired.value.length === 0) return false;
+  const labels = missingRequired.value.map((variable) => variable.label);
+  toast.warning(
+    `Completa ${labels.length === 1 ? 'este dato obligatorio' : `estos ${labels.length} datos obligatorios`}: ${labels.slice(0, 4).join(', ')}${labels.length > 4 ? '…' : ''}`,
+  );
+  focusMissingVariable();
+  return true;
+}
 const design = ref<DesignTokens | null>(null);
 const shares = ref<ShareRecord[]>([]);
 const ownerName = ref('');
@@ -316,6 +368,17 @@ const lastSavedAt = ref<Date | null>(null);
 const conflict = ref(false);
 const aiConfigured = ref(false);
 const generating = ref(false);
+/** El contenido actual viene de una propuesta del asistente. */
+const aiApplied = ref(false);
+
+/* ─────────────────── Asistente de redacción conversacional ─────────────────── */
+const assistantOpen = ref(false);
+const assistantMessages = ref<AiDraftMessage[]>([]);
+const assistantBusy = ref(false);
+const assistantError = ref('');
+const assistantWarnings = ref<string[]>([]);
+const assistantQuestions = ref<string[]>([]);
+const assistantModel = ref<string | null>(null);
 
 const historyOpen = ref(false);
 const shareOpen = ref(false);
@@ -426,6 +489,21 @@ const editor = useEditor({
 function syncEditorContent(): void {
   currentContent.value = readEditorContent(editor.value);
 }
+
+/**
+ * Esquema visible en el panel de datos.
+ *
+ * Cuando el asistente integra el cuerpo redactable en la hoja, el marcador
+ * `{{clave}}` desaparece del contenido: el campo deja de mostrarse para no
+ * duplicar la edición (la prosa ya vive en el documento).
+ */
+const effectiveSchema = computed(() => {
+  if (loading.value) return schema.value;
+  const body = resolveBodyVariable(schema.value);
+  return schema.value.filter(
+    (variable) => !(body && variable.key === body.key && !contentHasVariable(currentContent.value, variable.key)),
+  );
+});
 
 /* ─────────────────── Cabecera y pie editables ─────────────────── */
 
@@ -591,12 +669,27 @@ function chromePayload(kind: ChromeKind): ChromeConfig | null {
   return { ...current, content };
 }
 
+/**
+ * Estado del botón Guardar. Después de la vista previa el documento ya está
+ * guardado: el botón debe decirlo, no quedarse como un «Guardar» gris.
+ */
+const saveButtonLabel = computed(() => {
+  if (saving.value) return 'Guardando…';
+  if (dirty.value) return 'Guardar';
+  if (isNew.value) return 'Guardar';
+  return 'Guardado';
+});
+
+const saveButtonTitle = computed(() => {
+  if (dirty.value) return 'Guardar en el servidor';
+  if (isNew.value) return 'Aún no hay cambios que guardar';
+  return 'Todo guardado';
+});
+
 const saveLabel = computed(() => {
   if (saving.value) return 'Guardando…';
   if (isNew.value) {
-    return dirty.value
-      ? 'Borrador local · pulsa Guardar para crearlo'
-      : 'Sin guardar · no se creará hasta que pulses Guardar';
+    return dirty.value ? 'Borrador en este navegador · sin guardar' : 'Borrador en este navegador';
   }
   if (conflict.value) return 'Conflicto de versión';
   if (dirty.value) return 'Cambios sin guardar';
@@ -632,6 +725,7 @@ async function load(): Promise<void> {
     reviewExpanded.value = false;
     data.value = response.document.data ?? {};
     schema.value = response.templateSchema ?? [];
+    modelName.value = response.templateName;
     design.value = response.design?.tokens ?? response.document.designTokens ?? null;
     shares.value = response.shares ?? [];
     ownerName.value = response.document.ownerName;
@@ -728,6 +822,7 @@ async function hydrateNewDocument(): Promise<void> {
       description.value = draft?.description ?? (template.description ?? '').slice(0, 500);
       docType.value = template.docType;
       schema.value = template.schema ?? [];
+      modelName.value = template.name;
       data.value = { ...defaultData(template.schema ?? []), ...(draft?.data ?? {}) };
       design.value = response.design?.tokens ?? null;
       inheritedChrome.value = response.inheritedChrome;
@@ -760,6 +855,7 @@ async function hydrateNewDocument(): Promise<void> {
       description.value = draft?.description ?? '';
       docType.value = 'blank';
       schema.value = [];
+      modelName.value = null;
       data.value = draft?.data ?? {};
       design.value = null;
       inheritedChrome.value = null;
@@ -824,12 +920,28 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
       content: readEditorContent(editor.value),
       header: chromePayload('header'),
       footer: chromePayload('footer'),
+      ...(aiApplied.value ? { ai: true } : {}),
     });
 
     const created = response.document;
+
+    // La conversación del asistente sobrevive a la materialización: se mueve
+    // de la clave de «documento nuevo» a la del documento ya creado.
+    try {
+      const previousKey = assistantStorageKey.value;
+      const chat = localStorage.getItem(previousKey);
+      if (chat) {
+        localStorage.setItem(`sirpef:ai-chat:doc:${created.id}`, chat);
+        localStorage.removeItem(previousKey);
+      }
+    } catch {
+      /* almacenamiento no disponible */
+    }
+
     clearLocalDraft();
     dirty.value = false;
     conflict.value = false;
+    aiApplied.value = false;
     version.value = created.version;
     docNumber.value = created.docNumber;
     numberingPreview.value = created.numberingPreview ?? null;
@@ -884,6 +996,7 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
         description: description.value.trim(),
         expectedVersion: version.value,
         checkpoint,
+        ...(aiApplied.value && !checkpoint ? { ai: true } : {}),
       },
     );
 
@@ -891,6 +1004,7 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
     lastSavedAt.value = new Date(response.updatedAt);
     dirty.value = false;
     conflict.value = false;
+    aiApplied.value = false;
 
     if (checkpoint) toast.success('Punto de control guardado');
   } catch (error) {
@@ -945,6 +1059,8 @@ async function openSendDialog(prefill?: {
   recipientIds?: string[];
 }): Promise<void> {
   if (!canEdit.value || pendingMessage.value) return;
+  // Los datos obligatorios se comprueban antes de crear o enviar nada.
+  if (warnMissingRequired()) return;
   sendMode.value = 'send';
   approveMessageId.value = null;
 
@@ -988,6 +1104,7 @@ function consumePendingSend(): void {
 /** Abre la aprobación del envío pendiente sin salir del editor. */
 async function openApproveDialog(): Promise<void> {
   if (!reviewMessage.value) return;
+  if (warnMissingRequired()) return;
   if (dirty.value) await save();
   if (dirty.value || conflict.value) return;
 
@@ -1088,7 +1205,19 @@ function useAutoDescription(): void {
   markDirty();
 }
 
+/**
+ * Un borrador no tiene número definitivo. El archivo sale con la marca
+ * «(previsto)»; conviene avisar antes de que lo impriman o lo envíen.
+ */
+function confirmProvisionalNumber(): boolean {
+  if (docNumber.value) return true;
+  return window.confirm(
+    'Este documento todavía no tiene número definitivo: en el archivo aparecerá «(previsto)». ¿Quieres descargarlo igualmente?',
+  );
+}
+
 async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
+  if (!confirmProvisionalNumber()) return;
   let id = documentId.value;
   if (!id) {
     if (!isNew.value) return;
@@ -1109,6 +1238,7 @@ async function exportAs(format: 'pdf' | 'docx' | 'html'): Promise<void> {
 }
 
 async function printPreview(): Promise<void> {
+  if (!confirmProvisionalNumber()) return;
   let id = documentId.value;
   if (!id) {
     if (!isNew.value) return;
@@ -1155,6 +1285,140 @@ async function generateWithAI(): Promise<void> {
     toast.failure(error, 'No se pudo generar con IA');
   } finally {
     generating.value = false;
+  }
+}
+
+/** Clave local de la conversación, separada por documento o plantilla. */
+const assistantStorageKey = computed(() =>
+  isNew.value
+    ? `sirpef:ai-chat:new:${templateId.value ?? 'blank'}:${chatSessionId.value ?? 'default'}`
+    : `sirpef:ai-chat:doc:${documentId.value ?? 'blank'}`,
+);
+
+const assistantEnabled = computed(
+  () =>
+    aiConfigured.value &&
+    canEdit.value &&
+    (Boolean(documentId.value) || (isNew.value && Boolean(templateId.value))),
+);
+
+const assistantDisabledReason = computed(() => {
+  if (!aiConfigured.value) {
+    return 'Configura el proveedor de IA en Ajustes para usar el asistente.';
+  }
+  if (!canEdit.value) return 'Este documento es de solo lectura.';
+  if (isNew.value && !templateId.value) {
+    return 'Elige una plantilla para que el asistente redacte con su estructura.';
+  }
+  return '';
+});
+
+function loadAssistantChat(): void {
+  try {
+    const raw = localStorage.getItem(assistantStorageKey.value);
+    if (!raw) {
+      assistantMessages.value = [];
+      return;
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return;
+    assistantMessages.value = parsed
+      .filter(
+        (item): item is AiDraftMessage =>
+          !!item &&
+          typeof item === 'object' &&
+          ((item as AiDraftMessage).role === 'user' || (item as AiDraftMessage).role === 'assistant') &&
+          typeof (item as AiDraftMessage).content === 'string',
+      )
+      .slice(-20);
+  } catch {
+    assistantMessages.value = [];
+  }
+}
+
+watch(
+  assistantMessages,
+  (messages) => {
+    try {
+      if (messages.length === 0) localStorage.removeItem(assistantStorageKey.value);
+      else localStorage.setItem(assistantStorageKey.value, JSON.stringify(messages.slice(-20)));
+    } catch {
+      /* almacenamiento no disponible */
+    }
+  },
+  { deep: true },
+);
+
+/** Aplica la propuesta de la IA al editor sin guardarla en el servidor. */
+function applyAiDraft(draft: AiDraftResult['document']): void {
+  if (!canEdit.value) return;
+  if (draft.title) title.value = draft.title;
+  if (draft.description !== undefined) description.value = draft.description;
+  aiApplied.value = true;
+  data.value = { ...draft.data };
+  editor.value?.commands.setContent(draft.content, { emitUpdate: false });
+  syncEditorContent();
+  previewHtml.value = '';
+  dirty.value = true;
+  markDirty();
+}
+
+/** Envía una instrucción al asistente y aplica la propuesta resultante. */
+async function sendAssistantMessage(instruction: string): Promise<void> {
+  const text = instruction.trim();
+  if (!text || assistantBusy.value) return;
+
+  if (!assistantEnabled.value) {
+    assistantError.value = assistantDisabledReason.value;
+    return;
+  }
+
+  const content = readEditorContent(editor.value);
+  const messages: AiDraftMessage[] = [
+    ...assistantMessages.value,
+    { role: 'user', content: text },
+  ];
+  assistantMessages.value = messages;
+  assistantError.value = '';
+  assistantWarnings.value = [];
+  assistantQuestions.value = [];
+  assistantBusy.value = true;
+
+  try {
+    const payload = {
+      messages,
+      current: {
+        title: title.value,
+        description: description.value,
+        content,
+        data: data.value,
+      },
+    };
+
+    const result =
+      isNew.value || !documentId.value
+        ? await api.post<AiDraftResult>(
+            `/templates/${templateId.value}/ai/draft`,
+            payload,
+          )
+        : await api.post<AiDraftResult>(`/documents/${documentId.value}/ai/draft`, {
+            ...payload,
+            // Detecta si otra sesión guardó mientras conversábamos.
+            expectedVersion: version.value,
+          });
+
+    applyAiDraft(result.document);
+    assistantMessages.value = [
+      ...messages,
+      { role: 'assistant', content: result.reply },
+    ];
+    assistantWarnings.value = result.warnings ?? [];
+    assistantQuestions.value = result.questions ?? [];
+    assistantModel.value = result.model ?? null;
+  } catch (error) {
+    assistantError.value = explainError(error, 'No se pudo redactar con IA');
+  } finally {
+    assistantBusy.value = false;
   }
 }
 
@@ -1220,7 +1484,7 @@ async function saveAsTemplate(): Promise<void> {
       description: `Creada desde «${title.value}»`,
       docType: docType.value,
       designId: null,
-      schema: schema.value,
+      schema: effectiveSchema.value,
       body: readEditorContent(editor.value),
       // La plantilla nueva conserva el marco visible del documento.
       header: chromePayload('header') ?? headerConfig.value,
@@ -1254,10 +1518,21 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 onBeforeRouteLeave(async () => {
-  // Un documento nuevo sin guardar no se crea: el borrador local sigue en el
-  // navegador y se puede recuperar la próxima vez.
+  // Un documento nuevo se materializa al salir: así aparece en Documentos y no
+  // depende de que alguien recuerde pulsar Guardar. Si la API falla, el
+  // borrador local sigue disponible en «Tus últimos documentos».
   if (isNew.value) {
     flushLocalDraft();
+    if (!dirty.value) return true;
+
+    const created = await new Promise<string | null>((resolve) => {
+      const timer = window.setTimeout(() => resolve(null), 4000);
+      void materialize(false).then((id) => {
+        window.clearTimeout(timer);
+        resolve(id);
+      });
+    });
+    if (created) toast.success('Borrador guardado en el servidor');
     return true;
   }
   if (!dirty.value || !canEdit.value) return true;
@@ -1295,6 +1570,16 @@ onMounted(async () => {
     aiConfigured.value = settings.configured;
   } catch {
     aiConfigured.value = false;
+  }
+
+  loadAssistantChat();
+  if (route.query.ai === '1') assistantOpen.value = true;
+
+  // Encargo escrito en el panel de trabajo: se envía una sola vez al llegar.
+  const pendingPrompt = takeAiPrompt(chatSessionId.value);
+  if (pendingPrompt) {
+    assistantOpen.value = true;
+    void sendAssistantMessage(pendingPrompt);
   }
 });
 
@@ -1341,7 +1626,7 @@ onBeforeUnmount(() => {
             class="shrink-0"
           />
         </div>
-        <p class="mt-0.5 flex items-center gap-1.5 px-1.5 text-[11px] text-ink-subtle">
+        <p class="text-meta mt-0.5 flex items-center gap-1.5 px-1.5">
           <component
             :is="saving ? Loader2 : conflict ? CloudOff : Cloud"
             :class="['size-3', saving ? 'animate-spin' : '', conflict ? 'text-danger' : '']"
@@ -1355,7 +1640,7 @@ onBeforeUnmount(() => {
       <select
         v-if="auth.isAdmin && canEdit"
         :value="status"
-        :class="['hidden rounded-full border-0 px-2.5 py-1 text-[11px] font-medium sm:block', STATUS_STYLES[status]]"
+        :class="['hidden rounded-full border-0 px-2.5 py-1 text-[12px] font-medium sm:block', STATUS_STYLES[status]]"
         aria-label="Estado del documento"
         @change="updateStatus(($event.target as HTMLSelectElement).value as DocumentStatus)"
       >
@@ -1363,13 +1648,53 @@ onBeforeUnmount(() => {
       </select>
       <span
         v-else
-        :class="['hidden items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
+        :class="['hidden items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium sm:inline-flex', STATUS_STYLES[status]]"
         :title="STATUS_ADMIN_ONLY_MESSAGE"
         aria-readonly="true"
       >
         {{ STATUS_LABELS[status] }}
         <Lock class="size-3 opacity-60" />
       </span>
+
+      <button
+        v-if="canEdit"
+        type="button"
+        class="btn btn-ghost btn-sm"
+        :disabled="saving || !dirty"
+        :title="saveButtonTitle"
+        aria-label="Guardar"
+        @click="save()"
+      >
+        <Check v-if="!dirty && !isNew && !saving" class="size-3.5 text-success" />
+        <Save v-else class="size-3.5" />
+        <span class="hidden sm:inline">{{ saveButtonLabel }}</span>
+      </button>
+
+      <button
+        type="button"
+        :class="['btn btn-outline btn-sm', previewMode ? 'is-active' : '']"
+        :title="previewMode ? 'Volver a editar' : 'Vista previa con los datos aplicados'"
+        aria-label="Vista previa"
+        @click="togglePreview"
+      >
+        <component
+          :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye"
+          :class="['size-3.5', loadingPreview ? 'animate-spin' : '']"
+        />
+        <span class="hidden sm:inline">{{ previewMode ? 'Volver a editar' : 'Vista previa' }}</span>
+      </button>
+
+      <button
+        v-if="aiConfigured && canEdit"
+        type="button"
+        :class="['btn btn-outline btn-sm', assistantOpen ? 'is-active' : '']"
+        :title="assistantOpen ? 'Cerrar asistente de redacción' : 'Redactar con el asistente'"
+        aria-label="Asistente de redacción"
+        @click="assistantOpen = !assistantOpen"
+      >
+        <Sparkles class="size-3.5" />
+        <span class="hidden sm:inline">Asistente</span>
+      </button>
 
       <RouterLink
         v-if="pendingMessage && auth.canSeeMenu('inbox')"
@@ -1411,125 +1736,150 @@ onBeforeUnmount(() => {
         Enviar
       </button>
 
-      <button
-        v-if="canEdit"
-        type="button"
-        class="btn btn-ghost btn-sm hidden sm:inline-flex"
-        :disabled="saving"
-        @click="saveAndExit"
-      >
-        <Save class="size-3.5" />
-        Guardar
-      </button>
-
-      <button
-        v-if="!locked"
-        type="button"
-        :class="['tool-btn', chromeOpen ? 'is-active' : '']"
-        title="Editar cabecera y pie de página"
-        @click="toggleChromeMode"
-      >
-        <PanelTop class="size-4" />
-      </button>
-
-      <button type="button" class="tool-btn" title="Historial de versiones" @click="openHistory()">
-        <History class="size-4" />
-      </button>
-
-      <button
-        type="button"
-        :class="['tool-btn', previewMode ? 'is-active' : '']"
-        :title="previewMode ? 'Volver a editar' : 'Vista previa con los datos aplicados'"
-        @click="togglePreview"
-      >
-        <component
-          :is="loadingPreview ? Loader2 : previewMode ? Pencil : Eye"
-          :class="['size-4', loadingPreview ? 'animate-spin' : '']"
-        />
-      </button>
-
-      <button
-        v-if="permission === 'owner' && !locked"
-        type="button"
-        class="tool-btn"
-        title="Compartir"
-        @click="shareOpen = true"
-      >
-        <Share2 class="size-4" />
-      </button>
-
-      <BaseDropdown align="right" width="w-52">
+      <BaseDropdown align="right" width="w-64">
         <template #trigger>
-          <button type="button" class="btn btn-outline btn-sm">
-            <Download class="size-3.5" />
-            <span class="hidden sm:inline">Exportar</span>
-            <ChevronDown class="size-3" />
-          </button>
-        </template>
-        <template #content>
-          <p v-if="!canExport" class="px-2.5 py-2 text-[11.5px] leading-snug text-ink-subtle">
-            {{ EXPORT_FORBIDDEN_MESSAGE }}
-          </p>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
-            <FileText class="size-4" />
-            PDF
-          </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
-            <FileText class="size-4" />
-            Word (.docx)
-          </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
-            <FileCode2 class="size-4" />
-            HTML
-          </button>
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
-            @click="printPreview"
-          >
-            <Printer class="size-4" />
-            Vista de impresión
-          </button>
-        </template>
-      </BaseDropdown>
-
-      <BaseDropdown align="right" width="w-56">
-        <template #trigger>
-          <button type="button" class="tool-btn" aria-label="Más acciones">
+          <button type="button" class="tool-btn" aria-label="Más acciones" title="Más acciones">
             <MoreHorizontal class="size-4" />
           </button>
         </template>
         <template #content>
-          <button v-if="canEdit" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="save(true)">
+          <button
+            v-if="!essential && canEdit"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="save(true)"
+          >
             <Save class="size-4" />
             Guardar punto de control
           </button>
-          <button v-if="canEdit" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="findOpen = true">
+          <button
+            v-if="!essential && canEdit"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="findOpen = true"
+          >
             <Search class="size-4" />
             Buscar y reemplazar
           </button>
-          <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="saveAsTemplate">
-            <FileText class="size-4" />
-            Guardar como plantilla
+          <button
+            v-if="!essential && canEdit && !locked"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="toggleChromeMode"
+          >
+            <PanelTop class="size-4" />
+            Cabecera y pie
           </button>
+          <button
+            v-if="!essential"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="openHistory()"
+          >
+            <History class="size-4" />
+            Historial de versiones
+          </button>
+          <button
+            v-if="!essential && permission === 'owner' && !locked"
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+            @click="shareOpen = true"
+          >
+            <Share2 class="size-4" />
+            Compartir
+          </button>
+
+          <div v-if="!essential" class="my-1 border-t border-hairline" />
+          <p class="px-2.5 pb-1 pt-1 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
+            Descargar
+          </p>
+          <p v-if="!canExport" class="px-2.5 py-1.5 text-[12.5px] leading-snug text-ink-muted">
+            {{ EXPORT_FORBIDDEN_MESSAGE }}
+          </p>
+          <template v-else>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('pdf')">
+              <FileText class="size-4" />
+              PDF
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('docx')">
+              <FileText class="size-4" />
+              Word (.docx)
+            </button>
+            <button v-if="!essential" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="exportAs('html')">
+              <FileCode2 class="size-4" />
+              HTML
+            </button>
+            <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink" @click="printPreview">
+              <Printer class="size-4" />
+              Vista de impresión
+            </button>
+          </template>
+
+          <template v-if="!essential">
+            <div class="my-1 border-t border-hairline" />
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ink-muted hover:bg-surface-hover hover:text-ink"
+              @click="saveAsTemplate"
+            >
+              <FileText class="size-4" />
+              Guardar como plantilla
+            </button>
+          </template>
         </template>
       </BaseDropdown>
-
-      <UserAvatar :name="auth.user?.name" :src="auth.user?.avatarUrl" size="sm" class="ml-1 hidden sm:inline-flex" />
     </header>
 
+    <!-- Ruta del documento: dónde estoy y qué falta para terminar -->
+    <nav
+      v-if="!locked && !previewMode"
+      class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-hairline bg-surface px-4 py-1.5 text-[12.5px]"
+      aria-label="Pasos del documento"
+    >
+      <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-success-soft px-2.5 py-0.5 font-medium text-success">
+        <Check class="size-3" />
+        1. Modelo<template v-if="modelName">: {{ modelName }}</template>
+      </span>
+      <ChevronRight class="size-3 shrink-0 text-ink-subtle" />
+      <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent-soft px-2.5 py-0.5 font-semibold text-accent">
+        2. Contenido
+      </span>
+      <ChevronRight class="size-3 shrink-0 text-ink-subtle" />
+      <button
+        type="button"
+        class="inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 font-medium text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink disabled:opacity-50"
+        :disabled="!canEdit || saving"
+        @click="openSendDialog()"
+      >
+        3. Revisar y enviar
+        <ArrowRight class="size-3" />
+      </button>
+    </nav>
+
     <!-- Aviso de conflicto -->
-    <div v-if="conflict" class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[12.5px] text-danger">
+    <div v-if="conflict" class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[13.5px] text-danger">
       <TriangleAlert class="size-4 shrink-0" />
       <span class="flex-1">Otra sesión guardó cambios en este documento.</span>
       <button type="button" class="btn btn-outline btn-sm" @click="load">Descartar y recargar</button>
       <button type="button" class="btn btn-danger btn-sm" @click="overwriteConflict">Conservar mis cambios</button>
     </div>
 
+    <!-- Documento nuevo: el borrador vive en este navegador hasta guardarlo -->
+    <div
+      v-if="isNew"
+      class="flex flex-wrap items-center gap-3 border-b border-hairline bg-surface-muted/50 px-4 py-2 text-[13.5px] text-ink-muted"
+    >
+      <Cloud class="size-4 shrink-0" />
+      <span class="flex-1">
+        Este documento aún no está en el servidor: se guarda solo en este navegador.
+        Pulsa <strong class="font-semibold text-ink">Guardar</strong> para crearlo y que no se pierda.
+      </span>
+    </div>
+
     <!-- Panel de revisión del envío pendiente -->
     <div v-if="pendingMessage && !locked" class="border-b border-warning/20 bg-warning-soft/50">
       <!-- Jefe / aprobador -->
-      <div v-if="auth.isAdmin" class="flex flex-wrap items-start gap-3 px-4 py-3 text-[12.5px]">
+      <div v-if="auth.isAdmin" class="flex flex-wrap items-start gap-3 px-4 py-3 text-[13.5px]">
         <ShieldCheck class="mt-0.5 size-5 shrink-0 text-warning" />
         <div class="min-w-0 flex-1">
           <p class="font-semibold text-ink">Revisión de envío</p>
@@ -1555,21 +1905,21 @@ onBeforeUnmount(() => {
             <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
               <button
                 type="button"
-                class="text-[11.5px] font-medium text-accent hover:underline"
+                class="text-[12.5px] font-medium text-accent hover:underline"
                 @click="reviewExpanded = !reviewExpanded"
               >
                 {{ reviewExpanded ? 'Ocultar detalles' : 'Ver detalles del mensaje' }}
               </button>
               <RouterLink
                 :to="{ name: 'inbox-message', params: { id: reviewMessage.id } }"
-                class="text-[11.5px] font-medium text-ink-muted hover:text-ink"
+                class="text-[12.5px] font-medium text-ink-muted hover:text-ink"
               >
                 Ver mensaje completo
               </RouterLink>
               <button
                 v-if="reviewVersionChanged"
                 type="button"
-                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                class="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent hover:underline"
                 @click="openHistory(reviewMessage.documentVersion)"
               >
                 <GitCompareArrows class="size-3.5" />
@@ -1577,7 +1927,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 type="button"
-                class="inline-flex items-center gap-1 text-[11.5px] font-medium text-accent hover:underline"
+                class="inline-flex items-center gap-1 text-[12.5px] font-medium text-accent hover:underline"
                 @click="togglePreview()"
               >
                 <Eye class="size-3.5" />
@@ -1634,7 +1984,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Remitente / otros usuarios -->
-      <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[12.5px] text-ink-muted">
+      <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[13.5px] text-ink-muted">
         <Send class="size-4 shrink-0 text-warning" />
         <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
         <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
@@ -1647,7 +1997,7 @@ onBeforeUnmount(() => {
     <div
       v-if="lastRejection"
       :class="[
-        'flex flex-wrap items-start gap-3 border-b px-4 py-2.5 text-[12.5px] lg:hidden',
+        'flex flex-wrap items-start gap-3 border-b px-4 py-2.5 text-[13.5px] lg:hidden',
         lastRejection.allowSenderEdit
           ? 'border-danger/20 bg-danger-soft/70 text-danger'
           : 'border-danger/20 bg-danger-soft/50 text-danger',
@@ -1683,7 +2033,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- Documento sellado -->
-    <div v-if="locked" class="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface-hover px-4 py-2 text-[12.5px] text-ink-muted">
+    <div v-if="locked" class="flex flex-wrap items-center gap-2 border-b border-hairline bg-surface-hover px-4 py-2 text-[13.5px] text-ink-muted">
       <Lock class="size-4 shrink-0" />
       <span class="flex-1">
         {{
@@ -1691,6 +2041,9 @@ onBeforeUnmount(() => {
             ? 'Documento rechazado. Es de solo lectura: ya no se puede editar.'
             : 'Documento aprobado y enviado. Es de solo lectura: ya no se puede editar, borrar ni restaurar.'
         }}
+        <template v-if="status !== 'rejected'">
+          Si necesitas cambiarlo, pide a quien lo aprobó que lo devuelva para corrección.
+        </template>
         <template v-if="!canExport"> La exportación está reservada al administrador.</template>
         <template v-else> Puedes exportarlo en PDF, Word o HTML.</template>
       </span>
@@ -1771,13 +2124,33 @@ onBeforeUnmount(() => {
 
         <button
           type="button"
-          class="fixed bottom-5 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[12.5px] font-medium shadow-pop lg:hidden"
+          class="fixed bottom-5 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[13px] font-medium shadow-pop lg:hidden"
           @click="mobileDataOpen = true"
         >
           <Sparkles class="size-4 text-accent" />
           Datos del documento
         </button>
       </main>
+
+      <!-- Asistente de redacción (escritorio) -->
+      <aside
+        v-if="assistantOpen"
+        class="hidden w-[380px] shrink-0 border-l border-hairline bg-surface xl:flex xl:flex-col"
+      >
+        <AssistantPanel
+          :messages="assistantMessages"
+          :busy="assistantBusy"
+          :error="assistantError"
+          :warnings="assistantWarnings"
+          :questions="assistantQuestions"
+          :model="assistantModel"
+          :template-name="modelName"
+          :enabled="assistantEnabled"
+          :disabled-reason="assistantDisabledReason"
+          @close="assistantOpen = false"
+          @send="sendAssistantMessage"
+        />
+      </aside>
 
       <!-- Panel de datos -->
       <aside class="hidden w-[336px] shrink-0 border-l border-hairline bg-surface lg:flex lg:flex-col">
@@ -1799,7 +2172,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="rejectionPanelOpen" class="max-h-[44vh] overflow-y-auto px-4 pb-3 text-[12px]">
-            <p class="text-[11.5px] text-ink-muted">
+            <p class="text-[13px] text-ink-muted">
               <template v-if="lastRejection.rejectedByName">
                 Devuelto por
                 <strong class="font-medium text-ink">{{ lastRejection.rejectedByName }}</strong>
@@ -1812,24 +2185,24 @@ onBeforeUnmount(() => {
             <p class="mt-1.5 font-medium text-ink">{{ lastRejection.subject }}</p>
             <p
               v-if="lastRejection.body"
-              class="mt-1 whitespace-pre-wrap text-[11.5px] leading-snug text-ink-muted"
+              class="mt-1 whitespace-pre-wrap text-[13px] leading-snug text-ink-muted"
             >
               {{ lastRejection.body }}
             </p>
 
             <div class="mt-2 rounded-lg border border-danger/20 bg-surface px-2.5 py-2">
-              <p class="text-[10.5px] font-semibold uppercase tracking-wide text-danger">Motivo</p>
+              <p class="text-[12px] font-semibold uppercase tracking-wide text-danger">Motivo</p>
               <p class="mt-0.5 whitespace-pre-wrap text-[12px] text-ink">
                 {{ lastRejection.reason || 'Sin motivo indicado' }}
               </p>
             </div>
 
-            <p class="mt-1.5 text-[11px] text-ink-subtle">
+            <p class="text-meta mt-1.5">
               Versión enviada: v{{ lastRejection.documentVersion }} ·
               {{ lastRejection.recipientIds.length }} destinatario{{ lastRejection.recipientIds.length === 1 ? '' : 's' }}
             </p>
 
-            <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[11.5px] text-ink-muted">
+            <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[13px] text-ink-muted">
               El documento quedó cerrado y no se puede editar.
             </p>
 
@@ -1850,7 +2223,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <p v-if="lastRejection.allowSenderEdit" class="mt-1.5 text-[11px] text-ink-subtle">
+            <p v-if="lastRejection.allowSenderEdit" class="text-meta mt-1.5">
               Corrige lo indicado y reenvía el documento a aprobación.
             </p>
           </div>
@@ -1867,7 +2240,7 @@ onBeforeUnmount(() => {
             :placeholder="autoDescription || 'Para qué trata este documento'"
             @input="markDirty"
           />
-          <p v-if="autoDescription" class="mt-1.5 text-[11px] leading-snug text-ink-subtle">
+          <p v-if="autoDescription" class="text-meta mt-1.5 leading-snug">
             Sugerencia automática: «{{ autoDescription }}»
             <button
               v-if="canEdit && description.trim() !== autoDescription"
@@ -1881,7 +2254,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="min-h-0 flex-1">
           <VariablePanel
-            :schema="schema"
+            :schema="effectiveSchema"
             :model-value="data"
             :disabled="!canEdit"
             :ai-enabled="aiConfigured && canEdit"
@@ -1894,6 +2267,29 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
+
+    <!-- Asistente de redacción móvil -->
+    <Teleport to="body">
+      <div
+        v-if="assistantOpen"
+        class="fixed inset-0 z-[90] flex flex-col bg-surface xl:hidden"
+      >
+        <AssistantPanel
+          input-id="assistant-input-mobile"
+          :messages="assistantMessages"
+          :busy="assistantBusy"
+          :error="assistantError"
+          :warnings="assistantWarnings"
+          :questions="assistantQuestions"
+          :model="assistantModel"
+          :template-name="modelName"
+          :enabled="assistantEnabled"
+          :disabled-reason="assistantDisabledReason"
+          @close="assistantOpen = false"
+          @send="sendAssistantMessage"
+        />
+      </div>
+    </Teleport>
 
     <!-- Panel de datos móvil -->
     <Teleport to="body">
@@ -1931,7 +2327,7 @@ onBeforeUnmount(() => {
               :placeholder="autoDescription || 'Para qué trata este documento'"
               @input="markDirty"
             />
-            <p v-if="autoDescription" class="mt-1.5 text-[11px] leading-snug text-ink-subtle">
+            <p v-if="autoDescription" class="text-meta mt-1.5 leading-snug">
               Sugerencia automática: «{{ autoDescription }}»
               <button
                 v-if="canEdit && description.trim() !== autoDescription"
@@ -1945,7 +2341,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="min-h-0 flex-1 overflow-hidden">
             <VariablePanel
-              :schema="schema"
+              :schema="effectiveSchema"
               :model-value="data"
               :disabled="!canEdit"
               :ai-enabled="aiConfigured && canEdit"
@@ -2005,7 +2401,7 @@ onBeforeUnmount(() => {
     />
 
     <div v-if="!canEdit" class="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2">
-      <span class="rounded-full bg-ink/85 px-3 py-1.5 text-[11.5px] font-medium text-white">
+      <span class="rounded-full bg-ink/85 px-3 py-1.5 text-[12.5px] font-medium text-white">
         {{
           locked
             ? status === 'rejected'
@@ -2016,12 +2412,12 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <div v-if="saving" class="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[11.5px] text-ink-muted shadow-card">
+    <div v-if="saving" class="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full bg-surface px-3 py-1.5 text-[12.5px] text-ink-muted shadow-card">
       <Loader2 class="size-3 animate-spin" />
       Guardando cambios…
     </div>
 
-    <div v-else-if="!dirty && lastSavedAt" class="pointer-events-none fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[11.5px] text-ink-subtle opacity-0 transition-opacity duration-300">
+    <div v-else-if="!dirty && lastSavedAt" class="pointer-events-none fixed bottom-4 right-4 z-40 flex items-center gap-1.5 rounded-full bg-surface px-3 py-1.5 text-[12.5px] text-ink-subtle opacity-0 transition-opacity duration-300">
       <Check class="size-3" />
       Guardado
     </div>

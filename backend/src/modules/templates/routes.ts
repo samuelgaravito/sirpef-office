@@ -65,6 +65,7 @@ const createSchema = z.object({
   header: chromeOverrideSchema.optional(),
   footer: chromeOverrideSchema.optional(),
   aiInstructions: z.string().max(8000).nullable().optional(),
+  aiStyle: z.string().max(8000).nullable().optional(),
   isShared: z.boolean().default(false),
   numbering: numberingInputSchema.optional(),
 });
@@ -83,6 +84,7 @@ const updateSchema = z.object({
   header: chromeOverrideSchema.optional(),
   footer: chromeOverrideSchema.optional(),
   aiInstructions: z.string().max(8000).nullable().optional(),
+  aiStyle: z.string().max(8000).nullable().optional(),
   isShared: z.boolean().optional(),
   numbering: numberingInputSchema.optional(),
   /** Se envía para control optimista de concurrencia. */
@@ -565,6 +567,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: body.header ?? null,
         footer: body.footer ?? null,
         aiInstructions: body.aiInstructions ?? null,
+        aiStyle: body.aiStyle ?? null,
         isShared: body.isShared,
         numberingEnabled: numbering.enabled,
       })
@@ -700,6 +703,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: body.header === undefined ? row.header : body.header,
         footer: body.footer === undefined ? row.footer : body.footer,
         aiInstructions: body.aiInstructions === undefined ? row.aiInstructions : body.aiInstructions,
+        aiStyle: body.aiStyle === undefined ? row.aiStyle : body.aiStyle,
         isShared: body.isShared ?? row.isShared,
         numberingEnabled: numbering.enabled,
         version: nextVersion,
@@ -728,6 +732,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: updated.header,
         footer: updated.footer,
         aiInstructions: updated.aiInstructions,
+        aiStyle: updated.aiStyle,
         tokens: resolved.tokens,
       },
       note: body.note ?? (permission === 'owner' ? 'Edición manual' : 'Mejora de un colaborador'),
@@ -790,6 +795,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: row.header,
         footer: row.footer,
         aiInstructions: row.aiInstructions,
+        aiStyle: row.aiStyle,
         isShared: false,
         isActive: true,
         numberingEnabled: numbering.enabled,
@@ -910,6 +916,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: snapshot.snapshot.header,
         footer: snapshot.snapshot.footer,
         aiInstructions: snapshot.snapshot.aiInstructions,
+        aiStyle: snapshot.snapshot.aiStyle,
         version: nextVersion,
         updatedAt: new Date(),
       })
@@ -931,6 +938,7 @@ export async function templateRoutes(app: FastifyInstance): Promise<void> {
         header: updated.header,
         footer: updated.footer,
         aiInstructions: updated.aiInstructions,
+        aiStyle: updated.aiStyle,
         tokens: snapshot.snapshot.tokens,
       },
       note: `Restaurada la versión ${version}`,
