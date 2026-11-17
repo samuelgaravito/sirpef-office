@@ -45,7 +45,7 @@ y conservar el **historial de versiones** de cada documento.
 | Imágenes | Redimensionado con tiradores, tamaños predefinidos (automático/pequeña/mediana/grande/ancho total), alineación de bloque y modos flotantes: izquierda/derecha con ajuste de texto y detrás del texto (marca de agua). Arrastre libre en los modos flotantes. Mismo resultado en editor, vista previa, PDF, DOCX y HTML. |
 | Cabecera y pie | Bandas enriquecidas editables por documento y por plantilla, con imágenes, variables `{{clave}}`, tokens de numeración `{page}`/`{total}` y **alto y ancho configurables** hasta el ancho completo de la página. Las bandas habilitadas se ven siempre sobre la hoja; la cabecera y el pie quedan anclados a los bordes superior e inferior, y los márgenes solo afectan al cuerpo. El diseño aporta **imágenes globales** que se heredan. Herencia **documento → plantilla → diseño** con restablecimiento a lo heredado. Las bandas y sus imágenes se repiten en cada página del PDF/DOCX. |
 | Variables | Panel lateral con formulario generado desde el esquema (`text`, `date`, `number`, `money`, `select`, `checkbox`, `table`, `image`…), validación de obligatorios y contador de campos pendientes. |
-| Vista previa | Documentos: renderiza el documento real en un iframe aislado con los datos aplicados, también en las tarjetas de **Inicio → Documentos recientes** y **Documentos**; se refresca al cambiar los valores. Plantillas: preview real en la lista y en el editor con datos de ejemplo; la modal de nueva plantilla muestra la vista previa del diseño seleccionado. |
+| Vista previa | Documentos: renderiza el documento real en un iframe aislado con los datos aplicados, en las tarjetas de **Documentos**; se refresca al cambiar los valores. Plantillas: preview real en la lista y en el editor con datos de ejemplo; la modal de nueva plantilla muestra la vista previa del diseño seleccionado. |
 | Historial | Versiones automáticas/manuales/IA/exportación, punto de control manual, restauración y **diff palabra a palabra** contra la versión actual. Las **plantillas** tienen su propio historial: cada mejora queda firmada con el nombre de quien la hizo y el propietario puede restaurar cualquier versión anterior. |
 | Autoguardado | Guardado con *debounce*, indicador de estado (“Guardando…”, “Guardado ahora mismo”) y **versionado optimista** con detección de conflictos (HTTP 409). |
 | Búsqueda | Buscar y reemplazar en el documento (`Ctrl/Cmd + F`), con distinción de mayúsculas, contador de coincidencias y “reemplazar todo”. |
@@ -240,9 +240,9 @@ comparticiones.
 ## Uso rápido
 
 1. **Inicia sesión** con el usuario administrador.
-2. En **Inicio**, pulsa una tarjeta de **Empezar un documento nuevo**, o en **Plantillas**
-   pulsa **Usar**. El documento se crea directamente con el diseño de la plantilla y se
-   abre el editor, sin modal intermedio.
+2. En **Inicio**, pulsa **Crear documento** (o pide el documento a la IA en la píldora) y
+   elige el modelo; también puedes hacerlo en **Plantillas** con **Usar**. El documento se
+   crea directamente con el diseño de la plantilla y se abre el editor.
 3. Rellena los campos del panel **Datos del documento**. Los `{{campos}}` del cuerpo se
    resaltan como chips; el documento se autoguarda.
 4. Pulsa el icono del **ojo** para ver el documento final con los datos aplicados.
@@ -476,7 +476,7 @@ contextual también funciona en las bandas de cabecera y pie.
 
 ## Vista previa de documentos
 
-Las tarjetas de **Documentos** y de **Inicio → Documentos recientes** no usan una
+Las tarjetas de **Documentos** no usan una
 miniatura genérica: cargan el documento real desde
 `GET /api/documents/:id/html?embed=1` y lo muestran en un iframe aislado con
 `sandbox`. El iframe se carga de forma diferida al acercarse al viewport, se cachea en
@@ -582,7 +582,7 @@ las variables de entorno y **nunca devuelve la API key al navegador**.
 
 Hay dos formas de usar la IA:
 
-- **Asistente de redacción** (la barra de IA del panel de trabajo, encima de las tarjetas):
+- **Asistente de redacción** (la píldora de IA del panel de trabajo, sobre los módulos):
   describes el encargo en lenguaje natural y la IA elige la plantilla que mejor encaja; el
   editor se abre con el asistente y ese mensaje ya enviado. Dentro del editor, el botón
   **Asistente** permite seguir pidiendo cambios («más breve», «cambia al destinatario») sin

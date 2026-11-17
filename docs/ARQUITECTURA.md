@@ -797,7 +797,7 @@ usuario edita datos con la vista previa abierta, un *debounce* de 900 ms vuelve 
 y refrescar el iframe. Esto da una previsualización casi en vivo sin duplicar el motor de
 render en el cliente.
 
-Las tarjetas de **Documentos** e **Inicio → Documentos recientes** usan
+Las tarjetas de **Documentos** usan
 `DocumentPreview.vue`: piden `GET /api/documents/:id/html?embed=1` con carga diferida
 (`IntersectionObserver`), cachean el HTML por `id`/versión/`updatedAt` del documento y
 `designUpdatedAt` (para invalidar la caché si cambian las imágenes globales), y muestran
@@ -816,7 +816,8 @@ HTML a pantalla completa.
 Al crear una plantilla, `NewTemplateDialog.vue` carga los diseños con `GET /api/designs`
 y muestra `DesignPreview` para cada uno. Al confirmar navega a `/templates/new?designId=…`
 y `TemplateEditorView` aplica ese diseño antes de mostrar el lienzo. El flujo de creación
-de documentos es directo: las tarjetas de Inicio y el botón **Usar** llaman a
+de documentos es directo: el selector de modelo del inicio (**Crear documento**), la
+píldora de IA y el botón **Usar** llaman a
 `POST /api/documents` con `templateId` y abren el editor.
 
 La vista previa usa una hoja continua: la cabecera y el pie aparecen **una vez** en su

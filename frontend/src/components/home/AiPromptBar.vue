@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowUp, Loader2, Sparkles } from 'lucide-vue-next';
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 
 import { useAuthStore } from '@/stores/auth';
 
@@ -54,13 +54,6 @@ function onKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   submit();
 }
-
-onMounted(() => {
-  // El foco inicial deja la barra lista sin abrir el teclado en móvil.
-  if (window.matchMedia('(min-width: 1024px)').matches) {
-    void nextTick(() => field.value?.focus({ preventScroll: true }));
-  }
-});
 </script>
 
 <template>
