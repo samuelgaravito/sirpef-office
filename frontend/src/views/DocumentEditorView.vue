@@ -375,6 +375,7 @@ const aiApplied = ref(false);
 const assistantOpen = ref(false);
 const assistantMessages = ref<AiDraftMessage[]>([]);
 const assistantBusy = ref(false);
+const assistantProgress = ref(0);
 const assistantError = ref('');
 const assistantWarnings = ref<string[]>([]);
 const assistantQuestions = ref<string[]>([]);
@@ -1383,6 +1384,7 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
   assistantWarnings.value = [];
   assistantQuestions.value = [];
   assistantBusy.value = true;
+  assistantProgress.value = 0;
 
   try {
     const payload = {
@@ -1395,17 +1397,28 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
       },
     };
 
+    // El modelo tarda: se pide el avance para que la pantalla no se quede
+    // muda mientras redacta. Al terminar llega la propuesta completa.
+    const onProgress = (chars: number): void => {
+      assistantProgress.value = chars;
+    };
+
     const result =
       isNew.value || !documentId.value
-        ? await api.post<AiDraftResult>(
-            `/templates/${templateId.value}/ai/draft`,
+        ? await api.stream<AiDraftResult>(
+            `/templates/${templateId.value}/ai/draft/stream`,
             payload,
+            onProgress,
           )
-        : await api.post<AiDraftResult>(`/documents/${documentId.value}/ai/draft`, {
-            ...payload,
-            // Detecta si otra sesión guardó mientras conversábamos.
-            expectedVersion: version.value,
-          });
+        : await api.stream<AiDraftResult>(
+            `/documents/${documentId.value}/ai/draft/stream`,
+            {
+              ...payload,
+              // Detecta si otra sesión guardó mientras conversábamos.
+              expectedVersion: version.value,
+            },
+            onProgress,
+          );
 
     applyAiDraft(result.document);
     assistantMessages.value = [
@@ -1419,6 +1432,7 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
     assistantError.value = explainError(error, 'No se pudo redactar con IA');
   } finally {
     assistantBusy.value = false;
+    assistantProgress.value = 0;
   }
 }
 
@@ -2140,6 +2154,7 @@ onBeforeUnmount(() => {
         <AssistantPanel
           :messages="assistantMessages"
           :busy="assistantBusy"
+          :progress="assistantProgress"
           :error="assistantError"
           :warnings="assistantWarnings"
           :questions="assistantQuestions"
@@ -2278,6 +2293,7 @@ onBeforeUnmount(() => {
           input-id="assistant-input-mobile"
           :messages="assistantMessages"
           :busy="assistantBusy"
+          :progress="assistantProgress"
           :error="assistantError"
           :warnings="assistantWarnings"
           :questions="assistantQuestions"

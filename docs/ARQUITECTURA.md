@@ -900,6 +900,18 @@ sola y el interruptor de Ajustes cambia el estado).
   (solo `hasApiKey`).
 - `POST /api/ai/test` hace una llamada mínima al proveedor y mide latencia.
 
+Límites de la llamada, en variables de entorno:
+
+| Variable | Valor | Por qué |
+| --- | --- | --- |
+| `AI_TIMEOUT_MS` | `120000` | Las APIs alojadas responden en segundos; un tope corto evita esperas eternas. |
+| `AI_LOCAL_TIMEOUT_MS` | `600000` | Un modelo local (Ollama) redacta un documento entero en minutos, sobre todo sin GPU. |
+| `AI_NUM_CTX` | `8192` | **Ollama usa 4 096 por defecto y recorta el prompt por delante**: el modelo pierde el prompt de sistema y el cuerpo de la plantilla. Se envía como `options.num_ctx`. |
+
+El `fetch` de Node corta a los 5 minutos por su cuenta, así que las llamadas a IA usan un
+`Agent` de undici con `headersTimeout`/`bodyTimeout` de 15 minutos; el límite real de cada
+llamada lo marca su `AbortSignal`.
+
 ### 8.2 Rellenado de variables
 
 ```text
@@ -925,6 +937,9 @@ actual en cada turno, y el servidor devuelve una propuesta completa sin guardarl
 ```text
 POST /api/templates/:templateId/ai/draft
 POST /api/documents/:id/ai/draft
+POST /api/templates/:templateId/ai/draft/stream   (NDJSON)
+POST /api/documents/:id/ai/draft/stream           (NDJSON)
+
   { messages: [{ role: 'user'|'assistant', content }], current?: { title, description, content, data },
     useExamples?: boolean, expectedVersion?: number }
   → { reply, document: { title, description, content, data }, questions, warnings, model }
@@ -932,17 +947,37 @@ POST /api/documents/:id/ai/draft
 
 - `templates` exige acceso de uso y plantilla activa; `documents` exige permiso de edición,
   documento mutable y, si llega `expectedVersion`, coincidencia (409 si no).
-- El prompt incluye el tipo de documento, el esquema de variables, el JSON (o esqueleto) de
-  la plantilla, el documento actual, las instrucciones y el **perfil de estilo**
-  (`templates.ai_style`) y, opcionalmente, extractos de documentos aprobados del usuario.
-- La respuesta se sanea con `sanitizeAiContent` (`shared/src/ai.ts`): solo nodos TipTap
-  permitidos, sin imágenes, HTML, enlaces ni atributos arbitrarios; se recortan profundidad,
-  número de nodos y longitud. Después se mezcla **solo** con variables del esquema y se
-  elimina la clave reservada del número correlativo.
+- **El modelo no devuelve TipTap**: responde
+  `{ reply, title, description, body, data, questions, warnings }`, donde `body` es la prosa
+  del cuerpo en texto plano. Antes devolvía el documento completo, así que cambiar una frase
+  costaba regenerar ~2 000 tokens JSON (más de un minuto con un modelo local). Ahora cuesta
+  ~300 y el mismo cambio baja a ~10 s.
+- El servidor compone la hoja: parte del contenido actual, localiza el cuerpo (por el
+  marcador `{{clave}}` o por el texto que se escribió la vez anterior) y sustituye solo esa
+  región por párrafos. El resto de la plantilla (tablas, firmas, cabecera) no se toca.
+  Se descartan las líneas del cuerpo que repiten literalmente una línea fija de la hoja.
+- `data` se mezcla **solo** con variables del esquema y se elimina la clave reservada del
+  número correlativo. Un valor con forma de hueco (`[Nombre del entregador]`) se descarta.
+- El prompt incluye la **fecha de hoy** (para «hoy»/«el lunes»), el tipo de documento, el
+  esquema de variables, un **esqueleto** de la hoja, el texto actual del cuerpo y, si los
+  hay, extractos de documentos aprobados como muestra de estilo.
+- **Salidas estructuradas**: con Ollama se envía el esquema JSON de la respuesta como
+  `format`, con todas las variables descritas y marcadas como obligatorias. Es lo que evita
+  que un modelo pequeño devuelva `data` vacío o invente campos.
+- Si el modelo devolviera `content` (documento TipTap completo, camino heredado), se sanea
+  con `sanitizeAiContent` (`shared/src/ai.ts`): solo nodos permitidos, sin imágenes, HTML ni
+  atributos arbitrarios, y los bloques mal anidados se reubican (`normalizeStructure`) para
+  que `setContent` no los rechace.
+- Las variables del correlativo (`numero_documento` y la `numero` propia de muchas
+  plantillas) **no cuentan como campos vacíos**: las asigna la serie al aprobar y el
+  redactor tiene instrucción de no escribirlas, así que avisar de ellas sería un falso
+  positivo en todos los memorándums.
+- Las rutas `/stream` responden `application/x-ndjson` con
+  `{type:'progress',chars}` mientras el modelo escribe y `{type:'result',result}` o
+  `{type:'error',error}` al final. Usan `reply.hijack()`; la sesión, los permisos y el
+  versionado se validan **antes** de abrir el flujo, así que sus errores salen como JSON
+  normal.
 - `POST /api/templates/:id/ai/style` analiza hasta 3 documentos aprobados del usuario y devuelve un perfil de estilo editable; el editor lo guarda con el PATCH normal de la plantilla.
-- Si la plantilla tiene un campo marcado `bodySlot`, el bloque con `{{clave}}` se sustituye
-  por contenido rico; el campo deja de mostrarse en el panel de datos. El resto de la
-  plantilla (tablas de destinatario, firmas, cabecera y pie) se conserva.
 - El cliente aplica la propuesta al editor y el guardado sigue el flujo normal (incluido el
   versionado optimista). No se consume número: el correlativo se asigna al aprobar.
 

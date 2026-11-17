@@ -213,10 +213,88 @@ function sanitizeNode(raw: unknown, depth: number, state: SanitizeState): JSONCo
 }
 
 /**
+ * Coloca cada nodo donde el esquema de TipTap lo admite.
+ *
+ * El modelo a veces anida un bloque (una tabla, una lista, otro párrafo)
+ * dentro de un párrafo. `sanitizeNode` no lo detecta —todos los tipos son
+ * permitidos— pero `setContent` lanzaba «Invalid content for node type
+ * paragraph» y la hoja se quedaba con la plantilla sin aplicar. Aquí los
+ * bloques mal anidados suben al nivel de su padre en vez de perderse.
+ */
+function normalizeStructure(nodes: JSONContent[]): JSONContent[] {
+  const isInline = (node: JSONContent): boolean =>
+    node.type === 'text' || node.type === 'hardBreak';
+
+  /** Envuelve texto suelto en párrafos: celdas, citas y elementos de lista. */
+  const requireBlock = (children: JSONContent[]): JSONContent[] => {
+    const blocks: JSONContent[] = [];
+    let inline: JSONContent[] = [];
+
+    for (const child of children) {
+      if (isInline(child)) {
+        inline.push(child);
+        continue;
+      }
+      if (inline.length > 0) {
+        blocks.push({ type: 'paragraph', content: inline });
+        inline = [];
+      }
+      blocks.push(child);
+    }
+    if (inline.length > 0) blocks.push({ type: 'paragraph', content: inline });
+    if (blocks.length === 0) blocks.push({ type: 'paragraph' });
+    return blocks;
+  };
+
+  const out: JSONContent[] = [];
+
+  for (const node of nodes) {
+    const children = normalizeStructure(node.content ?? []);
+
+    switch (node.type) {
+      case 'paragraph':
+      case 'heading': {
+        // Solo texto y saltos dentro; lo demás sube detrás del párrafo.
+        out.push({ ...node, content: children.filter(isInline) });
+        out.push(...children.filter((child) => !isInline(child)));
+        continue;
+      }
+      case 'table':
+        out.push({ ...node, content: children.filter((child) => child.type === 'tableRow') });
+        continue;
+      case 'tableRow':
+        out.push({
+          ...node,
+          content: children.filter(
+            (child) => child.type === 'tableCell' || child.type === 'tableHeader',
+          ),
+        });
+        continue;
+      case 'bulletList':
+      case 'orderedList':
+        out.push({ ...node, content: children.filter((child) => child.type === 'listItem') });
+        continue;
+      case 'listItem':
+      case 'tableCell':
+      case 'tableHeader':
+      case 'blockquote':
+        out.push({ ...node, content: requireBlock(children) });
+        continue;
+      default:
+        out.push(children.length > 0 ? { ...node, content: children } : { ...node });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Normaliza la respuesta del modelo a un documento TipTap seguro.
  *
  * - Solo admite los nodos y marcas que el editor sabe renderizar.
  * - Recorta profundidad, número de nodos y longitud del texto.
+ * - Reubica los bloques mal anidados (el editor rechaza un `table` dentro de
+ *   un `paragraph`).
  * - Si no queda nada utilizable, devuelve un párrafo vacío.
  */
 export function sanitizeAiContent(raw: unknown): JSONContent {
@@ -245,14 +323,10 @@ export function sanitizeAiContent(raw: unknown): JSONContent {
   const clean = sanitizeNode(value, 0, state);
 
   if (!clean) return { type: 'doc', content: [{ type: 'paragraph' }] };
-  if (clean.type === 'doc') {
-    return {
-      type: 'doc',
-      content: clean.content && clean.content.length > 0 ? clean.content : [{ type: 'paragraph' }],
-    };
-  }
 
-  return { type: 'doc', content: [clean] };
+  const body = clean.type === 'doc' ? (clean.content ?? []) : [clean];
+  const content = normalizeStructure(body);
+  return { type: 'doc', content: content.length > 0 ? content : [{ type: 'paragraph' }] };
 }
 
 /** Texto plano de un documento TipTap, útil para avisos y ejemplos de estilo. */

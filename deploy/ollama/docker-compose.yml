@@ -1,0 +1,58 @@
+# Ollama con GPU para el asistente de redacción de SirpefOffice.
+#
+# Por qué esta versión y no `latest`: los Ollama recientes (≈0.2x en adelante)
+# exigen el driver NVIDIA ≥ 550 para CUDA y, si no lo encuentran, caen a CPU
+# sin avisar más que con un «NVIDIA driver too old» en el log. Un servidor con
+# el driver 535 se queda sin GPU y el redactor pasa de ~75 a ~7 tokens/s.
+# La 0.20.0 sigue usando CUDA 12 y funciona con el driver 535.
+#
+# Si algún día se actualiza el driver del host a ≥ 550, se puede volver a
+# `ollama/ollama:latest` sin tocar nada más.
+#
+# Uso:
+#   docker compose -f deploy/ollama/docker-compose.yml up -d
+#   docker compose -f deploy/ollama/docker-compose.yml logs -f
+#
+# La GPU debe estar disponible en el host (`nvidia-smi`) y el paquete
+# nvidia-container-toolkit instalado.
+
+services:
+  ollama:
+    image: ollama/ollama:0.20.0
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - '11434:11434'
+    environment:
+      # Escucha en todas las interfaces del contenedor (el puerto se publica).
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Contexto por petición: el redactor manda plantilla + documento +
+      # conversación y con el valor por defecto (4 096) el prompt se recorta.
+      # La app lo refuerza con `options.num_ctx`.
+      OLLAMA_CONTEXT_LENGTH: '8192'
+      # Mantiene el modelo cargado entre usos: la primera respuesta de cada
+      # rato no paga la carga (~5 s).
+      OLLAMA_KEEP_ALIVE: 30m
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      # Volumen ya existente: los modelos descargados se conservan.
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ollama_data:
+    external: true
+    name: ollama_data

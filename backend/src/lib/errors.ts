@@ -162,6 +162,17 @@ function fromPostgres(error: PgError): AppError | null {
         'INVALID_IDENTIFIER',
         'Alguno de los identificadores enviados no tiene un formato válido.',
       );
+    case '42703':
+    case '42P01':
+      // La base de datos no tiene la tabla o la columna que el código usa:
+      // faltan las migraciones. Sin este caso el error llegaba al usuario
+      // como un 500 sin explicación y no había forma de saber qué faltaba.
+      return internal(
+        'DATABASE_OUTDATED',
+        'La base de datos está desactualizada: falta una tabla o columna que el sistema necesita. ' +
+          'Ejecuta «npm run db:migrate» en backend/ y vuelve a intentarlo.',
+        { sqlState: error.code },
+      );
     case '40001':
     case '40P01':
       return new AppError(
@@ -279,7 +290,7 @@ interface ErrorBody {
  * Aparece en la respuesta 5xx y en el log correspondiente, así que soporte
  * puede encontrar la traza exacta sin exponer detalles internos.
  */
-function newReference(): string {
+export function newReference(): string {
   return randomBytes(4).toString('hex');
 }
 

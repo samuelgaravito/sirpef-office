@@ -86,6 +86,27 @@ const envSchema = z.object({
   GEMINI_MODEL: z.string().default('gemini-2.0-flash'),
   OLLAMA_BASE_URL: z.string().default('http://localhost:11434'),
   OLLAMA_MODEL: z.string().default('llama3.1'),
+  /**
+   * Ventana de contexto que se le pide al proveedor local en cada llamada.
+   *
+   * Ollama usa 4 096 tokens por defecto y, cuando el prompt no cabe, **recorta
+   * por el principio**: el modelo pierde el prompt de sistema y el cuerpo de la
+   * plantilla (justo lo que define la redacción) y responde a ciegas. El
+   * redactor manda reglas + plantilla + documento + conversación, así que se
+   * pide 8 192 explícitamente.
+   */
+  AI_NUM_CTX: z.coerce.number().int().positive().default(8_192),
+  /**
+   * Espera máxima de las APIs alojadas (OpenAI, Anthropic, Gemini): responden
+   * en segundos.
+   */
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  /**
+   * Espera máxima de los proveedores locales (Ollama). Sin GPU, un modelo de
+   * 7B redacta a unos pocos tokens por segundo: un documento entero puede
+   * tardar varios minutos y no debe cortarse antes de tiempo.
+   */
+  AI_LOCAL_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
 
   CHROME_PATH: z.string().default('/usr/bin/google-chrome'),
   EXPORT_DIR: z.string().default('./data/exports'),

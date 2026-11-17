@@ -8,6 +8,8 @@ const props = withDefaults(
   defineProps<{
     messages: AiDraftMessage[];
     busy?: boolean;
+    /** Caracteres que lleva escritos el modelo (0 = aún pensando). */
+    progress?: number;
     error?: string;
     warnings?: string[];
     questions?: string[];
@@ -22,6 +24,7 @@ const props = withDefaults(
   }>(),
   {
     busy: false,
+    progress: 0,
     error: '',
     warnings: () => [],
     questions: () => [],
@@ -141,7 +144,10 @@ function onKeydown(event: KeyboardEvent): void {
 
       <div v-if="busy" class="flex items-center gap-2 rounded-xl border border-hairline bg-surface-muted/40 px-3 py-2.5 text-[12.5px] text-ink-muted">
         <Loader2 class="size-3.5 animate-spin text-accent" />
-        Redactando la propuesta…
+        <span>
+          {{ progress > 0 ? 'Redactando la propuesta' : 'Pensando la propuesta' }}
+          <span v-if="progress > 0" class="tabular-nums text-ink-faint">· {{ progress }} caracteres</span>
+        </span>
       </div>
 
       <div v-if="questions.length" class="rounded-xl border border-warning/30 bg-warning-soft/50 px-3 py-2.5">

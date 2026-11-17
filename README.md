@@ -197,6 +197,9 @@ producción añade `--profile tls` y define `SIRPEF_DOMAIN`.
 | `CHROME_PATH` | `/usr/bin/google-chrome` | Navegador usado para generar PDF. Si la ruta no existe, se prueba con `chromium` y `google-chrome` del sistema. Ajustes → Sistema comprueba el estado real. |
 | `EXPORT_DIR` | `./data/exports` | Directorio temporal de exportaciones. |
 | `AI_PROVIDER` | `none` | `openai` \| `anthropic` \| `gemini` \| `ollama` \| `none`. Se puede sobrescribir desde **Ajustes → Asistente de IA**. |
+| `AI_TIMEOUT_MS` | `120000` | Espera máxima de las APIs alojadas (OpenAI, Anthropic, Gemini). |
+| `AI_LOCAL_TIMEOUT_MS` | `600000` | Espera máxima de los modelos locales (Ollama). Sin GPU un 7B tarda minutos en un documento. |
+| `AI_NUM_CTX` | `8192` | Contexto que se pide al proveedor local. Ollama usa 4 096 por defecto y **recorta el prompt por delante** (el modelo pierde las reglas y la plantilla). |
 
 El resto de variables (claves de IA, correo del admin del seed, Google Docs) está
 documentado en `backend/.env.example`. La URL de la API del frontend se configura en
@@ -582,11 +585,12 @@ Hay dos formas de usar la IA:
 - **Asistente de redacción** (la barra de IA del panel de trabajo, encima de las tarjetas):
   describes el encargo en lenguaje natural y la IA elige la plantilla que mejor encaja; el
   editor se abre con el asistente y ese mensaje ya enviado. Dentro del editor, el botón
-  **Asistente** permite seguir pidiendo cambios («más breve», «añade una tabla», «cambia al
-  destinatario») sin salir de la hoja. Devuelve el documento completo (título, variables y
-  cuerpo TipTap) y lo aplica; usa la estructura de la plantilla, sus instrucciones, su
-  **perfil de estilo** y, opcionalmente, extractos de documentos aprobados. La propuesta no
-  se guarda hasta que pulsas **Guardar**.
+  **Asistente** permite seguir pidiendo cambios («más breve», «cambia al destinatario») sin
+  salir de la hoja. Devuelve las **variables** y la **prosa del cuerpo**, y el servidor las
+  coloca en la plantilla: la hoja conserva siempre su estructura y un cambio puntual tarda
+  segundos, no un minuto. La redacción se ve en vivo (avance en caracteres). Usa la
+  estructura de la plantilla, sus instrucciones, su **perfil de estilo** y, opcionalmente,
+  extractos de documentos aprobados. La propuesta no se guarda hasta que pulsas **Guardar**.
 - **Rellenar con IA** del panel de datos: envía el esquema, los valores actuales y las
   instrucciones de cada variable, y mezcla el JSON resultante **solo en los campos del
   formulario**.
@@ -596,6 +600,24 @@ marcador `{{clave}}` por párrafos, listas o tablas reales. El perfil de estilo 
 **Plantilla → IA → Perfil de estilo**; el botón **Deducir de aprobados** lo propone a
 partir de los documentos ya aprobados de esa plantilla. Antes de generar se puede probar
 la conexión con **Probar conexión**.
+
+### Ollama con GPU
+
+Un modelo local sin GPU redacta a unos **7 tokens/s**; con la tarjeta en uso pasa de
+**70**. El despliegue está en [`deploy/ollama/docker-compose.yml`](deploy/ollama/docker-compose.yml):
+
+```bash
+docker compose -f deploy/ollama/docker-compose.yml up -d
+docker logs ollama | grep "inference compute"   # debe decir library=CUDA
+```
+
+La imagen está fijada a `ollama/ollama:0.20.0` a propósito: las versiones recientes
+exigen el driver NVIDIA **≥ 550** y, con el 535, caen a CPU sin más aviso que un
+«NVIDIA driver too old» en el log. Si actualizas el driver, puedes volver a `latest`.
+
+Para documentos completos conviene `qwen2.5:14b`: el 7B ignora el esquema y devuelve
+`data` vacío. El 14B entra en una GPU de 16 GB y rellena destinatario, remitente, asunto
+y fecha.
 
 ## Exportación
 

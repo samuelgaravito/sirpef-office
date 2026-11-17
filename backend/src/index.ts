@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { env } from './env.js';
 import { sql } from './db/index.js';
 import { startSvaSyncScheduler, stopSvaSyncScheduler } from './lib/sva-sync.js';
+import { closeAiDispatcher } from './modules/ai/providers.js';
 import { startRealtimeListener, stopRealtimeListener } from './modules/realtime/hub.js';
 
 async function main(): Promise<void> {
@@ -13,6 +14,7 @@ async function main(): Promise<void> {
     try {
       await stopRealtimeListener(app.log);
       await app.close();
+      await closeAiDispatcher();
       await sql.end({ timeout: 5 });
     } finally {
       process.exit(0);
