@@ -22,10 +22,13 @@ const props = withDefaults(
   { checking: false, model: null, busy: false, error: '' },
 );
 
-const emit = defineEmits<{ submit: [text: string] }>();
+const emit = defineEmits<{ submit: [text: string, mode: AiBarMode] }>();
+
+type AiBarMode = 'draft' | 'ask';
 
 const auth = useAuthStore();
 const text = ref('');
+const mode = ref<AiBarMode>('draft');
 const field = ref<HTMLTextAreaElement | null>(null);
 const inputId = 'home-ai-prompt';
 const hintId = 'home-ai-prompt-hint';
@@ -34,7 +37,18 @@ const canSubmit = computed(
   () => props.configured && !props.busy && text.value.trim().length >= 3,
 );
 
-const placeholder = 'Pídele un documento a la IA…';
+const placeholder = computed(() =>
+  mode.value === 'draft'
+    ? 'Pídele un documento a la IA…'
+    : 'Pregunta por tus documentos: «¿cuántas notas envié este mes?»',
+);
+
+/** Cambiar de modo conserva lo escrito: se suele reformular. */
+function setMode(next: AiBarMode): void {
+  if (props.busy) return;
+  mode.value = next;
+  void nextTick(() => field.value?.focus({ preventScroll: true }));
+}
 
 /** El campo crece con el texto hasta unas tres líneas. */
 function resize(): void {
@@ -46,7 +60,7 @@ function resize(): void {
 
 function submit(): void {
   if (!canSubmit.value) return;
-  emit('submit', text.value.trim());
+  emit('submit', text.value.trim(), mode.value);
 }
 
 function onKeydown(event: KeyboardEvent): void {
@@ -60,6 +74,35 @@ function onKeydown(event: KeyboardEvent): void {
   <div class="relative">
     <!-- Halo azul detrás de la píldora, como la pantalla de Gemini. -->
     <span class="ai-prompt-glow" aria-hidden="true" />
+
+    <div class="mb-2 flex items-center gap-1 px-1" role="tablist" aria-label="Modo del asistente">
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="mode === 'draft'"
+        :class="[
+          'rounded-full px-3 py-1 text-[11.5px] font-medium transition-colors disabled:opacity-50',
+          mode === 'draft' ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white/85',
+        ]"
+        :disabled="busy"
+        @click="setMode('draft')"
+      >
+        Redactar
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="mode === 'ask'"
+        :class="[
+          'rounded-full px-3 py-1 text-[11.5px] font-medium transition-colors disabled:opacity-50',
+          mode === 'ask' ? 'bg-white/15 text-white' : 'text-white/60 hover:text-white/85',
+        ]"
+        :disabled="busy"
+        @click="setMode('ask')"
+      >
+        Consultar
+      </button>
+    </div>
 
     <form
       class="ai-prompt"
@@ -97,7 +140,15 @@ function onKeydown(event: KeyboardEvent): void {
         type="submit"
         class="grid size-9 shrink-0 place-items-center rounded-full bg-[#06e3bd] text-navy shadow-[0_0_26px_-6px_rgba(6,227,189,0.75)] transition-colors hover:bg-[#3af0cd] disabled:bg-white/12 disabled:text-white/40 disabled:shadow-none"
         :disabled="!canSubmit"
-        :aria-label="busy ? 'Eligiendo la plantilla' : 'Redactar con IA'"
+        :aria-label="
+          busy
+            ? mode === 'draft'
+              ? 'Eligiendo la plantilla'
+              : 'Consultando'
+            : mode === 'draft'
+              ? 'Redactar con IA'
+              : 'Consultar con IA'
+        "
       >
         <Loader2 v-if="busy" class="size-4 animate-spin" />
         <ArrowUp v-else class="size-4" />
@@ -121,8 +172,14 @@ function onKeydown(event: KeyboardEvent): void {
         </RouterLink>
         <span v-else class="text-white/55">Pide a un administrador que la active.</span>
       </p>
-      <p v-else-if="busy" class="text-white/80">Eligiendo la plantilla y preparando el editor…</p>
+      <p v-else-if="busy" class="text-white/80">
+        {{ mode === 'draft' ? 'Eligiendo la plantilla y preparando el editor…' : 'Consultando tus documentos…' }}
+      </p>
       <p v-else-if="error" class="text-[#ffb4ab]" role="alert">{{ error }}</p>
+      <p v-else-if="mode === 'ask'">
+        Pregunta lo que quieras sobre tus documentos; las cifras salen de la base.
+        <span class="text-white/40">Ej.: «¿cuántos memorándums envié en noviembre?».</span>
+      </p>
       <p v-else>
         La IA elige la plantilla y redacta; tú revisas.
         <span class="text-white/40">Ej.: «acta del lunes con los acuerdos».</span>

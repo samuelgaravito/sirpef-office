@@ -1012,9 +1012,42 @@ POST /api/ai/choose-template  { prompt }
 | `openai` | `POST {baseUrl}/chat/completions` | Compatible con Azure, OpenRouter, LM Studio, vLLM… |
 | `anthropic` | `POST https://api.anthropic.com/v1/messages` | Cabecera `anthropic-version`. |
 | `gemini` | `POST …/v1beta/models/{model}:generateContent` | `responseMimeType: application/json`. |
-| `ollama` | `POST {baseUrl}/api/chat` | `format: 'json'`, sin clave. |
+| `ollama` | `POST {baseUrl}/api/chat` | `format: <esquema JSON>` (salidas estructuradas) o `'json'`; sin clave. |
 
-Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_ERROR`).
+Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_PROVIDER_ERROR`,
+`AI_UNREACHABLE`, `AI_EMPTY`, `AI_BAD_RESPONSE`).
+
+### 8.6 Modo consulta
+
+Preguntas en lenguaje natural sobre los documentos: «¿cuántas notas de entrega envié este
+mes?», «búscame la de Samuel Carico», «¿cuántos tipos de documento firmé?».
+
+```text
+POST /api/ai/ask  { question }
+  → { answer, filters, total, groups: [{ key, label, count }], results: [{ id, title, docType,
+      status, docNumber, updatedAt }] }
+```
+
+El modelo **no escribe SQL ni ve la base**: solo traduce la pregunta a un objeto de filtros
+(`intent`, `groupBy`, `scope`, `docTypes`, `statuses`, `templateName`, `recipient`, `text`,
+`from`, `to`, `approvedByMe`, `limit`). El servidor:
+
+1. **Valida** los filtros de forma tolerante: un `limit` fuera de rango se recorta, un estado
+   inventado se descarta y cada campo inválido cae a su valor por defecto. Un solo campo raro
+   no invalida la consulta entera.
+2. **Ejecuta** la consulta con la visibilidad del usuario (propias o compartidas con él),
+   reutilizando los filtros del listado de documentos. «Dirigidos a X» busca en las claves de
+   persona de las plantillas (`receptor`, `destinatario`, `nombre`…) sin distinguir tildes.
+3. **Responde** con una frase construida desde el resultado real: las cifras nunca salen del
+   texto del modelo.
+
+`intent = count` admite `groupBy` por tipo o por estado. `firmé` se interpreta como
+documentos propios en estado `final`/`sent`/`approved`; `aprobé`, como documentos con una
+aprobación del usuario en `document_messages.approved_by_id`.
+
+Si el modelo no devuelve un JSON utilizable, se cae a una búsqueda por texto de la pregunta
+completa. En la interfaz es un conmutador **Redactar / Consultar** en la barra del panel de
+trabajo; los resultados son tarjetas que abren el documento.
 
 ---
 
