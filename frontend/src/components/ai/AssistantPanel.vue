@@ -8,6 +8,8 @@ const props = withDefaults(
   defineProps<{
     messages: AiDraftMessage[];
     busy?: boolean;
+    /** Caracteres que lleva escritos el modelo (0 = aún pensando). */
+    progress?: number;
     error?: string;
     warnings?: string[];
     questions?: string[];
@@ -19,9 +21,12 @@ const props = withDefaults(
     disabledReason?: string;
     /** Identificador único del campo de texto (hay dos paneles: escritorio y móvil). */
     inputId?: string;
+    /** Prompt que llega desde la barra rápida. */
+    prefill?: string;
   }>(),
   {
     busy: false,
+    progress: 0,
     error: '',
     warnings: () => [],
     questions: () => [],
@@ -30,6 +35,7 @@ const props = withDefaults(
     enabled: true,
     disabledReason: '',
     inputId: 'assistant-input',
+    prefill: '',
   },
 );
 
@@ -40,6 +46,16 @@ const emit = defineEmits<{
 
 const input = ref('');
 const list = ref<HTMLElement | null>(null);
+
+watch(
+  () => props.prefill,
+  (value) => {
+    if (!value) return;
+    input.value = value;
+    void nextTick(() => document.getElementById(props.inputId)?.focus());
+  },
+  { immediate: true },
+);
 
 const suggestions = [
   'Redacta el documento con un tono formal y breve.',
@@ -141,7 +157,10 @@ function onKeydown(event: KeyboardEvent): void {
 
       <div v-if="busy" class="flex items-center gap-2 rounded-xl border border-hairline bg-surface-muted/40 px-3 py-2.5 text-[12.5px] text-ink-muted">
         <Loader2 class="size-3.5 animate-spin text-accent" />
-        Redactando la propuesta…
+        <span>
+          {{ progress > 0 ? 'Redactando la propuesta' : 'Pensando la propuesta' }}
+          <span v-if="progress > 0" class="tabular-nums text-ink-faint">· {{ progress }} caracteres</span>
+        </span>
       </div>
 
       <div v-if="questions.length" class="rounded-xl border border-warning/30 bg-warning-soft/50 px-3 py-2.5">

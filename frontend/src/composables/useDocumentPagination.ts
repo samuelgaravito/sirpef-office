@@ -20,6 +20,61 @@ export interface UseDocumentPaginationOptions {
   gapPx?: number;
   /** Retardo de estabilización tras una edición. */
   debounceMs?: number;
+  /**
+   * Holgura (px) con la que se conserva un salto ya existente. Evita que un
+   * párrafo que roza el borde de la hoja salte entre dos páginas al teclear.
+   */
+  hysteresisPx?: number;
+}
+
+interface CaretAnchor {
+  scroller: HTMLElement | null;
+  top: number;
+}
+
+function findScrollParent(element: HTMLElement): HTMLElement | null {
+  let current = element.parentElement;
+  while (current) {
+    const overflowY = window.getComputedStyle(current).overflowY;
+    if ((overflowY === 'auto' || overflowY === 'scroll') && current.scrollHeight > current.clientHeight) {
+      return current;
+    }
+    current = current.parentElement;
+  }
+  return (document.scrollingElement as HTMLElement | null) ?? null;
+}
+
+/** Posición visual del cursor antes de mover los espaciadores. */
+function captureCaret(editor: Editor): CaretAnchor | null {
+  const view = editor.view;
+  if (!editor.isFocused || view.composing) return null;
+  try {
+    const coords = view.coordsAtPos(view.state.selection.head);
+    return { scroller: findScrollParent(view.dom), top: coords.top };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compensa el desplazamiento del flujo para que el cursor no cambie de sitio
+ * en pantalla cuando la paginación mueve un bloque de hoja.
+ */
+function restoreCaret(editor: Editor, anchor: CaretAnchor): void {
+  if (!anchor.scroller) return;
+  const bounds = anchor.scroller.getBoundingClientRect();
+  if (anchor.top < bounds.top || anchor.top > bounds.bottom) return;
+
+  try {
+    const view = editor.view;
+    // Fuerza el reflujo con las nuevas alturas antes de medir de nuevo.
+    void view.dom.getBoundingClientRect();
+    const next = view.coordsAtPos(view.state.selection.head).top;
+    const delta = next - anchor.top;
+    if (Math.abs(delta) > 0.5) anchor.scroller.scrollTop += delta;
+  } catch {
+    /* La selección puede no ser medible durante una transición. */
+  }
 }
 
 /**
@@ -39,6 +94,7 @@ export function useDocumentPagination(options: UseDocumentPaginationOptions) {
 
   const gapPx = options.gapPx ?? DEFAULT_PAGE_GAP_PX;
   const debounceMs = options.debounceMs ?? 140;
+  const hysteresisPx = options.hysteresisPx ?? 8;
 
   /** Huecos que están realmente aplicados en el DOM. */
   let appliedBreaks: PageBreakLayout[] = [];
@@ -77,12 +133,15 @@ export function useDocumentPagination(options: UseDocumentPaginationOptions) {
     if (!options.enabled.value || !editor || editor.isDestroyed || !sheet?.isConnected) {
       return;
     }
+    // No medir a mitad de una composición IME: el DOM aún no es estable.
+    if (editor.view.composing) return;
 
     const geometry = measurePageGeometry(sheet, options.pageHeightPx.value);
     if (geometry.capacityPx < 48) return;
 
     const next = buildPaginationLayout(editor, geometry, {
       gapPx,
+      hysteresisPx,
       previousBreaks: appliedBreaks,
     });
 
@@ -110,8 +169,10 @@ export function useDocumentPagination(options: UseDocumentPaginationOptions) {
       });
 
     if (!sameBreaks) {
+      const anchor = captureCaret(editor);
       appliedBreaks = next.breaks;
       setPaginationDecorations(editor, next.breaks);
+      if (anchor) restoreCaret(editor, anchor);
     }
 
     if (!sameBreaks || !samePages) {

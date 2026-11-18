@@ -146,6 +146,115 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return payload as T;
 }
 
+/**
+ * Petición que responde en NDJSON: avances durante la generación y un
+ * resultado final.
+ *
+ * La usa el asistente de redacción. El modelo local tarda en escribir el
+ * documento completo, así que sin esto la pantalla se quedaba muda hasta el
+ * final.
+ */
+async function requestStream<T>(
+  path: string,
+  body: unknown,
+  onProgress?: (chars: number) => void,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Accept: 'application/x-ndjson',
+    'Content-Type': 'application/json',
+  };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  let response: Response;
+  try {
+    response = await fetch(buildUrl(path), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      credentials: 'include',
+    });
+  } catch (error) {
+    throw networkError(error);
+  }
+
+  if (response.status === 401) {
+    const renewed = await renewSession();
+    if (renewed) return requestStream<T>(path, body, onProgress);
+  }
+
+  if (!response.ok) {
+    // Las comprobaciones previas (sesión, permisos, versión) responden JSON
+    // normal: el flujo solo se abre cuando todo ha pasado.
+    const payload = (await response.json().catch(() => null)) as ApiErrorShape | null;
+    throw new ApiError(
+      response.status,
+      payload?.error ?? 'ERROR',
+      payload?.message ?? 'Ocurrió un error inesperado. Inténtalo de nuevo.',
+      payload?.details,
+      payload?.reference,
+    );
+  }
+
+  if (!response.body) {
+    throw new ApiError(0, 'NETWORK_ERROR', 'El servidor no devolvió datos. Inténtalo de nuevo.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: T | null = null;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf('\n');
+      if (!line) continue;
+
+      let event: { type?: string; chars?: number; result?: T; error?: ApiErrorShape };
+      try {
+        event = JSON.parse(line) as typeof event;
+      } catch {
+        continue;
+      }
+
+      if (event.type === 'progress') {
+        onProgress?.(event.chars ?? 0);
+        continue;
+      }
+
+      if (event.type === 'error') {
+        const detail = event.error;
+        throw new ApiError(
+          400,
+          detail?.error ?? 'ERROR',
+          detail?.message ?? 'No se pudo redactar con IA. Inténtalo de nuevo.',
+          detail?.details,
+          detail?.reference,
+        );
+      }
+
+      if (event.type === 'result' && event.result !== undefined) result = event.result;
+    }
+  }
+
+  if (result === null) {
+    throw new ApiError(
+      0,
+      'NETWORK_ERROR',
+      'La respuesta de la IA llegó incompleta. Inténtalo de nuevo en unos segundos.',
+    );
+  }
+
+  return result;
+}
+
 export const api = {
   get: <T>(path: string, query?: RequestOptions['query']) => request<T>(path, { query }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
@@ -154,6 +263,9 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   /** Petición sin reintento automático (para la propia renovación de sesión). */
   raw: <T>(path: string, options: RequestOptions = {}) => request<T>(path, options),
+  /** Petición que informa del avance mientras llega el resultado final. */
+  stream: <T>(path: string, body: unknown, onProgress?: (chars: number) => void) =>
+    requestStream<T>(path, body, onProgress),
 };
 
 /** Descarga un archivo exportado respetando el nombre que envía el servidor. */

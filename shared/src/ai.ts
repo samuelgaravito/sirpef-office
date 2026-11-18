@@ -7,7 +7,7 @@
  * desacoplada y no hace falta una tabla de conversaciones para empezar.
  */
 
-import type { DocType, JSONContent, VariableDef, VariableValues } from './types.js';
+import type { DocType, DocumentStatus, JSONContent, VariableDef, VariableValues } from './types.js';
 
 /** Límites que comparten la validación del servidor y la interfaz. */
 export const AI_DRAFT_MAX_MESSAGES = 24;
@@ -45,6 +45,38 @@ export interface AiDraftResult {
   /** Avisos sobre suposiciones o campos incompletos. */
   warnings: string[];
   /** Modelo que generó la propuesta (para mostrarlo en la interfaz). */
+  model: string;
+}
+
+/** Límites del asistente inline de la barra inferior. */
+export const AI_INLINE_MAX_INSTRUCTION_CHARS = 4_000;
+export const AI_INLINE_MAX_CONTEXT_CHARS = 12_000;
+
+/** Contexto que acompaña a una instrucción inline. */
+export interface AiInlineContext {
+  selection?: string;
+  before?: string;
+  after?: string;
+  docType?: DocType;
+  title?: string;
+  templateName?: string;
+}
+
+/** Petición de un fragmento de texto para insertar o reemplazar. */
+export interface AiInlineRequest {
+  documentId?: string;
+  templateId?: string;
+  instruction: string;
+  mode?: 'insert' | 'replace';
+  context?: AiInlineContext;
+}
+
+/** Respuesta del asistente inline. */
+export interface AiInlineResult {
+  reply: string;
+  content: JSONContent;
+  warnings: string[];
+  questions: string[];
   model: string;
 }
 
@@ -213,10 +245,88 @@ function sanitizeNode(raw: unknown, depth: number, state: SanitizeState): JSONCo
 }
 
 /**
+ * Coloca cada nodo donde el esquema de TipTap lo admite.
+ *
+ * El modelo a veces anida un bloque (una tabla, una lista, otro párrafo)
+ * dentro de un párrafo. `sanitizeNode` no lo detecta —todos los tipos son
+ * permitidos— pero `setContent` lanzaba «Invalid content for node type
+ * paragraph» y la hoja se quedaba con la plantilla sin aplicar. Aquí los
+ * bloques mal anidados suben al nivel de su padre en vez de perderse.
+ */
+function normalizeStructure(nodes: JSONContent[]): JSONContent[] {
+  const isInline = (node: JSONContent): boolean =>
+    node.type === 'text' || node.type === 'hardBreak';
+
+  /** Envuelve texto suelto en párrafos: celdas, citas y elementos de lista. */
+  const requireBlock = (children: JSONContent[]): JSONContent[] => {
+    const blocks: JSONContent[] = [];
+    let inline: JSONContent[] = [];
+
+    for (const child of children) {
+      if (isInline(child)) {
+        inline.push(child);
+        continue;
+      }
+      if (inline.length > 0) {
+        blocks.push({ type: 'paragraph', content: inline });
+        inline = [];
+      }
+      blocks.push(child);
+    }
+    if (inline.length > 0) blocks.push({ type: 'paragraph', content: inline });
+    if (blocks.length === 0) blocks.push({ type: 'paragraph' });
+    return blocks;
+  };
+
+  const out: JSONContent[] = [];
+
+  for (const node of nodes) {
+    const children = normalizeStructure(node.content ?? []);
+
+    switch (node.type) {
+      case 'paragraph':
+      case 'heading': {
+        // Solo texto y saltos dentro; lo demás sube detrás del párrafo.
+        out.push({ ...node, content: children.filter(isInline) });
+        out.push(...children.filter((child) => !isInline(child)));
+        continue;
+      }
+      case 'table':
+        out.push({ ...node, content: children.filter((child) => child.type === 'tableRow') });
+        continue;
+      case 'tableRow':
+        out.push({
+          ...node,
+          content: children.filter(
+            (child) => child.type === 'tableCell' || child.type === 'tableHeader',
+          ),
+        });
+        continue;
+      case 'bulletList':
+      case 'orderedList':
+        out.push({ ...node, content: children.filter((child) => child.type === 'listItem') });
+        continue;
+      case 'listItem':
+      case 'tableCell':
+      case 'tableHeader':
+      case 'blockquote':
+        out.push({ ...node, content: requireBlock(children) });
+        continue;
+      default:
+        out.push(children.length > 0 ? { ...node, content: children } : { ...node });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Normaliza la respuesta del modelo a un documento TipTap seguro.
  *
  * - Solo admite los nodos y marcas que el editor sabe renderizar.
  * - Recorta profundidad, número de nodos y longitud del texto.
+ * - Reubica los bloques mal anidados (el editor rechaza un `table` dentro de
+ *   un `paragraph`).
  * - Si no queda nada utilizable, devuelve un párrafo vacío.
  */
 export function sanitizeAiContent(raw: unknown): JSONContent {
@@ -245,14 +355,10 @@ export function sanitizeAiContent(raw: unknown): JSONContent {
   const clean = sanitizeNode(value, 0, state);
 
   if (!clean) return { type: 'doc', content: [{ type: 'paragraph' }] };
-  if (clean.type === 'doc') {
-    return {
-      type: 'doc',
-      content: clean.content && clean.content.length > 0 ? clean.content : [{ type: 'paragraph' }],
-    };
-  }
 
-  return { type: 'doc', content: [clean] };
+  const body = clean.type === 'doc' ? (clean.content ?? []) : [clean];
+  const content = normalizeStructure(body);
+  return { type: 'doc', content: content.length > 0 ? content : [{ type: 'paragraph' }] };
 }
 
 /** Texto plano de un documento TipTap, útil para avisos y ejemplos de estilo. */
@@ -325,4 +431,61 @@ export function contentHasVariable(content: JSONContent, key: string): boolean {
 
   walk(content);
   return found;
+}
+
+/* ───────────────────────── Modo consulta (A8.6) ───────────────────────── */
+
+/**
+ * Filtros que el modelo extrae de una pregunta en lenguaje natural.
+ *
+ * El modelo **no escribe SQL**: solo rellena estos campos. La consulta la
+ * ejecuta el servidor con las mismas reglas de visibilidad que el listado, y
+ * las cifras de la respuesta salen de la base, nunca del texto del modelo.
+ */
+export interface AiAskFilters {
+  intent: 'count' | 'list' | 'find';
+  /** Agrupación del conteo; `none` devuelve un total. */
+  groupBy: 'none' | 'docType' | 'status';
+  scope: 'mine' | 'all';
+  docTypes: DocType[];
+  statuses: DocumentStatus[];
+  /** Nombre de la plantilla, si la pregunta la menciona. */
+  templateName: string;
+  /** Persona a la que va dirigido el documento. */
+  recipient: string;
+  /** Texto libre para buscar en título, descripción y datos. */
+  text: string;
+  /** Rango de fechas en ISO (`AAAA-MM-DD`); vacío = sin límite. */
+  from: string;
+  to: string;
+  /** Documentos que el usuario aprobó como revisor. */
+  approvedByMe: boolean;
+  limit: number;
+}
+
+/** Un grupo del conteo (por tipo o por estado). */
+export interface AiAskGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/** Documento devuelto por el modo consulta. */
+export interface AiAskRow {
+  id: string;
+  title: string;
+  docType: DocType;
+  status: DocumentStatus;
+  docNumber: string | null;
+  updatedAt: string;
+}
+
+export interface AiAskResult {
+  /** Respuesta en español, construida a partir del resultado real. */
+  answer: string;
+  /** Filtros aplicados, en lenguaje legible. */
+  filters: string;
+  total: number;
+  groups: AiAskGroup[];
+  results: AiAskRow[];
 }

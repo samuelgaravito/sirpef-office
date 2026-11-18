@@ -89,25 +89,36 @@ async function main() {
 
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
-    await page.waitForSelector('text/Continuar donde lo dejé', { timeout: 15000 });
-    await page.waitForSelector('text/Esperando al jefe', { timeout: 15000 });
+    await page.waitForSelector('text/¿Por dónde empezamos', { timeout: 15000 });
+    await page.waitForSelector('#home-ai-prompt', { timeout: 15000 });
+    await page.waitForSelector('text/Tus módulos', { timeout: 15000 });
     await wait(600);
-    const homeDay = await page.evaluate(() => ({
-      create: Array.from(document.querySelectorAll('button')).some((button) =>
-        button.textContent?.includes('Crear documento'),
-      ),
-      drafts: Boolean(document.body.textContent?.includes('Continuar donde lo dejé')),
-    }));
+    const homeDay = await page.evaluate(() => {
+      const text = document.body.textContent ?? '';
+      return {
+        create: Array.from(document.querySelectorAll('button')).some((button) =>
+          button.textContent?.includes('Crear documento'),
+        ),
+        modules: ['Bandeja', 'Documentos', 'Plantillas', 'Diseños'].every((label) =>
+          text.includes(label),
+        ),
+      };
+    });
     console.log(
-      homeDay.create && homeDay.drafts
-        ? '  · inicio con «Tu día», borradores y botón Crear documento'
-        : '  · falta el panel «Tu día» en Inicio',
+      homeDay.create && homeDay.modules
+        ? '  · inicio con titular, píldora de IA y los 4 módulos'
+        : '  · falta contenido en Inicio',
     );
-    if (!homeDay.create || !homeDay.drafts) errors.push('Inicio no muestra el panel «Tu día»');
+    if (!homeDay.create || !homeDay.modules) errors.push('Inicio no muestra la píldora de IA y los 4 módulos');
     await shot(page, '02-inicio');
 
     console.log('→ Documentos');
-    await page.click('a[href="/documents"]');
+    await page.evaluate(() => {
+      const tile = Array.from(document.querySelectorAll('button')).find((button) =>
+        button.textContent?.includes('Crea, edita y comparte documentos'),
+      );
+      if (tile) tile.click();
+    });
     await page.waitForSelector('input[placeholder="Buscar por título o descripción…"]');
     await page.waitForSelector('article iframe', { timeout: 15000 });
     await wait(1400);
@@ -283,7 +294,7 @@ async function main() {
 
     console.log('→ Crear documento desde el inicio');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Continuar donde lo dejé');
+    await page.waitForSelector('text/¿Por dónde empezamos');
     await wait(600);
     await clickText(page, 'button', 'Crear documento');
     await page.waitForFunction(
@@ -404,7 +415,7 @@ async function main() {
 
     console.log('→ Nuevo documento en blanco');
     await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
-    await page.waitForSelector('text/Continuar donde lo dejé');
+    await page.waitForSelector('text/¿Por dónde empezamos');
     await wait(600);
     await clickText(page, 'button', 'Crear documento');
     await page.waitForFunction(

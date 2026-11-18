@@ -54,9 +54,15 @@ export interface BuildPaginationOptions {
   epsilonPx?: number;
   /**
    * Espaciadores que hay actualmente en el DOM. Se restan de las mediciones
-   * para que el cálculo sea independiente de la paginación visible.
+   * para que el cálculo sea independiente de la paginación visible y sirven
+   * para conservar los saltos que rozan el borde de la hoja.
    */
   previousBreaks?: readonly PageBreakLayout[];
+  /**
+   * Holgura (px) con la que un salto existente se mantiene aunque el bloque
+   * quepa justo en la página anterior. Evita el parpadeo entre dos páginas.
+   */
+  hysteresisPx?: number;
   pageBreakNodeName?: string;
 }
 
@@ -152,7 +158,11 @@ export function buildPaginationLayout(
     isFirstContent = false;
   }
 
-  const packed = packBlocks(blocks, geometry.capacityPx, epsilonPx, pendingForceBreak);
+  const stickyBreaks = new Set((options.previousBreaks ?? []).map((item) => item.pos));
+  const packed = packBlocks(blocks, geometry.capacityPx, epsilonPx, pendingForceBreak, {
+    stickyBreaks,
+    hysteresisPx: options.hysteresisPx ?? 0,
+  });
 
   const pageUseds = [...packed.pageUseds];
   if (packed.trailingBlankPage) pageUseds.push(0);

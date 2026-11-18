@@ -33,7 +33,7 @@ import { computed, ref, watchEffect } from 'vue';
 
 import TableInsertMenu from '@/components/editor/TableInsertMenu.vue';
 import TableToolbar from '@/components/editor/TableToolbar.vue';
-import { INLINE_FONT_OPTIONS } from '@sirpefoffice/shared';
+import { INLINE_FONT_OPTIONS, LINE_HEIGHT_PRESETS } from '@sirpefoffice/shared';
 
 const props = defineProps<{ editor: Editor | null; pageTokens?: boolean }>();
 const emit = defineEmits<{ image: [] }>();
@@ -248,6 +248,35 @@ function setFontSize(value: string): void {
   else run((chain) => chain.setFontSize(`${value}pt`));
 }
 
+/**
+ * Aplica el interlineado al bloque completo cuando no hay selección.
+ *
+ * `setLineHeight` de TipTap es una marca de texto: con el cursor suelto solo
+ * afectaría a lo que se escriba después. Seleccionar el bloque hace que el
+ * cambio se vea de inmediato y que el PDF/DOCX lo conserven.
+ */
+function applyToCurrentBlock(action: (chain: ChainedCommands) => ChainedCommands): void {
+  const editor = props.editor;
+  if (!editor) return;
+  const { $from, empty } = editor.state.selection;
+  if (!empty || !$from.parent.isTextblock) {
+    action(editor.chain().focus()).run();
+    return;
+  }
+  const from = $from.start();
+  const to = $from.end();
+  const pos = $from.pos;
+  action(editor.chain().focus().setTextSelection({ from, to }))
+    .setTextSelection(pos)
+    .run();
+}
+
+function setLineHeight(value: string): void {
+  applyToCurrentBlock((chain) =>
+    value ? chain.setLineHeight(value) : chain.unsetLineHeight(),
+  );
+}
+
 function setColor(event: Event): void {
   const value = (event.target as HTMLInputElement).value;
   run((chain) => chain.setColor(value));
@@ -305,6 +334,13 @@ const fontFamilyValue = computed(() => {
   const family = props.editor?.getAttributes('textStyle').fontFamily as string | undefined;
   return family ?? '';
 });
+
+const lineHeightValue = computed(() => {
+  void tick.value;
+  const raw = props.editor?.getAttributes('textStyle').lineHeight;
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) && numeric > 0 ? String(numeric) : '';
+});
 </script>
 
 <template>
@@ -329,6 +365,19 @@ const fontFamilyValue = computed(() => {
     <select class="tool-select w-[62px]" :value="fontSizeValue" @change="setFontSize(($event.target as HTMLSelectElement).value)">
       <option value="">Auto</option>
       <option v-for="size in fontSizes" :key="size" :value="size">{{ size }}</option>
+    </select>
+
+    <select
+      class="tool-select w-[84px]"
+      :value="lineHeightValue"
+      title="Interlineado del párrafo"
+      aria-label="Interlineado"
+      @change="setLineHeight(($event.target as HTMLSelectElement).value)"
+    >
+      <option value="">Diseño</option>
+      <option v-for="preset in LINE_HEIGHT_PRESETS" :key="preset.value" :value="String(preset.value)">
+        {{ preset.hint }}
+      </option>
     </select>
 
     <span class="tool-sep" />

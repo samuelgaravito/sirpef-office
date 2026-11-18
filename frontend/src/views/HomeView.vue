@@ -1,27 +1,11 @@
 <script setup lang="ts">
-import {
-  ArrowRight,
-  BarChart3,
-  Clock,
-  FileText,
-  Inbox,
-  LayoutTemplate,
-  Loader2,
-  Palette,
-  Plus,
-  Search,
-  Send,
-} from 'lucide-vue-next';
-import { computed, onMounted, onUnmounted, ref, watch, type Component } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ArrowRight, FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 'lucide-vue-next';
+import { computed, onMounted, ref, type Component } from 'vue';
+import { useRouter } from 'vue-router';
 
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
-import ActivityFocus from '@/components/home/ActivityFocus.vue';
 import AiPromptBar from '@/components/home/AiPromptBar.vue';
 import ModuleDock from '@/components/home/ModuleDock.vue';
-import OnboardingCard from '@/components/home/OnboardingCard.vue';
-import WorkspaceGauge from '@/components/home/WorkspaceGauge.vue';
-import WorkspaceStatsDialog from '@/components/home/WorkspaceStatsDialog.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useAiStatus } from '@/composables/useAiStatus';
@@ -29,15 +13,14 @@ import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { describeError } from '@/lib/error-message';
-import { relativeTime } from '@/lib/labels';
+import { docTypeLabel, formatDate, STATUS_LABELS } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import type { AiTemplateChoice } from '@sirpefoffice/shared';
-import type { DocumentSummary, InboxMessageSummary, ListResponse } from '@/types';
+import type { AiAskResult, AiTemplateChoice } from '@sirpefoffice/shared';
+import type { ListResponse } from '@/types';
 
 const auth = useAuthStore();
 const router = useRouter();
-const route = useRoute();
 const toast = useToast();
 const { creating, createDocument } = useCreateDocument();
 const { totalCount, pendingCount, refresh: refreshInbox } = useInboxBadge();
@@ -46,73 +29,16 @@ const { status: aiStatus, loading: aiLoading, load: loadAiStatus } = useAiStatus
 /** Encargo enviado desde la barra de IA: se está eligiendo plantilla. */
 const aiPromptBusy = ref(false);
 const aiPromptError = ref('');
+/** Respuesta del modo consulta. */
+const aiAnswer = ref<AiAskResult | null>(null);
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
 /** Selector de modelo: la puerta de entrada para crear un documento. */
 const pickerOpen = ref(false);
-/** Panel estadístico que se abre desde el círculo del gauge. */
-const statsOpen = ref(false);
 
 /** Punto de la ventana desde el que "nace" el panel del módulo. */
 const panelOrigin = ref<{ x: number; y: number } | null>(null);
-
-const pendingItems = ref<InboxMessageSummary[]>([]);
-const pendingLoading = ref(false);
-const pendingUpdatedAt = ref<Date | null>(null);
-
-/** Últimos documentos en los que trabajó la persona (borradores o enviados). */
-const recentDocuments = ref<DocumentSummary[]>([]);
-/** Envíos propios esperando la aprobación del jefe. */
-const waitingApproval = ref<InboxMessageSummary[]>([]);
-/** Borradores que solo viven en este navegador (aún sin fila en el servidor). */
-const localDrafts = ref<LocalDraftItem[]>([]);
-const activityLoading = ref(false);
-
-interface LocalDraftItem {
-  key: string;
-  title: string;
-  savedAt: string;
-  templateId: string | null;
-}
-
-const DRAFT_PREFIX = 'sirpef:doc-draft:';
-
-/** Lee los borradores locales para que no queden escondidos en el navegador. */
-function readLocalDrafts(): LocalDraftItem[] {
-  const found: LocalDraftItem[] = [];
-  try {
-    for (let index = 0; index < window.localStorage.length; index += 1) {
-      const key = window.localStorage.key(index);
-      if (!key?.startsWith(DRAFT_PREFIX)) continue;
-      const raw = window.localStorage.getItem(key);
-      if (!raw) continue;
-      const draft = JSON.parse(raw) as { title?: string; savedAt?: string };
-      const suffix = key.slice(DRAFT_PREFIX.length);
-      found.push({
-        key,
-        title: draft.title?.trim() || 'Documento sin título',
-        savedAt: draft.savedAt ?? '',
-        templateId: suffix === 'blank' ? null : suffix,
-      });
-    }
-  } catch {
-    // Almacenamiento no disponible: no hay borradores locales que mostrar.
-  }
-  return found
-    .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
-    .slice(0, 3);
-}
-
-function resumeLocalDraft(draft: LocalDraftItem): void {
-  void router.push({
-    name: 'document-new',
-    query: draft.templateId ? { template: draft.templateId } : {},
-  });
-}
-
-const displayedDocuments = ref(0);
-let countFrame: number | undefined;
 
 const greeting = computed(() => {
   const hour = new Date().getHours();
@@ -122,12 +48,25 @@ const greeting = computed(() => {
 });
 
 const firstName = computed(() => auth.user?.name?.split(/\s+/)[0] ?? '');
-const overlayOpen = computed(() => route.meta.overlay === true);
-const drafts = computed(() => counts.value.drafts);
+
+/** Titular del panel: la pregunta de arranque, personalizada. */
+const heading = computed(() =>
+  firstName.value ? `¿Por dónde empezamos, ${firstName.value}?` : '¿Por dónde empezamos?',
+);
+
 const canSeeDocuments = computed(() => auth.canSeeMenu('documents'));
 const canSeeTemplates = computed(() => auth.canSeeMenu('templates'));
 const canSeeDesigns = computed(() => auth.canSeeMenu('designs'));
 const canSeeInbox = computed(() => auth.canSeeMenu('inbox'));
+
+const summary = computed(() => {
+  if (!canSeeDocuments.value) return 'Accede a tus módulos desde aquí.';
+
+  const documents = counts.value.documents;
+  const drafts = counts.value.drafts;
+  const documentsLabel = `${documents} documento${documents === 1 ? '' : 's'} en tu espacio`;
+  return drafts > 0 ? `${documentsLabel} · ${drafts} en borrador` : documentsLabel;
+});
 
 interface ModuleTile {
   key: string;
@@ -164,7 +103,7 @@ const tiles = computed<ModuleTile[]>(() => {
       icon: FileText,
       route: 'documents',
       value: String(counts.value.documents),
-      caption: drafts.value > 0 ? `${drafts.value} en borrador` : 'Todo al día',
+      caption: counts.value.drafts > 0 ? `${counts.value.drafts} en borrador` : 'Todo al día',
     });
   }
 
@@ -195,110 +134,15 @@ const tiles = computed<ModuleTile[]>(() => {
   return list;
 });
 
-function prefersReducedMotion(): boolean {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
-/** Animación de conteo para el subtítulo del hero. */
-function animateDocuments(target: number): void {
-  if (countFrame !== undefined) cancelAnimationFrame(countFrame);
-  if (prefersReducedMotion()) {
-    displayedDocuments.value = target;
-    return;
-  }
-
-  const from = displayedDocuments.value;
-  const start = performance.now();
-  const duration = 650;
-
-  const step = (now: number): void => {
-    const progress = Math.min(1, (now - start) / duration);
-    const eased = 1 - Math.pow(1 - progress, 3);
-    displayedDocuments.value = Math.round(from + (target - from) * eased);
-    if (progress < 1) countFrame = requestAnimationFrame(step);
-  };
-
-  countFrame = requestAnimationFrame(step);
-}
-
 async function totalOf(path: string, params: Record<string, unknown>): Promise<number> {
   const data = await api.get<ListResponse<unknown>>(path, { ...params, pageSize: 1 });
   return data.total ?? data.items.length;
 }
 
-async function loadPending(): Promise<void> {
-  if (!canSeeInbox.value) return;
-  pendingLoading.value = true;
-  try {
-    const data = await api.get<ListResponse<InboxMessageSummary>>('/inbox', {
-      scope: 'received',
-      pageSize: 3,
-    });
-    pendingItems.value = data.items;
-    pendingUpdatedAt.value = new Date();
-  } catch {
-    // El foco de actividad es accesorio: si falla no rompe el panel.
-  } finally {
-    pendingLoading.value = false;
-  }
-}
-
-/** Últimos documentos y envíos esperando al jefe. */
-async function loadActivity(): Promise<void> {
-  activityLoading.value = true;
-  const tasks: Promise<unknown>[] = [];
-
-  if (canSeeDocuments.value) {
-    tasks.push(
-      api
-        .get<ListResponse<DocumentSummary>>('/documents', {
-          scope: 'all',
-          sort: 'updated',
-          pageSize: 5,
-        })
-        .then((data) => {
-          recentDocuments.value = data.items;
-        })
-        .catch(() => {
-          recentDocuments.value = [];
-        }),
-    );
-  }
-
-  if (canSeeInbox.value) {
-    tasks.push(
-      api
-        .get<ListResponse<InboxMessageSummary>>('/inbox', {
-          scope: 'sent',
-          status: 'pending_approval',
-          pageSize: 3,
-        })
-        .then((data) => {
-          waitingApproval.value = data.items;
-        })
-        .catch(() => {
-          waitingApproval.value = [];
-        }),
-    );
-  }
-
-  await Promise.allSettled(tasks);
-  localDrafts.value = readLocalDrafts();
-  activityLoading.value = false;
-}
-
-/**
- * Los últimos 5 documentos. Los borradores locales ocupan su lugar para que
- * la tarjeta nunca muestre más de cinco filas.
- */
-const visibleRecentDocuments = computed(() =>
-  recentDocuments.value.slice(0, Math.max(0, 5 - localDrafts.value.length)),
-);
-
 async function load(): Promise<void> {
   shellLoading.value = true;
   try {
-    const [documentsTotal, draftsTotal, designsData, templatesData] = await Promise.all([
+    const [documentsTotal, draftsTotal, designsTotal, templatesTotal] = await Promise.all([
       canSeeDocuments.value ? totalOf('/documents', {}) : Promise.resolve(0),
       canSeeDocuments.value ? totalOf('/documents', { status: 'draft' }) : Promise.resolve(0),
       canSeeDesigns.value
@@ -318,16 +162,11 @@ async function load(): Promise<void> {
     counts.value = {
       documents: documentsTotal,
       drafts: draftsTotal,
-      templates: templatesData,
-      designs: designsData,
+      templates: templatesTotal,
+      designs: designsTotal,
     };
-    animateDocuments(documentsTotal);
 
-    if (canSeeInbox.value) {
-      void refreshInbox();
-      void loadPending();
-    }
-    void loadActivity();
+    if (canSeeInbox.value) void refreshInbox();
   } catch (error) {
     toast.failure(error, 'No se pudo cargar el panel de inicio');
   } finally {
@@ -352,24 +191,38 @@ function onCreate(templateId: string | null): void {
  * La IA elige la plantilla que mejor encaja con el encargo y el editor abre el
  * asistente con ese primer mensaje ya enviado. Si falla, el texto se conserva.
  */
-async function onAiPrompt(prompt: string): Promise<void> {
+async function onAiPrompt(prompt: string, mode: 'draft' | 'ask' = 'draft'): Promise<void> {
   if (aiPromptBusy.value) return;
   if (!aiStatus.value?.configured) {
-    aiPromptError.value = 'La IA no está configurada. Actívala en Ajustes para redactar.';
+    aiPromptError.value = 'La IA no está configurada. Actívala en Ajustes para usar el asistente.';
     return;
   }
 
   aiPromptBusy.value = true;
   aiPromptError.value = '';
+  aiAnswer.value = null;
+
   try {
+    if (mode === 'ask') {
+      // Modo consulta: la pregunta se traduce a filtros y la cifra sale de la
+      // base. No se crea ni se modifica ningún documento.
+      aiAnswer.value = await api.post<AiAskResult>('/ai/ask', { question: prompt });
+      return;
+    }
+
     const choice = await api.post<AiTemplateChoice>('/ai/choose-template', { prompt });
     toast.success(`Plantilla elegida: ${choice.templateName}`);
     await createDocument(choice.templateId, { ai: true, prompt });
   } catch (error) {
-    aiPromptError.value = describeError(error, 'No se pudo elegir la plantilla').message;
+    aiPromptError.value = describeError(error, 'No se pudo completar la petición').message;
   } finally {
     aiPromptBusy.value = false;
   }
+}
+
+/** Abre un documento de la lista de resultados del modo consulta. */
+function openAnswerResult(id: string): void {
+  void router.push({ name: 'document', params: { id } });
 }
 
 /** Recuerda de qué tile sale el panel para anclar la animación. */
@@ -380,151 +233,36 @@ function rememberOrigin(event: PointerEvent): void {
   panelOrigin.value = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
-function openMessage(id: string): void {
-  void router.push({ name: 'inbox-message', params: { id } });
-}
-
-function openDocument(id: string): void {
-  void router.push({ name: 'document', params: { id } });
-}
-
-// Los contadores de la bandeja se refrescan por sondeo en `AppShell`; cuando
-// cambian, actualizamos también los chips del hero.
-watch(totalCount, () => {
-  if (canSeeInbox.value) void loadPending();
-});
-
 onMounted(() => {
   void load();
   void loadAiStatus();
-});
-
-onUnmounted(() => {
-  if (countFrame !== undefined) cancelAnimationFrame(countFrame);
 });
 </script>
 
 <template>
   <AppShell>
-    <div class="cockpit pb-16" :class="{ 'cockpit-pushed': overlayOpen }">
-      <!-- Hero -->
-      <section class="hero relative overflow-hidden text-white">
-        <div
-          class="hero-chevrons hero-chevrons--left pointer-events-none absolute inset-y-0 left-0 w-[28%]"
-          aria-hidden="true"
-        />
-        <div
-          class="hero-chevrons hero-chevrons--right pointer-events-none absolute inset-y-0 right-0 w-[52%]"
-          aria-hidden="true"
-        />
+    <div class="home">
+      <span class="home-glow" aria-hidden="true" />
 
-        <div
-          class="relative mx-auto w-full max-w-[1280px] px-4 pb-28 pt-10 sm:px-6 sm:pb-32 sm:pt-14 lg:px-8 lg:pb-36 lg:pt-16"
-        >
-          <div class="grid items-center gap-10 lg:grid-cols-[minmax(0,1fr)_380px]">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-3">
-                <span
-                  class="rounded-md border border-white/20 bg-white/10 px-4 py-1.5 text-[12px] font-bold uppercase tracking-[0.18em] text-white"
-                >
-                  SIRPEF
-                </span>
-                <span class="text-[12px] font-semibold uppercase tracking-[0.18em] text-white/70">
-                  Panel de trabajo
-                </span>
-              </div>
+      <div
+        class="relative mx-auto flex min-h-[calc(100svh-4rem)] w-full max-w-[1180px] flex-col px-4 sm:px-6 lg:px-8"
+      >
+        <!-- Arranque: titular, píldora de IA y accesos rápidos -->
+        <section class="flex flex-1 flex-col items-center justify-center pb-10 pt-14 text-center sm:pt-20">
+          <p class="home-eyebrow">
+            SIRPEF
+            <span class="text-white/25">·</span>
+            Panel de trabajo
+          </p>
 
-              <h1
-                class="mt-5 max-w-[16ch] text-[34px] font-semibold leading-[1.06] tracking-[-0.03em] text-white sm:text-[42px] lg:text-[48px]"
-              >
-                {{ greeting }}<span v-if="firstName">, {{ firstName }}</span>
-              </h1>
+          <h1 class="home-title">{{ heading }}</h1>
 
-              <p class="mt-4 max-w-lg text-[15px] leading-relaxed text-white/80 sm:text-[16px]">
-                <template v-if="canSeeDocuments">
-                  {{ displayedDocuments }} documento{{ displayedDocuments === 1 ? '' : 's' }} en tu
-                  espacio<template v-if="drafts"> · {{ drafts }} en borrador</template>.
-                </template>
-                Accede a tus módulos desde aquí.
-              </p>
+          <p class="home-summary">
+            <template v-if="!shellLoading">{{ summary }}</template>
+            <template v-else>Preparando tu espacio…</template>
+          </p>
 
-              <div v-if="canSeeDocuments" class="mt-6 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  class="btn bg-white text-navy hover:bg-white/90"
-                  :disabled="creating !== null"
-                  @click="openPicker()"
-                >
-                  <component
-                    :is="creating === 'blank' ? Loader2 : Plus"
-                    :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
-                  />
-                  {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
-                </button>
-                <button
-                  type="button"
-                  class="btn border border-white/25 bg-white/10 text-white backdrop-blur hover:bg-white/20"
-                  @click="openModule('documents')"
-                >
-                  <Search class="size-4" />
-                  Buscar
-                </button>
-              </div>
-
-              <div
-                v-if="canSeeDocuments || canSeeTemplates || canSeeDesigns"
-                class="mt-5 flex flex-wrap gap-2 lg:hidden"
-              >
-                <template v-if="canSeeDocuments">
-                  <span class="hero-stat">
-                    <strong>{{ displayedDocuments }}</strong> documentos
-                  </span>
-                  <span v-if="drafts" class="hero-stat">
-                    <strong>{{ drafts }}</strong> en borrador
-                  </span>
-                </template>
-                <button
-                  type="button"
-                  class="hero-stat transition-colors hover:bg-white/15"
-                  @click="statsOpen = true"
-                >
-                  <BarChart3 class="size-3.5" />
-                  Ver estadísticas
-                </button>
-              </div>
-
-              <ActivityFocus
-                v-if="canSeeInbox"
-                :items="pendingItems"
-                :total="totalCount"
-                :pending="pendingCount"
-                :loading="pendingLoading"
-                :updated-at="pendingUpdatedAt"
-                class="max-w-[720px]"
-                @open="openMessage"
-                @open-inbox="openModule('inbox')"
-              />
-            </div>
-
-            <div
-              v-if="canSeeDocuments || canSeeTemplates || canSeeDesigns"
-              class="hidden w-full max-w-[400px] lg:block lg:justify-self-end"
-            >
-              <WorkspaceGauge
-                :documents="counts.documents"
-                :drafts="counts.drafts"
-                :templates="counts.templates"
-                :designs="counts.designs"
-                :loading="shellLoading"
-                @open-stats="statsOpen = true"
-              />
-            </div>
-          </div>
-
-          <div
-            v-if="canSeeDocuments"
-            class="relative mx-auto mt-9 w-full max-w-[820px] sm:mt-10"
-          >
+          <div v-if="canSeeDocuments" class="mt-8 w-full max-w-[780px] text-left">
             <AiPromptBar
               :configured="aiStatus?.configured === true"
               :checking="aiLoading && aiStatus === null"
@@ -533,163 +271,94 @@ onUnmounted(() => {
               :error="aiPromptError"
               @submit="onAiPrompt"
             />
-          </div>
-        </div>
 
-        <span :key="totalCount" class="hero-sweep" aria-hidden="true" />
-      </section>
+            <!-- Resultado del modo consulta -->
+            <div
+              v-if="aiAnswer"
+              class="mt-4 rounded-2xl border border-white/15 bg-white/[0.06] p-4 text-left backdrop-blur"
+              aria-live="polite"
+            >
+              <p class="text-[13.5px] leading-relaxed text-white/90">{{ aiAnswer.answer }}</p>
 
-      <!-- Accesos a módulos -->
-      <section
-        v-if="tiles.length > 0"
-        class="relative z-10 mx-auto -mt-16 w-full max-w-[1280px] px-4 sm:px-6 lg:-mt-20 lg:px-8"
-      >
-        <ModuleDock
-          :tiles="tiles"
-          @open="openModule"
-          @origin="rememberOrigin"
-        />
-
-        <div
-          class="mt-4 flex flex-wrap items-center justify-between gap-2 px-1 text-[12.5px] text-ink-muted"
-        >
-          <span>Accede a tus módulos desde aquí.</span>
-          <span class="hidden sm:block">
-            También puedes pulsar <kbd class="kbd">Ctrl</kbd> + <kbd class="kbd">K</kbd>
-          </span>
-        </div>
-      </section>
-
-      <!-- Últimos documentos y avisos -->
-      <section
-        v-if="canSeeDocuments || canSeeInbox"
-        class="mx-auto mt-6 w-full max-w-[1280px] px-4 sm:px-6 lg:px-8"
-      >
-        <div class="grid gap-4 lg:grid-cols-2">
-          <!-- Continuar donde lo dejé -->
-          <div v-if="canSeeDocuments" class="card p-4">
-            <header class="flex items-start justify-between gap-2">
-              <div class="flex items-start gap-2">
-                <Clock class="mt-0.5 size-4 shrink-0 text-accent" />
-                <div>
-                  <h2 class="text-[15px] font-semibold">Continuar donde lo dejé</h2>
-                  <p class="text-meta">Últimos 5 documentos</p>
-                </div>
-              </div>
-              <RouterLink
-                :to="{ name: 'documents' }"
-                class="text-[12.5px] font-medium text-accent hover:underline"
-              >
-                Ver todos
-              </RouterLink>
-            </header>
-
-            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
-              <Loader2 class="size-3.5 animate-spin" />
-              Cargando…
-            </div>
-
-            <template v-else>
-              <ul
-                v-if="visibleRecentDocuments.length > 0 || localDrafts.length > 0"
-                class="mt-2 divide-y divide-hairline"
-              >
-                <li v-for="draft in localDrafts" :key="draft.key">
+              <ul v-if="aiAnswer.results.length > 0" class="mt-3 space-y-1.5">
+                <li v-for="item in aiAnswer.results" :key="item.id">
                   <button
                     type="button"
-                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
-                    @click="resumeLocalDraft(draft)"
+                    class="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.1]"
+                    @click="openAnswerResult(item.id)"
                   >
-                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
+                    <FileText class="size-4 shrink-0 text-[#7df3dd]" aria-hidden="true" />
                     <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[14px] font-medium">{{ draft.title }}</span>
-                      <span class="text-meta block">Solo en este navegador · {{ relativeTime(draft.savedAt) }}</span>
-                    </span>
-                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
-                  </button>
-                </li>
-                <li v-for="document in visibleRecentDocuments" :key="document.id">
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
-                    @click="openDocument(document.id)"
-                  >
-                    <FileText class="size-3.5 shrink-0 text-ink-subtle" />
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[14px] font-medium">{{ document.title }}</span>
-                      <span class="text-meta block truncate">
-                        {{ document.docNumber ?? document.numberingPreview?.number ?? 'En preparación' }}
-                        · {{ relativeTime(document.updatedAt) }}
-                        <template v-if="document.ownerId !== auth.user?.id"> · De {{ document.ownerName }}</template>
+                      <span class="block truncate text-[13px] font-medium text-white">
+                        {{ item.title }}
+                      </span>
+                      <span class="block truncate text-[11.5px] text-white/60">
+                        {{ docTypeLabel(item.docType) }} · {{ STATUS_LABELS[item.status] }}
+                        <template v-if="item.docNumber"> · {{ item.docNumber }}</template>
+                        · {{ formatDate(item.updatedAt) }}
                       </span>
                     </span>
-                    <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
+                    <ArrowRight class="size-3.5 shrink-0 text-white/40" aria-hidden="true" />
                   </button>
                 </li>
               </ul>
-              <p v-else class="text-description mt-3">
-                Todavía no tienes documentos.
-                <button type="button" class="font-medium text-accent hover:underline" @click="openPicker()">
-                  Crea el primero
-                </button>
-              </p>
-            </template>
-          </div>
-
-          <!-- Esperando al jefe -->
-          <div v-if="canSeeInbox" class="card p-4">
-            <header class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2">
-                <Send class="size-4 text-warning" />
-                <h2 class="text-[15px] font-semibold">Esperando al jefe</h2>
-              </div>
-              <RouterLink
-                :to="{ name: 'inbox', query: { tab: 'sent' } }"
-                class="text-[12.5px] font-medium text-accent hover:underline"
-              >
-                Ver envíos
-              </RouterLink>
-            </header>
-
-            <div v-if="activityLoading" class="mt-3 flex items-center gap-2 text-[13px] text-ink-muted">
-              <Loader2 class="size-3.5 animate-spin" />
-              Cargando…
             </div>
-            <ul v-else-if="waitingApproval.length > 0" class="mt-2 divide-y divide-hairline">
-              <li v-for="message in waitingApproval" :key="message.id">
-                <button
-                  type="button"
-                  class="flex w-full items-center gap-2 py-2 text-left transition-colors hover:text-accent"
-                  @click="openMessage(message.id)"
-                >
-                  <Send class="size-3.5 shrink-0 text-ink-subtle" />
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-[14px] font-medium">{{ message.documentTitle }}</span>
-                    <span class="text-meta block truncate">
-                      {{ message.subject }} · {{ relativeTime(message.createdAt) }}
-                    </span>
-                  </span>
-                  <ArrowRight class="size-3.5 shrink-0 text-ink-subtle" />
-                </button>
-              </li>
-            </ul>
-            <p v-else class="text-description mt-3">
-              No hay envíos esperando aprobación.
-            </p>
           </div>
-        </div>
 
-        <OnboardingCard v-if="canSeeDocuments" class="mt-4" @create="pickerOpen = true" />
-      </section>
+          <div v-if="canSeeDocuments" class="mt-7 flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              class="btn bg-white text-navy hover:bg-white/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
+              :disabled="creating !== null"
+              @click="openPicker()"
+            >
+              <component
+                :is="creating === 'blank' ? Loader2 : Plus"
+                :class="['size-4', creating === 'blank' ? 'animate-spin' : '']"
+              />
+              {{ creating === 'blank' ? 'Creando…' : 'Crear documento' }}
+            </button>
+            <button
+              type="button"
+              class="btn border border-white/15 bg-white/[0.06] text-white/85 backdrop-blur-sm hover:border-white/25 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
+              @click="openModule('documents')"
+            >
+              <Search class="size-4" />
+              Buscar
+            </button>
+          </div>
 
-      <section v-else-if="!shellLoading" class="card mx-auto mt-8 max-w-[1280px] p-8 text-center">
-        <FileText class="mx-auto size-8 text-ink-subtle" />
-        <h2 class="mt-3 text-[15px] font-semibold">Tu menú está vacío</h2>
-        <p class="text-description mt-1">
-          Un administrador todavía no te asignó módulos. Puedes seguir entrando a Ajustes
-          desde tu avatar.
-        </p>
-      </section>
+          <p class="mt-5 text-[12.5px] text-white/50">
+            <template v-if="canSeeDocuments">
+              {{ greeting }}<template v-if="firstName">, {{ firstName }}</template>
+              <span class="mx-1 text-white/25">·</span>
+            </template>
+            Usa <kbd class="home-kbd">Ctrl</kbd> + <kbd class="home-kbd">K</kbd> para ir a
+            cualquier módulo.
+          </p>
+        </section>
+
+        <!-- Los cuatro módulos, como tarjetas de cristal oscuro -->
+        <section v-if="tiles.length > 0" class="pb-6">
+          <div class="mb-4 flex items-center gap-3">
+            <h2 class="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/50">
+              Tus módulos
+            </h2>
+            <span class="h-px flex-1 bg-white/10" aria-hidden="true" />
+          </div>
+
+          <ModuleDock :tiles="tiles" @open="openModule" @origin="rememberOrigin" />
+        </section>
+
+        <section v-else-if="!shellLoading" class="pb-16 text-center">
+          <FileText class="mx-auto size-8 text-white/35" />
+          <h2 class="mt-3 text-[15px] font-semibold text-white">Tu menú está vacío</h2>
+          <p class="mx-auto mt-1 max-w-md text-[13.5px] leading-relaxed text-white/55">
+            Un administrador todavía no te asignó módulos. Puedes seguir entrando a Ajustes
+            desde tu avatar.
+          </p>
+        </section>
+      </div>
     </div>
 
     <NewDocumentDialog
@@ -697,8 +366,6 @@ onUnmounted(() => {
       @close="pickerOpen = false"
       @create="onCreate"
     />
-
-    <WorkspaceStatsDialog :open="statsOpen" @close="statsOpen = false" />
 
     <!-- Módulos: se abren como panel modal sobre el panel de trabajo -->
     <RouterView v-slot="{ Component, route: childRoute }">
@@ -716,112 +383,72 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.hero {
+.home {
+  position: relative;
+  min-height: 100%;
   background:
-    radial-gradient(70% 110% at 92% 6%, rgb(78 133 200 / 0.3) 0%, transparent 58%),
-    radial-gradient(50% 75% at 0% 100%, rgb(6 227 189 / 0.08) 0%, transparent 62%),
-    linear-gradient(135deg, var(--color-navy-deep) 0%, var(--color-navy) 48%, #0a2a55 100%);
+    radial-gradient(58% 44% at 50% 30%, rgb(58 106 176 / 0.3) 0%, transparent 72%),
+    radial-gradient(34% 26% at 74% 16%, rgb(6 227 189 / 0.05) 0%, transparent 70%),
+    linear-gradient(180deg, #05080f 0%, #081428 44%, #04070d 100%);
 }
 
-.hero::after {
-  content: '';
+/* Halo azul difuso detrás del titular y la píldora, como en un chat vacío. */
+.home-glow {
   position: absolute;
   inset-inline: 0;
-  bottom: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.18), transparent);
+  top: 8%;
+  height: 46%;
+  background: radial-gradient(50% 60% at 50% 45%, rgb(64 116 190 / 0.22), transparent 74%);
+  filter: blur(8px);
+  pointer-events: none;
 }
 
-.hero-chevrons {
-  background-image: repeating-linear-gradient(
-    118deg,
-    transparent 0 16px,
-    rgb(255 255 255 / 0.055) 16px 19px
-  );
-}
-
-.hero-chevrons--left {
-  opacity: 0.9;
-  mask-image: linear-gradient(to right, #000 0%, transparent 100%);
-}
-
-.hero-chevrons--right {
-  opacity: 0.8;
-  mask-image: radial-gradient(ellipse 80% 72% at 100% 45%, #000 0%, transparent 78%);
-}
-
-.hero-stat {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  border: 1px solid rgb(255 255 255 / 0.12);
-  border-radius: 999px;
-  background: rgb(255 255 255 / 0.06);
-  padding: 4px 10px;
-  font-size: 11.5px;
-  color: rgb(255 255 255 / 0.62);
-}
-
-.hero-stat strong {
-  font-size: 12.5px;
+.home-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
   font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgb(255 255 255 / 0.52);
+}
+
+.home-title {
+  margin-top: 18px;
+  max-width: 20ch;
+  font-size: clamp(30px, 5vw, 52px);
+  font-weight: 500;
+  line-height: 1.06;
+  letter-spacing: -0.035em;
   color: #fff;
+  text-wrap: balance;
 }
 
-/* Barrido que se reinicia cuando cambian los contadores de la bandeja. */
-.hero-sweep {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, #06e3bd, #4e85c8, transparent);
-  animation: sweep 700ms ease-out both;
+.home-summary {
+  margin-top: 14px;
+  max-width: 54ch;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: rgb(255 255 255 / 0.58);
+  text-wrap: balance;
 }
 
-@keyframes sweep {
-  from {
-    transform: translateX(-100%);
-    opacity: 0;
-  }
-  40% {
-    opacity: 1;
-  }
-  to {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-}
-
-/* El cockpit se hunde ligeramente cuando hay un panel abierto encima. */
-.cockpit {
-  transform-origin: top center;
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.cockpit-pushed {
-  transform: scale(0.994);
+.home-kbd {
+  display: inline-block;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.08);
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  color: rgb(255 255 255 / 0.7);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hero-sweep {
-    display: none;
+  .home-glow {
+    filter: none;
   }
-
-  .cockpit,
-  .cockpit-pushed {
-    transition: none;
-    transform: none;
-  }
-}
-
-.kbd {
-  border: 1px solid var(--color-hairline);
-  border-radius: 4px;
-  background: var(--color-surface);
-  padding: 0 4px;
-  font-size: 10px;
-  line-height: 15px;
-  font-weight: 600;
-  color: var(--color-ink-muted);
 }
 </style>

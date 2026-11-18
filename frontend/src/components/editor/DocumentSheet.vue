@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { EditorContent, type Editor } from '@tiptap/vue-3';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import { FileText, Rows3 } from 'lucide-vue-next';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
@@ -37,6 +38,7 @@ const emit = defineEmits<{
   height: [kind: ChromeKind, heightMm: number];
   width: [kind: ChromeKind, widthPercent: number];
   reset: [kind: ChromeKind];
+  pages: [count: number];
 }>();
 
 const PAGINATION_KEY = 'sirpefoffice:pagination';
@@ -119,7 +121,7 @@ const editorRef = computed(() => props.editor);
 const enabledRef = computed(() => isPaginated.value);
 const pageHeightRef = computed(() => pageHeightPx.value);
 
-const { pages } = useDocumentPagination({
+const { pages, overflowPages } = useDocumentPagination({
   editor: editorRef,
   enabled: enabledRef,
   sheet: firstCardEl,
@@ -205,22 +207,170 @@ function setPaginated(value: boolean): void {
   paginated.value = value;
 }
 
+interface BlockRect {
+  pos: number;
+  from: number;
+  to: number;
+  top: number;
+  bottom: number;
+}
+
+/** Primer punto de texto editable dentro de un bloque de nivel superior. */
+function firstTextPosition(node: PMNode, pos: number): number {
+  if (node.isTextblock) return pos + 1;
+  let found: number | null = null;
+  node.descendants((child, offset) => {
+    if (found !== null) return false;
+    if (child.isTextblock) {
+      found = pos + offset + 2;
+      return false;
+    }
+    return true;
+  });
+  return found ?? pos + 1;
+}
+
+/** Último punto de texto editable dentro de un bloque de nivel superior. */
+function lastTextPosition(node: PMNode, pos: number): number {
+  if (node.isTextblock) return pos + 1 + node.content.size;
+  let found: number | null = null;
+  node.descendants((child, offset) => {
+    if (child.isTextblock) found = pos + offset + 2 + child.content.size;
+    return true;
+  });
+  return found ?? pos + 1;
+}
+
+/** Rectángulos de los bloques reales del documento (sin espaciadores). */
+function collectBlockRects(): BlockRect[] {
+  const editor = props.editor;
+  if (!editor || editor.isDestroyed) return [];
+  const rects: BlockRect[] = [];
+  editor.state.doc.forEach((node, pos) => {
+    if (node.type.name === 'pageBreak') return;
+    const dom = editor.view.nodeDOM(pos);
+    if (!(dom instanceof HTMLElement)) return;
+    const rect = dom.getBoundingClientRect();
+    rects.push({
+      pos,
+      from: firstTextPosition(node, pos),
+      to: lastTextPosition(node, pos),
+      top: rect.top,
+      bottom: rect.bottom,
+    });
+  });
+  return rects;
+}
+
+function pageCardAt(y: number): HTMLElement | null {
+  const cards = pagesEl.value?.querySelectorAll<HTMLElement>('.doc-page-card');
+  if (!cards) return null;
+  for (const card of cards) {
+    const rect = card.getBoundingClientRect();
+    if (y >= rect.top && y <= rect.bottom) return card;
+  }
+  return null;
+}
+
 /**
- * Un clic en el espacio blanco de una hoja (debajo del último texto o en el
- * hueco entre páginas) coloca el cursor al final, como en un procesador de
- * textos. Los clics dentro del texto o de una banda no se interceptan.
+ * Clic en el espacio de una hoja.
+ *
+ * Antes un clic en el margen ejecutaba `focus('end')`: el cursor saltaba al
+ * final del documento y la vista se desplazaba varias páginas. Ahora:
+ * - el texto real lo sigue resolviendo ProseMirror;
+ * - el espacio blanco bajo el texto coloca el cursor al final del último
+ *   bloque de esa hoja;
+ * - el margen lateral, la cabecera, el pie y el hueco entre hojas no mueven
+ *   el cursor.
  */
-function onPageBackgroundClick(event: MouseEvent): void {
+function onSheetPointerDown(event: MouseEvent): void {
+  if (event.button !== 0) return;
+  if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!props.editable || !props.editor) return;
+
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
-  if (target.closest('.tiptap') || target.closest('.wp-chrome-band')) return;
-  if (!props.editable || !props.editor) return;
-  props.editor.chain().focus('end').run();
+  if (
+    target.closest(
+      'a, button, input, select, textarea, .wp-chrome-band, .doc-sheet-meta',
+    )
+  ) {
+    return;
+  }
+  // El salto de página manual es un nodo seleccionable: su clic es de
+  // ProseMirror (para poder seleccionarlo y borrarlo).
+  if (target.closest('.page-break')) return;
+  // Zonas no editables: se corta el evento para que ProseMirror no coloque
+  // el cursor en el bloque más cercano (el de la hoja siguiente).
+  function blockSheetClick(): void {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const editor = props.editor;
+  const card = pageCardAt(event.clientY);
+  if (!card) {
+    blockSheetClick(); // Hueco entre hojas o borde del escritorio.
+    return;
+  }
+
+  const topBand = card.querySelector<HTMLElement>('.doc-page-top')?.getBoundingClientRect();
+  const bottomBand = card.querySelector<HTMLElement>('.doc-page-bottom')?.getBoundingClientRect();
+  if (topBand && event.clientY <= topBand.bottom) {
+    blockSheetClick();
+    return;
+  }
+  if (bottomBand && event.clientY >= bottomBand.top) {
+    blockSheetClick();
+    return;
+  }
+
+  const contentRect = editor.view.dom.getBoundingClientRect();
+  if (event.clientX < contentRect.left - 1 || event.clientX > contentRect.right + 1) {
+    blockSheetClick();
+    return;
+  }
+
+  // Clic sobre contenido editable: que decida ProseMirror.
+  if (
+    target.closest(
+      'p, li, ul, ol, h1, h2, h3, h4, table, td, th, blockquote, pre, hr, img',
+    )
+  ) {
+    return;
+  }
+
+  const blocks = collectBlockRects();
+  const above = blocks.filter((block) => block.bottom <= event.clientY + 1).pop();
+  const below = blocks.find((block) => block.top >= event.clientY - 1);
+  if (!above && !below) {
+    // Hoja vacía: el final del documento es el único destino posible.
+    blockSheetClick();
+    editor.chain().focus('end', { scrollIntoView: false }).run();
+    return;
+  }
+
+  const targetPos = above?.to ?? below?.from;
+  if (targetPos === undefined) {
+    blockSheetClick();
+    return;
+  }
+
+  blockSheetClick();
+  editor
+    .chain()
+    .focus(undefined, { scrollIntoView: false })
+    .setTextSelection(targetPos)
+    .run();
 }
 
 watch(
   () => displayPages.value.length,
-  () => nextTick(syncFirstCard),
+  (count) => {
+    emit('pages', count);
+    void nextTick(syncFirstCard);
+  },
+  { immediate: true },
 );
 
 watch(firstCardEl, () => nextTick(observeBands));
@@ -266,7 +416,7 @@ onBeforeUnmount(() => {
       ref="pagesEl"
       class="doc-pages"
       :style="{ height: `${totalHeightPx}px` }"
-      @click="onPageBackgroundClick"
+      @mousedown.capture="onSheetPointerDown"
     >
       <div class="doc-page-cards">
         <div
@@ -275,6 +425,7 @@ onBeforeUnmount(() => {
           class="doc-page-card"
           :style="{ top: `${page.topPx}px`, height: `${page.heightPx}px` }"
         >
+          <span class="doc-page-card__label" aria-hidden="true">{{ page.index + 1 }}</span>
           <div class="doc-page-top">
             <div
               v-if="design?.logo.enabled && design.logo.dataUrl"
@@ -378,6 +529,14 @@ onBeforeUnmount(() => {
 
     <div class="doc-sheet-meta">
       <span class="doc-sheet-meta__info"><slot name="meta" /></span>
+      <span
+        v-if="overflowPages.length > 0"
+        class="doc-sheet-meta__warn"
+        :title="'Algún bloque es más alto que una hoja: la paginación lo deja crecer en lugar de partir el contenido.'"
+      >
+        {{ overflowPages.length }}
+        {{ overflowPages.length === 1 ? 'bloque supera' : 'bloques superan' }} la hoja
+      </span>
       <span class="doc-sheet-meta__count">
         {{ displayPages.length }} {{ displayPages.length === 1 ? 'página' : 'páginas' }}
       </span>

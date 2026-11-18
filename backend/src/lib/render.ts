@@ -18,6 +18,9 @@ import {
 } from '@sirpefoffice/shared';
 import { renderToHTMLString } from '@tiptap/static-renderer';
 
+// Los datos de ejemplo son puros y también los usa el editor de plantillas.
+export { sampleValues } from '@sirpefoffice/shared';
+
 /* ────────────────────────── Interpolación ─────────────────────────── */
 
 const PLACEHOLDER = /\{\{\s*([\w.[\]]+)\s*\}\}/g;
@@ -199,91 +202,6 @@ function cleanDoc(node: JSONContent): JSONContent {
     }
   }
   return node;
-}
-
-/* ───────────────────────── Valores de muestra ─────────────────────── */
-
-function sampleDate(): string {
-  return new Date().toLocaleDateString('es-PE', {
-    day: '2-digit',
-    month: 'long',
-    year: 'numeric',
-  });
-}
-
-function sampleColumnValue(type: string | undefined, index: number, label: string): string {
-  switch (type) {
-    case 'number':
-      return String(index + 1);
-    case 'money':
-      return '1,234.50';
-    case 'date':
-      return sampleDate();
-    default:
-      return `«${label}»`;
-  }
-}
-
-/**
- * Genera datos de ejemplo a partir del esquema de una plantilla.
- *
- * Se usa solo para las vistas previas: así el usuario ve el aspecto real de la
- * plantilla sin tener que rellenar el formulario y sin guardar datos falsos.
- */
-export function sampleValues(schema: VariableDef[]): VariableValues {
-  const values: VariableValues = {};
-
-  for (const variable of schema) {
-    if (variable.defaultValue !== undefined && variable.defaultValue !== null) {
-      values[variable.key] = variable.defaultValue;
-      continue;
-    }
-
-    const label = variable.label || variable.key;
-
-    switch (variable.type) {
-      case 'date':
-        values[variable.key] = sampleDate();
-        break;
-      case 'number':
-        values[variable.key] = '123';
-        break;
-      case 'money':
-        values[variable.key] = '1,234.50';
-        break;
-      case 'checkbox':
-        values[variable.key] = 'Sí';
-        break;
-      case 'select':
-        values[variable.key] =
-          variable.options?.[0]?.label ?? variable.options?.[0]?.value ?? `«${label}»`;
-        break;
-      case 'multiselect':
-        values[variable.key] =
-          variable.options?.slice(0, 2).map((option) => option.label).join(', ') || `«${label}»`;
-        break;
-      case 'table':
-        values[variable.key] = variable.columns?.length
-          ? [0, 1].map((index) =>
-              Object.fromEntries(
-                variable.columns!.map((column) => [
-                  column.key,
-                  sampleColumnValue(column.type, index, column.label || column.key),
-                ]),
-              ),
-            )
-          : [];
-        break;
-      case 'image':
-        values[variable.key] = '';
-        break;
-      default:
-        values[variable.key] = `«${label}»`;
-        break;
-    }
-  }
-
-  return values;
 }
 
 /* ───────────────────────────── Render HTML ────────────────────────── */
@@ -491,10 +409,12 @@ function designCss(design: DesignTokens, forPdf = false, embed = false): string 
 
   .doc-body pre { background: #f6f8fa; border: 1px solid var(--doc-th-border); border-radius: 8px; padding: 12px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .88em; overflow-x: auto; }
 
-  .doc-body table { border-collapse: collapse; width: 100%; margin: .8em 0; background: var(--sd-table-bg, transparent); table-layout: fixed; }
+  .doc-body table { border-collapse: collapse; width: 100%; max-width: 100%; margin: .8em 0; background: var(--sd-table-bg, transparent); table-layout: fixed; }
   .doc-body th,
-  .doc-body td { border: var(--sd-table-border, 1px solid var(--doc-th-border)); padding: var(--sd-table-padding, 7px 9px); vertical-align: top; background: var(--sd-cell-bg, transparent); }
+  .doc-body td { border: var(--sd-table-border, 1px solid var(--doc-th-border)); padding: var(--sd-table-padding, 7px 9px); vertical-align: top; overflow-wrap: anywhere; word-break: break-word; white-space: normal; background: var(--sd-cell-bg, transparent); }
   .doc-body th { background: var(--sd-cell-bg, var(--doc-th-bg)); font-weight: 600; text-align: left; }
+  .doc-body thead { display: table-header-group; }
+  .doc-body p { orphans: 2; widows: 2; }
   .doc-body td p,
   .doc-body th p { margin: 0; }
 

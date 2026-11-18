@@ -9,4 +9,5 @@ export * from './page-break.js';
 export * from './document-spacing.js';
 export * from './pagination.js';
 export * from './fonts.js';
+export * from './variables.js';
 export * from './realtime.js';

@@ -163,6 +163,81 @@ try {
   assert(paged.outside === 0, `${paged.outside} párrafos quedaron fuera del área útil`);
   assert(paged.label === `${paged.count} páginas`, `Etiqueta de páginas inesperada: ${paged.label}`);
 
+  console.log('→ Clic en el margen y en el hueco de una hoja');
+
+  const caretInfo = () =>
+    page.evaluate(() => {
+      const selection = window.getSelection();
+      const node = selection?.anchorNode;
+      const element = node?.nodeType === 1 ? node : node?.parentElement;
+      return {
+        text: element?.closest('p')?.textContent?.slice(0, 24) ?? null,
+        scroll: document.querySelector('main.overflow-auto')?.scrollTop ?? 0,
+      };
+    });
+
+  // Llevar el final de la primera hoja a la vista para pulsar bajo el texto.
+  const pageBottom = await page.evaluate(() => {
+    const card = document.querySelector('.doc-page-card');
+    const bottom = card?.querySelector('.doc-page-bottom')?.getBoundingClientRect();
+    const last = [...document.querySelectorAll('.doc-paged-flow .tiptap p')]
+      .map((paragraph) => {
+        const rect = paragraph.getBoundingClientRect();
+        return { text: paragraph.textContent.slice(0, 24), top: rect.top, bottom: rect.bottom };
+      })
+      .filter((paragraph) => bottom && paragraph.bottom <= bottom.top - 2)
+      .at(-1);
+    return { last, bottomTop: bottom?.top ?? 0 };
+  });
+
+  if (pageBottom.last) {
+    await page.evaluate((y) => {
+      const main = document.querySelector('main.overflow-auto');
+      if (main) main.scrollTop += y - 520;
+    }, pageBottom.last.bottom);
+    await wait(400);
+
+    const geometry = await page.evaluate(() => {
+      const card = document.querySelector('.doc-page-card');
+      const rect = card.getBoundingClientRect();
+      const bottom = card.querySelector('.doc-page-bottom').getBoundingClientRect();
+      const last = [...document.querySelectorAll('.doc-paged-flow .tiptap p')]
+        .map((paragraph) => {
+          const r = paragraph.getBoundingClientRect();
+          return { text: paragraph.textContent.slice(0, 24), bottom: r.bottom };
+        })
+        .filter((paragraph) => paragraph.bottom <= bottom.top - 2)
+        .at(-1);
+      return { rect: { left: rect.left, right: rect.right }, bottomTop: bottom.top, last };
+    });
+
+    const blankY = Math.min(
+      (geometry.last?.bottom ?? geometry.bottomTop) + 4,
+      geometry.bottomTop - 2,
+    );
+    const centerX = (geometry.rect.left + geometry.rect.right) / 2;
+    await page.mouse.click(centerX, blankY);
+    await wait(250);
+    const afterBlank = await caretInfo();
+    assert(
+      geometry.last && afterBlank.text === geometry.last.text,
+      `El clic bajo el texto debe dejar el cursor en el último párrafo de la hoja (${geometry.last?.text ?? 'sin párrafo'}), quedó en ${afterBlank.text}`,
+    );
+
+    // El margen lateral no debe mover el cursor ni desplazar la vista.
+    const beforeMargin = await caretInfo();
+    await page.mouse.click(geometry.rect.left + 18, blankY - 120);
+    await wait(250);
+    const afterMargin = await caretInfo();
+    assert(
+      afterMargin.text === beforeMargin.text && afterMargin.scroll === beforeMargin.scroll,
+      'El clic en el margen lateral movió el cursor o la vista',
+    );
+    console.log('  · margen y zona blanca respetan la selección');
+  } else {
+    console.log('  · no se encontró una hoja con zona blanca; se omite la comprobación');
+  }
+
   console.log('→ Toggle a hoja continua y de vuelta');
   await page.click('.doc-mode-toggle button:nth-child(2)');
   await wait(900);
@@ -214,6 +289,53 @@ try {
   );
   console.log(`  · saltos manuales: ${afterBreaks} · hojas: ${afterBreakCards}`);
 
+  console.log('→ Tabla de 8 columnas');
+  await page.keyboard.down('Control');
+  await page.keyboard.press('End');
+  await page.keyboard.up('Control');
+  await page.evaluate(() => {
+    const trigger = [...document.querySelectorAll('button')].find(
+      (button) => button.title === 'Insertar tabla',
+    );
+    trigger?.click();
+  });
+  await wait(300);
+  await page.evaluate(() => {
+    const cell = [...document.querySelectorAll('button')].find(
+      (button) => button.title === '2 filas × 8 columnas',
+    );
+    cell?.click();
+  });
+  await wait(900);
+
+  const tableState = await page.evaluate(() => {
+    const table = document.querySelector('.doc-paged-flow .tiptap table');
+    const root = document.querySelector('.doc-paged-flow .tiptap');
+    if (!table || !root) return null;
+    return {
+      columns: table.querySelectorAll('col').length,
+      rows: table.querySelectorAll('tr').length,
+      scrollWidth: table.scrollWidth,
+      rootWidth: root.clientWidth,
+      layout: window.getComputedStyle(table).tableLayout,
+    };
+  });
+  assert(tableState, 'No se insertó la tabla de prueba');
+  assert(
+    tableState.scrollWidth <= tableState.rootWidth + 1,
+    `La tabla desborda la hoja: ${tableState.scrollWidth}px en ${tableState.rootWidth}px`,
+  );
+  assert(tableState.layout === 'fixed', `La tabla debería usar table-layout fixed y usa ${tableState.layout}`);
+  await page.click('.doc-paged-flow .tiptap th');
+  await wait(400);
+  assert(
+    await page.$('[data-table-bubble]'),
+    'No apareció el menú flotante de la tabla al entrar en una celda',
+  );
+  console.log(
+    `  · tabla ${tableState.rows}×${tableState.columns} · ${tableState.scrollWidth}px dentro de ${tableState.rootWidth}px`,
+  );
+
   await page.screenshot({ path: '/tmp/opencode/pagination-smoke.png' });
   await page.evaluate(() => {
     const main = document.querySelector('main.overflow-auto');
@@ -222,6 +344,106 @@ try {
   await wait(400);
   await page.screenshot({ path: '/tmp/opencode/pagination-gap.png' });
   console.log('  · capturas /tmp/opencode/pagination-smoke.png y pagination-gap.png');
+
+  console.log('→ Interlineado y variable atómica');
+  await page.evaluate(() => {
+    const main = document.querySelector('main.overflow-auto');
+    if (main) main.scrollTop = 0;
+  });
+  await wait(400);
+  const paragraphPoint = await page.evaluate(() => {
+    const paragraph = [...document.querySelectorAll('.doc-paged-flow .tiptap p')].find(
+      (node) => node.textContent.trim().length > 10,
+    );
+    if (!paragraph) return null;
+    const rect = paragraph.getBoundingClientRect();
+    return { x: rect.left + 40, y: rect.top + rect.height / 2 };
+  });
+  if (paragraphPoint) {
+    await page.mouse.click(paragraphPoint.x, paragraphPoint.y);
+    await page.select('select[aria-label="Interlineado"]', '2');
+    await wait(400);
+    const lineHeight = await page.evaluate(
+      () =>
+        document.querySelector('.doc-paged-flow .tiptap span[style*="line-height"]')?.getAttribute('style') ??
+        null,
+    );
+    assert(
+      lineHeight?.includes('line-height: 2'),
+      `El interlineado no se aplicó al bloque: ${lineHeight}`,
+    );
+    console.log(`  · interlineado aplicado: ${lineHeight}`);
+  }
+
+  await page.keyboard.down('Control');
+  await page.keyboard.press('End');
+  await page.keyboard.up('Control');
+  await page.keyboard.type(' {{variable_de_prueba}}');
+  await wait(250);
+  await page.keyboard.press('Backspace');
+  await wait(250);
+  const variableText = await page.evaluate(
+    () => document.querySelector('.doc-paged-flow .tiptap').textContent ?? '',
+  );
+  assert(
+    !variableText.includes('{{variable_de_prueba}}'),
+    'Retroceso no borró la variable completa',
+  );
+  console.log('  · variable borrada como una unidad');
+
+  console.log('→ Burbuja de texto y vista previa');
+  await page.evaluate(() => {
+    const main = document.querySelector('main.overflow-auto');
+    if (main) main.scrollTop = 0;
+  });
+  await wait(400);
+  const bubblePoint = await page.evaluate(() => {
+    const paragraph = [...document.querySelectorAll('.doc-paged-flow .tiptap p')].find(
+      (node) => node.textContent.trim().length > 10,
+    );
+    if (!paragraph) return null;
+    const rect = paragraph.getBoundingClientRect();
+    return { x: rect.left + 30, y: rect.top + rect.height / 2 };
+  });
+  if (bubblePoint) {
+    await page.mouse.click(bubblePoint.x, bubblePoint.y);
+    await page.keyboard.down('Shift');
+    for (let index = 0; index < 10; index += 1) await page.keyboard.press('ArrowRight');
+    await page.keyboard.up('Shift');
+    await wait(500);
+    const boldButton = await page.evaluate(() => {
+      const button = document.querySelector('[data-text-bubble] button[title^="Negrita"]');
+      if (!button) return null;
+      const rect = button.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    assert(boldButton, 'No apareció la burbuja de texto al seleccionar una frase');
+    await page.mouse.click(boldButton.x, boldButton.y);
+    await wait(400);
+    const boldText = await page.evaluate(
+      () => document.querySelector('.doc-paged-flow .tiptap strong')?.textContent ?? null,
+    );
+    assert(boldText, 'El clic real en la burbuja no aplicó la negrita');
+    console.log('  · burbuja de texto clicable');
+  }
+
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find(
+      (item) => item.getAttribute('aria-label') === 'Vista previa',
+    );
+    button?.click();
+  });
+  await page.waitForSelector('iframe[srcdoc]', { timeout: 20000 });
+  assert(await page.$('iframe[srcdoc]'), 'La vista previa no montó el iframe');
+  await page.evaluate(() => {
+    const button = [...document.querySelectorAll('button')].find(
+      (item) => item.getAttribute('aria-label') === 'Vista previa',
+    );
+    button?.click();
+  });
+  await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 15000 });
+  await wait(600);
+  console.log('  · vista previa sin error de Vue');
 
   if (errors.length) throw new Error(`Errores de consola:\n${errors.join('\n')}`);
   console.log('\n✅ Paginación visual correcta');
