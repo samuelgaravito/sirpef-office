@@ -21,6 +21,8 @@ const props = withDefaults(
     disabledReason?: string;
     /** Identificador único del campo de texto (hay dos paneles: escritorio y móvil). */
     inputId?: string;
+    /** Prompt que llega desde la barra rápida. */
+    prefill?: string;
   }>(),
   {
     busy: false,
@@ -33,6 +35,7 @@ const props = withDefaults(
     enabled: true,
     disabledReason: '',
     inputId: 'assistant-input',
+    prefill: '',
   },
 );
 
@@ -43,6 +46,16 @@ const emit = defineEmits<{
 
 const input = ref('');
 const list = ref<HTMLElement | null>(null);
+
+watch(
+  () => props.prefill,
+  (value) => {
+    if (!value) return;
+    input.value = value;
+    void nextTick(() => document.getElementById(props.inputId)?.focus());
+  },
+  { immediate: true },
+);
 
 const suggestions = [
   'Redacta el documento con un tono formal y breve.',

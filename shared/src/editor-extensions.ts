@@ -7,6 +7,7 @@ import { Image as BaseImage } from '@tiptap/extension-image';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
+import { columnResizing, columnResizingPluginKey } from '@tiptap/pm/tables';
 import TaskItem from '@tiptap/extension-task-item';
 import TaskList from '@tiptap/extension-task-list';
 import TextAlign from '@tiptap/extension-text-align';
@@ -315,6 +316,29 @@ export const ExtendedTable = Table.extend({
     };
   },
 
+  /**
+   * TipTap solo registra el plugin de columnas si el editor es editable en el
+   * momento de crearse. En el editor de documentos nace bloqueado y se activa
+   * después, así que lo añadimos aquí si falta. El propio plugin respeta
+   * `view.editable` en cada interacción.
+   */
+  addProseMirrorPlugins() {
+    const plugins = this.parent?.() ?? [];
+    if (!this.options.resizable) return plugins;
+    if (plugins.some((plugin) => plugin.spec.key === columnResizingPluginKey)) return plugins;
+
+    return [
+      columnResizing({
+        handleWidth: this.options.handleWidth,
+        cellMinWidth: this.options.cellMinWidth,
+        defaultCellMinWidth: this.options.cellMinWidth,
+        View: this.options.View,
+        lastColumnResizable: this.options.lastColumnResizable,
+      }),
+      ...plugins,
+    ];
+  },
+
   renderHTML({ node, HTMLAttributes }) {
     const next = { ...HTMLAttributes };
     const style = tableStyle(node, HTMLAttributes);
@@ -346,6 +370,8 @@ export function createEditorExtensions(options?: {
       undoRedo: { depth: 200 },
       // Reemplazado abajo para liberar `Mod-Enter`.
       hardBreak: false,
+      // Indicador claro al arrastrar contenido entre bloques.
+      dropcursor: { color: '#3c6fb0', width: 2 },
       link: {
         openOnClick: false,
         autolink: true,
@@ -357,7 +383,9 @@ export function createEditorExtensions(options?: {
     ...(options?.pageBreak === false ? [] : [PageBreak]),
     ExtendedTable.configure({
       resizable: true,
-      allowTableNodeSelection: true,
+      // Un clic cerca del borde seleccionaba la tabla entera y el siguiente
+      // carácter la reemplazaba. Las acciones de tabla tienen su propio menú.
+      allowTableNodeSelection: false,
     }),
     TableRow,
     ExtendedTableHeader,

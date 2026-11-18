@@ -48,6 +48,38 @@ export interface AiDraftResult {
   model: string;
 }
 
+/** Límites del asistente inline de la barra inferior. */
+export const AI_INLINE_MAX_INSTRUCTION_CHARS = 4_000;
+export const AI_INLINE_MAX_CONTEXT_CHARS = 12_000;
+
+/** Contexto que acompaña a una instrucción inline. */
+export interface AiInlineContext {
+  selection?: string;
+  before?: string;
+  after?: string;
+  docType?: DocType;
+  title?: string;
+  templateName?: string;
+}
+
+/** Petición de un fragmento de texto para insertar o reemplazar. */
+export interface AiInlineRequest {
+  documentId?: string;
+  templateId?: string;
+  instruction: string;
+  mode?: 'insert' | 'replace';
+  context?: AiInlineContext;
+}
+
+/** Respuesta del asistente inline. */
+export interface AiInlineResult {
+  reply: string;
+  content: JSONContent;
+  warnings: string[];
+  questions: string[];
+  model: string;
+}
+
 /** Elección de plantilla a partir de un encargo escrito en lenguaje natural. */
 export interface AiTemplateChoice {
   templateId: string;

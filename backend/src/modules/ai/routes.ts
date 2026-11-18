@@ -3,7 +3,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z, ZodError } from 'zod';
 
 import { AI_DRAFT_MAX_MESSAGES, plainTextFromContent } from '@sirpefoffice/shared';
-import type { AiDraftMessage, AiDraftResult, JSONContent, VariableDef } from '@sirpefoffice/shared';
+import type {
+  AiDraftMessage,
+  AiDraftResult,
+  AiInlineContext,
+  JSONContent,
+  VariableDef,
+} from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import { documents, templateShares, templates } from '../../db/schema.js';
@@ -12,10 +18,11 @@ import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { AppError, badRequest, conflict, forbidden, internal, newReference, notFound } from '../../lib/errors.js';
 import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
-import { jsonContentSchema } from '../../lib/validators.js';
+import { docTypeSchema, jsonContentSchema } from '../../lib/validators.js';
 import { defaultData, saveVersion } from '../documents/routes.js';
 import { askDocuments, questionSchema } from './ask.js';
 import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
+import { inlineText } from './inline.js';
 import type { AiConfig } from './providers.js';
 import {
   clearApiKey,
@@ -66,6 +73,23 @@ const generateSchema = z.object({
 
 const chooseTemplateSchema = z.object({
   prompt: z.string().trim().min(3).max(2_000),
+});
+
+const inlineContextSchema = z.object({
+  selection: z.string().max(12_000).optional(),
+  before: z.string().max(6_000).optional(),
+  after: z.string().max(6_000).optional(),
+  docType: docTypeSchema.optional(),
+  title: z.string().max(240).optional(),
+  templateName: z.string().max(200).optional(),
+});
+
+const inlineSchema = z.object({
+  documentId: z.uuid().optional(),
+  templateId: z.uuid().optional(),
+  instruction: z.string().trim().min(3).max(4_000),
+  mode: z.enum(['insert', 'replace']).optional(),
+  context: inlineContextSchema.optional(),
 });
 
 
@@ -393,6 +417,47 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const config = await loadConfig();
 
     return askDocuments(config, body.question, { userId: user.sub });
+  });
+
+  /**
+   * Genera un fragmento para insertar o reemplazar en el cursor.
+   *
+   * La barra inferior de la hoja lo usa para «escribe un párrafo sobre…»,
+   * «mejora la selección», etc. No guarda nada: el cliente aplica el
+   * fragmento y el autoguardado sigue su curso normal.
+   */
+  app.post('/ai/inline', async (request) => {
+    const user = await authenticate(request);
+    const body = inlineSchema.parse(request.body ?? {});
+    const config = await loadConfig();
+
+    let context: AiInlineContext = body.context ?? {};
+
+    if (body.documentId) {
+      const { document } = await assertDocument(user.sub, body.documentId, 'editor');
+      context = {
+        ...context,
+        docType: context.docType ?? document.docType,
+        title: context.title ?? document.title,
+      };
+    } else if (body.templateId) {
+      const { template, permission } = await getTemplateAccess(
+        user.sub,
+        body.templateId,
+        user.role,
+      );
+      if (permission === 'viewer') {
+        throw forbidden('Necesitas permiso de edición sobre esta plantilla');
+      }
+      context = {
+        ...context,
+        docType: context.docType ?? template.docType,
+        title: context.title ?? template.name,
+        templateName: context.templateName ?? template.name,
+      };
+    }
+
+    return inlineText(config, { instruction: body.instruction, context });
   });
 
   /**

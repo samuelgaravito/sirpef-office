@@ -10,24 +10,39 @@ interface PaginationMeta {
 
 export const paginationPluginKey = new PluginKey<DecorationSet>('sirpefofficePagination');
 
+interface ValidBreak extends PageBreakLayout {
+  height: number;
+}
+
+/** Saltos que realmente se pueden dibujar en el documento actual. */
+function validBreaks(
+  doc: Parameters<typeof DecorationSet.create>[0],
+  breaks: readonly PageBreakLayout[],
+): ValidBreak[] {
+  const valid: ValidBreak[] = [];
+  for (const pageBreak of breaks) {
+    if (pageBreak.pos < 0 || pageBreak.pos > doc.content.size) continue;
+    const height = Math.max(0, Math.round(pageBreak.height * 100) / 100);
+    if (height < 0.5) continue;
+    valid.push({ ...pageBreak, height });
+  }
+  return valid;
+}
+
 function buildDecorations(
   doc: Parameters<typeof DecorationSet.create>[0],
   breaks: readonly PageBreakLayout[],
 ): DecorationSet {
   const decorations: Decoration[] = [];
 
-  for (const pageBreak of breaks) {
-    if (pageBreak.pos < 0 || pageBreak.pos > doc.content.size) continue;
-    const height = Math.max(0, Math.round(pageBreak.height * 100) / 100);
-    if (height < 0.5) continue;
-
+  for (const pageBreak of validBreaks(doc, breaks)) {
     decorations.push(
       Decoration.widget(
         pageBreak.pos,
         () => {
           const spacer = document.createElement('div');
           spacer.className = 'sd-page-spacer';
-          spacer.style.height = `${height}px`;
+          spacer.style.height = `${pageBreak.height}px`;
           spacer.setAttribute('contenteditable', 'false');
           spacer.setAttribute('aria-hidden', 'true');
           spacer.dataset.paginationSpacer = 'true';
@@ -35,7 +50,10 @@ function buildDecorations(
         },
         {
           side: -1,
-          key: `page-break-${pageBreak.pos}-${height}`,
+          // La clave no incluye la altura: si el salto se queda en la misma
+          // posición, ProseMirror reutiliza el nodo y solo cambiamos su alto.
+          // Así el DOM no se reemplaza justo debajo del cursor.
+          key: `page-break-${pageBreak.pos}`,
         },
       ),
     );
@@ -84,6 +102,14 @@ export function setPaginationDecorations(
     .setMeta(paginationPluginKey, { breaks } satisfies PaginationMeta)
     .setMeta('addToHistory', false);
   editor.view.dispatch(tr);
+
+  // Los widgets cuya posición no cambió se reutilizan: ajustamos su altura.
+  const spacers = editor.view.dom.querySelectorAll<HTMLElement>('.sd-page-spacer');
+  const valid = validBreaks(editor.state.doc, breaks);
+  valid.forEach((pageBreak, index) => {
+    const spacer = spacers[index];
+    if (spacer) spacer.style.height = `${pageBreak.height}px`;
+  });
 }
 
 /** Quita todos los espaciadores (al salir del modo paginado). */

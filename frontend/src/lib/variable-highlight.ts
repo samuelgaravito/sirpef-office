@@ -1,6 +1,6 @@
 import { Extension } from '@tiptap/core';
 import type { Node as PMNode } from '@tiptap/pm/model';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 const key = new PluginKey('variableHighlight');
@@ -21,6 +21,31 @@ export interface VariableHighlightOptions {
    * dejarlo resaltado como una variable sin resolver.
    */
   resolve?: (variableKey: string) => ResolvedVariable | null;
+}
+
+interface TokenRange {
+  from: number;
+  to: number;
+}
+
+/** Rango absoluto del token `{{clave}}` que contiene (o toca) una posición. */
+function tokenAt(doc: PMNode, pos: number): TokenRange | null {
+  const $pos = doc.resolve(pos);
+  const parent = $pos.parent;
+  if (!parent.isTextblock) return null;
+
+  const text = parent.textContent;
+  const offset = $pos.parentOffset;
+  const pattern = new RegExp(PATTERN_SOURCE, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const from = match.index;
+    const to = from + match[0].length;
+    if (offset >= from && offset <= to) {
+      return { from: $pos.start() + from, to: $pos.start() + to };
+    }
+  }
+  return null;
 }
 
 function build(doc: PMNode, options: VariableHighlightOptions): DecorationSet {
@@ -46,7 +71,7 @@ function build(doc: PMNode, options: VariableHighlightOptions): DecorationSet {
         );
         decorations.push(
           Decoration.widget(
-            from,
+            to,
             () => {
               const span = document.createElement('span');
               span.className = 'doc-var doc-var--resolved';
@@ -55,7 +80,9 @@ function build(doc: PMNode, options: VariableHighlightOptions): DecorationSet {
               span.setAttribute('contenteditable', 'false');
               return span;
             },
-            { side: -1, key: `resolved-${from}-${resolved.text}` },
+            // Después del token: al hacer clic en el valor el cursor queda
+            // detrás de la variable y Retroceso la borra completa.
+            { side: 1, key: `resolved-${from}-${resolved.text}` },
           ),
         );
       } else {
@@ -102,6 +129,71 @@ export const VariableHighlight = Extension.create<VariableHighlightOptions>({
         props: {
           decorations(state) {
             return key.getState(state) ?? DecorationSet.empty;
+          },
+        },
+      }),
+      /**
+       * Comportamiento atómico sin cambiar el esquema.
+       *
+       * El token sigue siendo texto para que el servidor lo interpole, pero
+       * las teclas de borrado y las flechas lo tratan como una unidad.
+       */
+      new Plugin({
+        props: {
+          handleKeyDown(view, event) {
+            const { selection } = view.state;
+            if (!selection.empty) return false;
+            const pos = selection.from;
+            const token = tokenAt(view.state.doc, pos);
+
+            if (event.key === 'Backspace') {
+              if (!token || pos <= token.from) return false;
+              view.dispatch(view.state.tr.delete(token.from, token.to));
+              return true;
+            }
+
+            if (event.key === 'Delete') {
+              if (!token || pos >= token.to) return false;
+              view.dispatch(view.state.tr.delete(token.from, token.to));
+              return true;
+            }
+
+            if (event.key === 'ArrowLeft') {
+              if (!token || pos <= token.from) return false;
+              view.dispatch(
+                view.state.tr.setSelection(TextSelection.create(view.state.doc, token.from)),
+              );
+              return true;
+            }
+
+            if (event.key === 'ArrowRight') {
+              if (!token || pos >= token.to) return false;
+              view.dispatch(
+                view.state.tr.setSelection(TextSelection.create(view.state.doc, token.to)),
+              );
+              return true;
+            }
+
+            return false;
+          },
+          handleDoubleClick(view, pos) {
+            const token = tokenAt(view.state.doc, pos);
+            if (!token) return false;
+            view.dispatch(
+              view.state.tr.setSelection(
+                TextSelection.create(view.state.doc, token.from, token.to),
+              ),
+            );
+            return true;
+          },
+          handleClick(view, pos) {
+            const token = tokenAt(view.state.doc, pos);
+            if (!token || pos <= token.from || pos >= token.to) return false;
+            const target = pos - token.from < token.to - pos ? token.from : token.to;
+            view.dispatch(
+              view.state.tr.setSelection(TextSelection.create(view.state.doc, target)),
+            );
+            return true;
           },
         },
       }),

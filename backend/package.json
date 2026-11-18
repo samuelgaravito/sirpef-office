@@ -52,6 +52,7 @@
     "smoke:variables": "tsx scripts/variable-spacing-smoke.ts",
     "smoke:dates": "tsx scripts/documents-dates-smoke.ts",
     "smoke:ai-draft": "tsx scripts/ai-draft-smoke.ts",
+    "smoke:ai-inline": "tsx scripts/ai-inline-smoke.ts",
     "smoke:ai-template": "tsx scripts/ai-template-choice-smoke.ts",
     "smoke:ai-ask": "tsx scripts/ai-ask-smoke.ts"
   },
