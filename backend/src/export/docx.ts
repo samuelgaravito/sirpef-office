@@ -174,6 +174,35 @@ function inlineRuns(node: JSONContent, ctx: TextContext): (TextRun | ExternalHyp
 
 /* ────────────────────────────── Bloques ─────────────────────────────── */
 
+/**
+ * Interlineado explícito del bloque.
+ *
+ * La barra del editor guarda `lineHeight` como marca de `textStyle` (igual que
+ * el tamaño o la tipografía). Word lo entiende como espaciado de párrafo, así
+ * que se toma el primer valor del bloque y se traduce a múltiplos de línea.
+ */
+function lineHeightSpacing(node: JSONContent): {
+  line?: number;
+  lineRule?: (typeof LineRuleType)[keyof typeof LineRuleType];
+} {
+  let found: number | null = null;
+  const visit = (current: JSONContent): void => {
+    if (found !== null) return;
+    for (const mark of current.marks ?? []) {
+      if (mark.type !== 'textStyle') continue;
+      const raw = mark.attrs?.lineHeight;
+      const value = typeof raw === 'string' ? Number.parseFloat(raw) : Number(raw);
+      if (Number.isFinite(value) && value > 0) {
+        found = value;
+        return;
+      }
+    }
+    current.content?.forEach(visit);
+  };
+  visit(node);
+  return found === null ? {} : { line: Math.round(found * 240), lineRule: LineRuleType.AUTO };
+}
+
 function paragraphFrom(node: JSONContent, ctx: TextContext): Paragraph {
   const attrs = node.attrs ?? {};
   const runs = inlineRuns(node, ctx);
@@ -182,7 +211,7 @@ function paragraphFrom(node: JSONContent, ctx: TextContext): Paragraph {
     children: runs.length > 0 ? runs : [new TextRun('')],
     alignment: alignment(attrs.textAlign),
     // El editor no añade espacio entre párrafos; solo el interlineado.
-    spacing: { before: 0, after: 0 },
+    spacing: { before: 0, after: 0, ...lineHeightSpacing(node) },
   });
 }
 
@@ -204,7 +233,10 @@ function headingFrom(
     children: inlineRuns(node, ctx),
     heading: HEADINGS[level] ?? HeadingLevel.HEADING_1,
     alignment: alignment(node.attrs?.textAlign),
-    spacing: suppressBefore ? { ...spacing, before: 0 } : spacing,
+    spacing: {
+      ...(suppressBefore ? { ...spacing, before: 0 } : spacing),
+      ...lineHeightSpacing(node),
+    },
   });
 }
 
@@ -391,7 +423,7 @@ function listFrom(node: JSONContent, ctx: TextContext, level = 0): Paragraph[] {
           new Paragraph({
             children: inlineRuns(child, ctx),
             numbering: { reference, level: Math.min(level, 8) },
-            spacing: { after: 60 },
+            spacing: { after: 60, ...lineHeightSpacing(child) },
           }),
         );
       } else if (child.type === 'bulletList' || child.type === 'orderedList') {
@@ -815,7 +847,15 @@ export async function renderDocx(options: DocxOptions): Promise<Buffer> {
 
   for (let pageIndex = 0; pageIndex < pageBlocks.length; pageIndex += 1) {
     if (pageIndex > 0) {
-      children.push(new Paragraph({ children: [new PageBreak()] }));
+      // «Salto antes» en un párrafo mínimo, no un salto suelto: si la página
+      // anterior ya quedó llena, Word/LibreOffice no insertan una hoja vacía.
+      children.push(
+        new Paragraph({
+          pageBreakBefore: true,
+          spacing: { before: 0, after: 0, line: 1, lineRule: LineRuleType.EXACT },
+          children: [new TextRun('')],
+        }),
+      );
     }
     const nodes = (pageBlocks[pageIndex] ?? [])
       .map((index) => docContent.content?.[index])

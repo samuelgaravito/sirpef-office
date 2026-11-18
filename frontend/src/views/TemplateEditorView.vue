@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Copy,
   Eye,
+  FlaskConical,
   Hash,
   History,
   Loader2,
@@ -22,12 +23,18 @@ import {
 import { computed, onMounted, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
+import DocumentAiBar from '@/components/ai/DocumentAiBar.vue';
 import DocumentSheet from '@/components/editor/DocumentSheet.vue';
 import EditorToolbar from '@/components/editor/EditorToolbar.vue';
+import ImageBubbleMenu from '@/components/editor/ImageBubbleMenu.vue';
+import TableBubbleMenu from '@/components/editor/TableBubbleMenu.vue';
+import TextBubbleMenu from '@/components/editor/TextBubbleMenu.vue';
 import TemplateHistoryPanel from '@/components/templates/TemplateHistoryPanel.vue';
 import TemplateShareDialog from '@/components/templates/TemplateShareDialog.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { api } from '@/api/client';
+import { useAiStatus } from '@/composables/useAiStatus';
+import { useInlineAi } from '@/composables/useInlineAi';
 import { useToast } from '@/composables/useToast';
 import { useAuthStore } from '@/stores/auth';
 import {
@@ -43,6 +50,7 @@ import {
   normalizeNumberingPrefix,
   NUMBERING_MESSAGES,
   resolveBodyVariable,
+  sampleValues,
   SYSTEM_VARIABLES,
 } from '@sirpefoffice/shared';
 import type {
@@ -59,7 +67,7 @@ import type {
 import { DOC_TYPE_LABELS } from '@/lib/labels';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import { normalizeRouteId } from '@/lib/routes';
-import { VariableHighlight } from '@/lib/variable-highlight';
+import { VariableHighlight, VARIABLE_HIGHLIGHT_REFRESH } from '@/lib/variable-highlight';
 import type {
   DesignRecord,
   ListResponse,
@@ -100,6 +108,25 @@ const derivingStyle = ref(false);
 /** Campo que el asistente usará como cuerpo redactable (marcado o deducido). */
 const inferredBody = computed(() => resolveBodyVariable(schema.value));
 const schema = ref<VariableDef[]>([]);
+
+/**
+ * Modo de datos de ejemplo: las variables se dibujan con un valor ficticio
+ * de longitud realista, sin modificar el contenido guardado.
+ */
+const mockMode = ref(false);
+const mockValues = computed(() => sampleValues(schema.value));
+
+function resolveMockVariable(key: string): { text: string; title: string } | null {
+  if (!mockMode.value) return null;
+  if (key === DOCUMENT_NUMBER_VARIABLE) {
+    return { text: 'PRE-2026-0001', title: 'Número previsto de ejemplo' };
+  }
+  const value = mockValues.value[key];
+  if (value === undefined || value === null || value === '') return null;
+  if (Array.isArray(value) || typeof value === 'object') return null;
+  return { text: String(value), title: `{{${key}}}` };
+}
+
 const designs = ref<DesignRecord[]>([]);
 const templateVersion = ref(1);
 const tab = ref<'variables' | 'settings' | 'ai'>('variables');
@@ -151,7 +178,7 @@ const previewHtml = ref('');
 const editor = useEditor({
   extensions: [
     ...createEditorExtensions({ placeholder: 'Diseña aquí el cuerpo de la plantilla. Usa {{variable}} para insertar datos.' }),
-    VariableHighlight,
+    VariableHighlight.configure({ resolve: resolveMockVariable }),
     PaginationExtension,
   ],
   content: { type: 'doc', content: [{ type: 'paragraph' }] },
@@ -164,6 +191,41 @@ const editor = useEditor({
   },
 });
 
+const { status: aiStatus, load: loadAiStatus } = useAiStatus();
+
+const {
+  selectionText: templateAiSelection,
+  hasSelection: templateAiHasSelection,
+  busy: templateAiBusy,
+  error: templateAiError,
+  result: templateAiResult,
+  previewHtml: templateAiPreviewHtml,
+  submit: submitTemplateAi,
+  retry: retryTemplateAi,
+  apply: applyTemplateAi,
+  discard: discardTemplateAi,
+} = useInlineAi({
+  editor: computed(() => editor.value),
+  documentId: computed(() => null),
+  templateId: computed(() => (isNew.value ? null : templateId.value)),
+  docType,
+  title: computed(() => name.value),
+  templateName: computed(() => name.value),
+  canEdit,
+  onApplied: () => {
+    dirty.value = true;
+  },
+});
+
+function insertTemplateTable(): void {
+  editor.value
+    ?.chain()
+    .focus()
+    .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+    .run();
+  dirty.value = true;
+}
+
 function chromeEditorOptions(kind: ChromeKind) {
   return {
     extensions: [
@@ -174,7 +236,7 @@ function chromeEditorOptions(kind: ChromeKind) {
             : 'Pie: texto, {page} y {total} para la numeración…',
         pageBreak: false,
       }),
-      VariableHighlight,
+      VariableHighlight.configure({ resolve: resolveMockVariable }),
     ],
     content: null,
     editable: false,
@@ -188,6 +250,15 @@ function chromeEditorOptions(kind: ChromeKind) {
 
 const headerEditor = useEditor(chromeEditorOptions('header'));
 const footerEditor = useEditor(chromeEditorOptions('footer'));
+
+// El valor de ejemplo se resuelve en las decoraciones: hay que refrescarlas
+// cuando se activa el modo o cambia el esquema de la plantilla.
+watch([mockMode, mockValues], () => {
+  for (const instance of [editor.value, headerEditor.value, footerEditor.value]) {
+    const view = instance?.view;
+    if (view) view.dispatch(view.state.tr.setMeta(VARIABLE_HIGHLIGHT_REFRESH, true));
+  }
+});
 
 watch([chromeOpen, canEdit], ([open, editable]) => {
   headerEditor.value?.setEditable(editable && open);
@@ -785,6 +856,7 @@ onBeforeRouteLeave(() => {
 });
 
 onMounted(() => {
+  void loadAiStatus();
   if (!isNew.value && !templateId.value) {
     void router.replace({ name: 'templates' });
     return;
@@ -820,6 +892,16 @@ onMounted(() => {
         @click="toggleChromeMode"
       >
         <PanelTop class="size-4" />
+      </button>
+
+      <button
+        type="button"
+        :class="['tool-btn', mockMode ? 'is-active' : '']"
+        title="Mostrar datos de ejemplo dentro de las variables"
+        :aria-pressed="mockMode"
+        @click="mockMode = !mockMode"
+      >
+        <FlaskConical class="size-4" />
       </button>
 
       <button
@@ -918,7 +1000,11 @@ onMounted(() => {
           :page-tokens="activeChrome !== 'body'"
           @image="toast.error('La imagen supera el máximo de 8 MB')"
         />
-        <main class="flex-1 overflow-auto bg-[#eef1f5] px-4 py-6 sm:px-8">
+        <main class="doc-desk min-h-0 flex-1 overflow-auto px-4 py-6 sm:px-8">
+          <TextBubbleMenu v-if="activeEditor && canEdit" :editor="activeEditor" />
+          <TableBubbleMenu v-if="activeEditor && canEdit" :editor="activeEditor" />
+          <ImageBubbleMenu v-if="activeEditor && canEdit" :editor="activeEditor" />
+
           <div class="mx-auto w-fit pb-10">
             <DocumentSheet
               :editor="editor ?? null"
@@ -950,6 +1036,31 @@ onMounted(() => {
             </DocumentSheet>
           </div>
         </main>
+
+        <DocumentAiBar
+          :enabled="aiStatus?.configured === true && canEdit"
+          :disabled-reason="
+            aiStatus?.configured
+              ? 'Este documento es de solo lectura.'
+              : 'Configura el proveedor de IA en Ajustes para usar el asistente.'
+          "
+          :doc-type="docType"
+          :template-name="name"
+          :has-selection="templateAiHasSelection"
+          :selection-preview="templateAiSelection"
+          :busy="templateAiBusy"
+          :error="templateAiError"
+          :result="templateAiResult"
+          :preview-html="templateAiPreviewHtml"
+          :show-assistant="false"
+          :show-generate="false"
+          @submit="submitTemplateAi"
+          @apply="applyTemplateAi"
+          @retry="retryTemplateAi"
+          @discard="discardTemplateAi"
+          @insert-table="insertTemplateTable"
+          @open-settings="router.push({ name: 'settings' })"
+        />
       </div>
 
       <aside class="flex w-full shrink-0 flex-col border-t border-hairline bg-surface xl:w-[368px] xl:border-l xl:border-t-0">

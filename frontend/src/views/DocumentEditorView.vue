@@ -17,6 +17,8 @@ import {
   Loader2,
   Lock,
   MoreHorizontal,
+  PanelLeft,
+  PanelLeftClose,
   PanelTop,
   Pencil,
   Printer,
@@ -34,10 +36,15 @@ import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
 import AssistantPanel from '@/components/ai/AssistantPanel.vue';
+import DocumentAiBar from '@/components/ai/DocumentAiBar.vue';
+import DocumentOutline from '@/components/editor/DocumentOutline.vue';
 import DocumentSheet from '@/components/editor/DocumentSheet.vue';
 import EditorToolbar from '@/components/editor/EditorToolbar.vue';
 import FindReplacePanel from '@/components/editor/FindReplacePanel.vue';
+import ImageBubbleMenu from '@/components/editor/ImageBubbleMenu.vue';
 import ShareDialog from '@/components/editor/ShareDialog.vue';
+import TableBubbleMenu from '@/components/editor/TableBubbleMenu.vue';
+import TextBubbleMenu from '@/components/editor/TextBubbleMenu.vue';
 import VariablePanel from '@/components/editor/VariablePanel.vue';
 import VersionHistoryPanel from '@/components/editor/VersionHistoryPanel.vue';
 import NumberingBadge from '@/components/editor/NumberingBadge.vue';
@@ -46,6 +53,7 @@ import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { useInlineAi } from '@/composables/useInlineAi';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
 import { takeAiPrompt } from '@/lib/ai-prompt';
@@ -293,7 +301,7 @@ const description = ref('');
 const docNumber = ref<string | null>(null);
 /** Previsto del borrador (orientativo; no reserva el correlativo). */
 const numberingPreview = ref<NumberingPreview | null>(null);
-const docType = ref<string>('blank');
+const docType = ref<DocType>('blank');
 const status = ref<DocumentStatus>('draft');
 const permission = ref<'owner' | 'editor' | 'viewer'>('viewer');
 const version = ref(1);
@@ -375,10 +383,15 @@ const aiApplied = ref(false);
 const assistantOpen = ref(false);
 const assistantMessages = ref<AiDraftMessage[]>([]);
 const assistantBusy = ref(false);
+const assistantProgress = ref(0);
 const assistantError = ref('');
 const assistantWarnings = ref<string[]>([]);
 const assistantQuestions = ref<string[]>([]);
 const assistantModel = ref<string | null>(null);
+/** Texto que la barra rápida pasa al compositor del chat. */
+const assistantPrefill = ref('');
+/** Pestaña del panel derecho cuando el chat está abierto. */
+const rightTab = ref<'manual' | 'ai'>('manual');
 
 const historyOpen = ref(false);
 const shareOpen = ref(false);
@@ -387,6 +400,18 @@ const previewMode = ref(false);
 const previewHtml = ref('');
 const loadingPreview = ref(false);
 const findOpen = ref(false);
+
+/* ───────────────────── Estructura y selección de la hoja ───────────────────── */
+interface OutlineItem {
+  pos: number;
+  level: number;
+  text: string;
+}
+
+const outlineOpen = ref(true);
+const outline = ref<OutlineItem[]>([]);
+const activeOutlinePos = ref<number | null>(null);
+const pageCount = ref(0);
 
 let saveTimer: number | undefined;
 let previewTimer: number | undefined;
@@ -488,7 +513,106 @@ const editor = useEditor({
 /** Refleja en la vista el contenido real del editor. */
 function syncEditorContent(): void {
   currentContent.value = readEditorContent(editor.value);
+  refreshOutline();
 }
+
+/** Reconstruye el índice de títulos con sus posiciones ProseMirror. */
+function refreshOutline(): void {
+  const instance = editor.value;
+  if (!instance || instance.isDestroyed) {
+    outline.value = [];
+    return;
+  }
+  const items: OutlineItem[] = [];
+  instance.state.doc.descendants((node, pos) => {
+    if (node.type.name !== 'heading') return true;
+    const text = node.textContent.trim();
+    if (text) {
+      items.push({ pos, level: Number(node.attrs.level) || 1, text });
+    }
+    return true;
+  });
+  outline.value = items;
+  syncActiveOutline();
+}
+
+function syncActiveOutline(): void {
+  const instance = editor.value;
+  if (!instance) return;
+  const from = instance.state.selection.from;
+  let active: number | null = null;
+  for (const item of outline.value) {
+    if (item.pos <= from) active = item.pos;
+    else break;
+  }
+  activeOutlinePos.value = active;
+}
+
+function goToOutline(pos: number): void {
+  const instance = editor.value;
+  if (!instance) return;
+  instance.chain().focus().setTextSelection(pos + 1).scrollIntoView().run();
+}
+
+function closeAssistant(): void {
+  assistantOpen.value = false;
+  assistantPrefill.value = '';
+}
+
+function toggleAssistant(): void {
+  if (assistantOpen.value) closeAssistant();
+  else openAssistantWithPrompt('');
+}
+
+function openAssistantWithPrompt(prompt: string): void {
+  inlineDiscard();
+  assistantPrefill.value = prompt.trim();
+  assistantOpen.value = true;
+  rightTab.value = 'ai';
+}
+
+function insertTableFromAiBar(): void {
+  const instance = editor.value;
+  if (!instance) return;
+  instance.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+  markDirty();
+}
+
+watch(
+  editor,
+  (instance, _previous, onCleanup) => {
+    if (!instance) return;
+    const sync = (): void => syncActiveOutline();
+    instance.on('selectionUpdate', sync);
+    refreshOutline();
+    onCleanup(() => instance.off('selectionUpdate', sync));
+  },
+  { immediate: true },
+);
+
+const {
+  selectionText: inlineSelectionText,
+  hasSelection: inlineHasSelection,
+  busy: inlineBusy,
+  error: inlineError,
+  result: inlineResult,
+  previewHtml: inlinePreviewHtml,
+  submit: inlineSubmit,
+  retry: inlineRetry,
+  apply: inlineApply,
+  discard: inlineDiscard,
+} = useInlineAi({
+  editor: computed(() => editor.value),
+  documentId,
+  templateId,
+  docType,
+  title,
+  templateName: modelName,
+  canEdit,
+  onApplied: () => {
+    markDirty();
+  },
+});
 
 /**
  * Esquema visible en el panel de datos.
@@ -1383,6 +1507,7 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
   assistantWarnings.value = [];
   assistantQuestions.value = [];
   assistantBusy.value = true;
+  assistantProgress.value = 0;
 
   try {
     const payload = {
@@ -1395,17 +1520,28 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
       },
     };
 
+    // El modelo tarda: se pide el avance para que la pantalla no se quede
+    // muda mientras redacta. Al terminar llega la propuesta completa.
+    const onProgress = (chars: number): void => {
+      assistantProgress.value = chars;
+    };
+
     const result =
       isNew.value || !documentId.value
-        ? await api.post<AiDraftResult>(
-            `/templates/${templateId.value}/ai/draft`,
+        ? await api.stream<AiDraftResult>(
+            `/templates/${templateId.value}/ai/draft/stream`,
             payload,
+            onProgress,
           )
-        : await api.post<AiDraftResult>(`/documents/${documentId.value}/ai/draft`, {
-            ...payload,
-            // Detecta si otra sesión guardó mientras conversábamos.
-            expectedVersion: version.value,
-          });
+        : await api.stream<AiDraftResult>(
+            `/documents/${documentId.value}/ai/draft/stream`,
+            {
+              ...payload,
+              // Detecta si otra sesión guardó mientras conversábamos.
+              expectedVersion: version.value,
+            },
+            onProgress,
+          );
 
     applyAiDraft(result.document);
     assistantMessages.value = [
@@ -1419,6 +1555,7 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
     assistantError.value = explainError(error, 'No se pudo redactar con IA');
   } finally {
     assistantBusy.value = false;
+    assistantProgress.value = 0;
   }
 }
 
@@ -1573,11 +1710,15 @@ onMounted(async () => {
   }
 
   loadAssistantChat();
-  if (route.query.ai === '1') assistantOpen.value = true;
+  if (route.query.ai === '1') {
+    rightTab.value = 'ai';
+    assistantOpen.value = true;
+  }
 
   // Encargo escrito en el panel de trabajo: se envía una sola vez al llegar.
   const pendingPrompt = takeAiPrompt(chatSessionId.value);
   if (pendingPrompt) {
+    rightTab.value = 'ai';
     assistantOpen.value = true;
     void sendAssistantMessage(pendingPrompt);
   }
@@ -1608,6 +1749,21 @@ onBeforeUnmount(() => {
       </RouterLink>
 
       <span class="hidden h-8 w-px bg-hairline sm:block" />
+
+      <button
+        v-if="!previewMode"
+        type="button"
+        :class="[
+          'hidden rounded-lg p-2 text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink xl:inline-flex',
+          outlineOpen ? 'bg-accent-soft text-accent' : '',
+        ]"
+        :title="outlineOpen ? 'Ocultar estructura' : 'Mostrar estructura'"
+        aria-label="Estructura del documento"
+        @click="outlineOpen = !outlineOpen"
+      >
+        <PanelLeftClose v-if="outlineOpen" class="size-4.5" />
+        <PanelLeft v-else class="size-4.5" />
+      </button>
 
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
@@ -1690,7 +1846,7 @@ onBeforeUnmount(() => {
         :class="['btn btn-outline btn-sm', assistantOpen ? 'is-active' : '']"
         :title="assistantOpen ? 'Cerrar asistente de redacción' : 'Redactar con el asistente'"
         aria-label="Asistente de redacción"
-        @click="assistantOpen = !assistantOpen"
+        @click="toggleAssistant"
       >
         <Sparkles class="size-3.5" />
         <span class="hidden sm:inline">Asistente</span>
@@ -2075,85 +2231,183 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-else class="flex min-h-0 flex-1">
-      <!-- Vista previa con los datos aplicados -->
-      <main v-if="previewMode" class="min-h-0 flex-1 bg-[#e9edf2]">
-        <iframe
-          v-if="previewHtml"
-          :srcdoc="previewHtml"
-          class="size-full border-0"
-          sandbox=""
-          title="Vista previa del documento"
-        />
-        <div v-else class="grid h-full place-items-center">
-          <BaseSpinner label="Generando vista previa…" />
-        </div>
-      </main>
-
-      <main v-else class="relative flex-1 overflow-auto bg-[#eef1f5] px-4 py-6 sm:px-8">
-        <div class="mx-auto w-fit pb-16">
-          <DocumentSheet
-            :editor="editor ?? null"
-            :design="design"
-            :header="{
-              editor: headerEditor ?? null,
-              config: headerConfig,
-              source: headerSource,
-              own: headerSource === 'document',
-            }"
-            :footer="{
-              editor: footerEditor ?? null,
-              config: footerConfig,
-              source: footerSource,
-              own: footerSource === 'document',
-            }"
-            :chrome-open="chromeOpen"
-            :editable="canEdit"
-            :active-chrome="activeChrome"
-            @toggle="toggleChrome"
-            @height="setChromeHeight"
-            @width="setChromeWidth"
-            @reset="resetChrome"
-          >
-            <template #meta>
-              {{ design?.pageFormat ?? 'A4' }} · {{ docTypeLabel(docType) }}
-              <template v-if="ownerName"> · {{ ownerName }}</template>
-              <template v-if="chromeOpen"> · Cabecera y pie editables</template>
-            </template>
-          </DocumentSheet>
-        </div>
-
-        <button
-          type="button"
-          class="fixed bottom-5 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[13px] font-medium shadow-pop lg:hidden"
-          @click="mobileDataOpen = true"
-        >
-          <Sparkles class="size-4 text-accent" />
-          Datos del documento
-        </button>
-      </main>
-
-      <!-- Asistente de redacción (escritorio) -->
+      <!-- Estructura del documento -->
       <aside
-        v-if="assistantOpen"
-        class="hidden w-[380px] shrink-0 border-l border-hairline bg-surface xl:flex xl:flex-col"
+        v-if="outlineOpen && !previewMode"
+        class="hidden w-[240px] shrink-0 border-r border-hairline bg-surface xl:flex xl:flex-col"
       >
-        <AssistantPanel
-          :messages="assistantMessages"
-          :busy="assistantBusy"
-          :error="assistantError"
-          :warnings="assistantWarnings"
-          :questions="assistantQuestions"
-          :model="assistantModel"
-          :template-name="modelName"
-          :enabled="assistantEnabled"
-          :disabled-reason="assistantDisabledReason"
-          @close="assistantOpen = false"
-          @send="sendAssistantMessage"
+        <DocumentOutline
+          :title="title"
+          :headings="outline"
+          :active-pos="activeOutlinePos"
+          :page-count="pageCount"
+          @navigate="goToOutline"
+          @close="outlineOpen = false"
         />
       </aside>
 
-      <!-- Panel de datos -->
-      <aside class="hidden w-[336px] shrink-0 border-l border-hairline bg-surface lg:flex lg:flex-col">
+      <div class="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <!-- Vista previa con los datos aplicados -->
+        <main v-if="previewMode" class="min-h-0 flex-1 bg-[#e9edf2]">
+          <iframe
+            v-if="previewHtml"
+            :srcdoc="previewHtml"
+            class="size-full border-0"
+            sandbox=""
+            title="Vista previa del documento"
+          />
+          <div v-else class="grid h-full place-items-center">
+            <BaseSpinner label="Generando vista previa…" />
+          </div>
+        </main>
+
+        <main v-else class="doc-desk relative min-h-0 flex-1 overflow-auto px-4 py-6 sm:px-8">
+          <TextBubbleMenu v-if="activeEditor" :editor="activeEditor" />
+          <TableBubbleMenu v-if="activeEditor" :editor="activeEditor" />
+          <ImageBubbleMenu v-if="activeEditor" :editor="activeEditor" />
+
+          <div
+            class="mx-auto w-fit transition-[padding] duration-150"
+            :class="!assistantOpen ? 'pb-44' : 'pb-16'"
+          >
+            <DocumentSheet
+              :editor="editor ?? null"
+              :design="design"
+              :header="{
+                editor: headerEditor ?? null,
+                config: headerConfig,
+                source: headerSource,
+                own: headerSource === 'document',
+              }"
+              :footer="{
+                editor: footerEditor ?? null,
+                config: footerConfig,
+                source: footerSource,
+                own: footerSource === 'document',
+              }"
+              :chrome-open="chromeOpen"
+              :editable="canEdit"
+              :active-chrome="activeChrome"
+              @toggle="toggleChrome"
+              @height="setChromeHeight"
+              @width="setChromeWidth"
+              @reset="resetChrome"
+              @pages="pageCount = $event"
+            >
+              <template #meta>
+                {{ design?.pageFormat ?? 'A4' }} · {{ docTypeLabel(docType) }}
+                <template v-if="ownerName"> · {{ ownerName }}</template>
+                <template v-if="chromeOpen"> · Cabecera y pie editables</template>
+              </template>
+            </DocumentSheet>
+          </div>
+
+          <button
+            v-if="!assistantOpen"
+            type="button"
+            class="fixed bottom-40 right-5 z-30 flex items-center gap-2 rounded-full bg-surface px-4 py-2.5 text-[13px] font-medium shadow-pop lg:hidden"
+            @click="mobileDataOpen = true"
+          >
+            <Sparkles class="size-4 text-accent" />
+            Datos del documento
+          </button>
+        </main>
+
+        <!-- Barra rápida flotante: edición inline sin conversación invasiva -->
+        <div
+          v-if="!assistantOpen && !previewMode && !chromeOpen"
+          class="absolute bottom-3 left-1/2 z-20 w-[min(760px,calc(100%-24px))] -translate-x-1/2 rounded-2xl border border-hairline bg-surface shadow-pop"
+        >
+          <DocumentAiBar
+            class="rounded-2xl"
+            :enabled="aiConfigured && canEdit"
+            :disabled-reason="
+              !aiConfigured
+                ? 'Configura el proveedor de IA en Ajustes para usar el asistente.'
+                : 'Este documento es de solo lectura.'
+            "
+            :doc-type="docType"
+            :template-name="modelName"
+            :has-selection="inlineHasSelection"
+            :selection-preview="inlineSelectionText"
+            :busy="inlineBusy"
+            :error="inlineError"
+            :result="inlineResult"
+            :preview-html="inlinePreviewHtml"
+            :show-assistant="true"
+            :show-generate="true"
+            @submit="inlineSubmit"
+            @apply="inlineApply"
+            @retry="inlineRetry"
+            @discard="inlineDiscard"
+            @open-assistant="openAssistantWithPrompt"
+            @generate="generateWithAI"
+            @insert-table="insertTableFromAiBar"
+            @open-settings="router.push({ name: 'settings' })"
+          />
+        </div>
+      </div>
+
+      <!-- Panel derecho: IA o variables -->
+      <aside class="hidden w-[352px] shrink-0 border-l border-hairline bg-surface lg:flex lg:flex-col">
+        <div class="flex shrink-0 items-center gap-1 border-b border-hairline px-2 py-1.5">
+          <button
+            type="button"
+            class="flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors"
+            :class="
+              assistantOpen && rightTab === 'ai'
+                ? 'bg-accent-soft text-accent'
+                : 'text-ink-muted hover:bg-surface-hover'
+            "
+            @click="openAssistantWithPrompt('')"
+          >
+            <Sparkles class="size-3.5" />
+            IA
+          </button>
+          <button
+            type="button"
+            class="flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium transition-colors"
+            :class="
+              !assistantOpen || rightTab === 'manual'
+                ? 'bg-accent-soft text-accent'
+                : 'text-ink-muted hover:bg-surface-hover'
+            "
+            @click="rightTab = 'manual'"
+          >
+            <FileText class="size-3.5" />
+            Manual
+          </button>
+          <button
+            v-if="assistantOpen"
+            type="button"
+            class="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-ink-muted transition-colors hover:bg-surface-hover hover:text-ink"
+            title="Usar la barra inferior"
+            @click="closeAssistant"
+          >
+            <ChevronDown class="size-3.5" />
+            Abajo
+          </button>
+        </div>
+
+        <div v-if="assistantOpen && rightTab === 'ai'" class="min-h-0 flex-1">
+          <AssistantPanel
+            :messages="assistantMessages"
+            :busy="assistantBusy"
+            :progress="assistantProgress"
+            :error="assistantError"
+            :warnings="assistantWarnings"
+            :questions="assistantQuestions"
+            :model="assistantModel"
+            :template-name="modelName"
+            :enabled="assistantEnabled"
+            :disabled-reason="assistantDisabledReason"
+            :prefill="assistantPrefill"
+            @close="closeAssistant"
+            @send="sendAssistantMessage"
+          />
+        </div>
+
+        <template v-else>
         <!-- Mensaje del revisor mientras se corrige -->
         <div v-if="lastRejection" class="shrink-0 border-b border-danger/20 bg-danger-soft/40">
           <div class="flex items-center gap-2 px-4 py-2.5">
@@ -2265,6 +2519,7 @@ onBeforeUnmount(() => {
             @generate="generateWithAI"
           />
         </div>
+        </template>
       </aside>
     </div>
 
@@ -2272,12 +2527,13 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="assistantOpen"
-        class="fixed inset-0 z-[90] flex flex-col bg-surface xl:hidden"
+        class="fixed inset-0 z-[90] flex flex-col bg-surface lg:hidden"
       >
         <AssistantPanel
           input-id="assistant-input-mobile"
           :messages="assistantMessages"
           :busy="assistantBusy"
+          :progress="assistantProgress"
           :error="assistantError"
           :warnings="assistantWarnings"
           :questions="assistantQuestions"
@@ -2285,7 +2541,8 @@ onBeforeUnmount(() => {
           :template-name="modelName"
           :enabled="assistantEnabled"
           :disabled-reason="assistantDisabledReason"
-          @close="assistantOpen = false"
+          :prefill="assistantPrefill"
+          @close="closeAssistant"
           @send="sendAssistantMessage"
         />
       </div>

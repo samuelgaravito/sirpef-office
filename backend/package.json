@@ -52,7 +52,9 @@
     "smoke:variables": "tsx scripts/variable-spacing-smoke.ts",
     "smoke:dates": "tsx scripts/documents-dates-smoke.ts",
     "smoke:ai-draft": "tsx scripts/ai-draft-smoke.ts",
-    "smoke:ai-template": "tsx scripts/ai-template-choice-smoke.ts"
+    "smoke:ai-inline": "tsx scripts/ai-inline-smoke.ts",
+    "smoke:ai-template": "tsx scripts/ai-template-choice-smoke.ts",
+    "smoke:ai-ask": "tsx scripts/ai-ask-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",
@@ -88,6 +90,7 @@
     "postgres": "^3.4.9",
     "puppeteer-core": "^23.11.1",
     "tsx": "^4.23.15",
+    "undici": "^6.29.1",
     "ws": "^8.22.2",
     "zod": "^4.6.7"
   },

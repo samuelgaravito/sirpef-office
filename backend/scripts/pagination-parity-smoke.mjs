@@ -204,9 +204,13 @@ try {
   const docxXml = execFileSync('unzip', ['-p', docxPath, 'word/document.xml'], {
     encoding: 'utf8',
   });
-  const docxBreaks = (docxXml.match(/w:type="page"/g) ?? []).length;
+  const manualBreaks = (docxXml.match(/w:type="page"/g) ?? []).length;
+  const beforeBreaks = (docxXml.match(/<w:pageBreakBefore\/>/g) ?? []).length;
+  const docxBreaks = manualBreaks + beforeBreaks;
   const docxPages = docxBreaks + 1;
-  console.log(`  · DOCX: ${docxPages} páginas (${docxBreaks} saltos explícitos)`);
+  console.log(
+    `  · DOCX: ${docxPages} páginas (${docxBreaks} saltos: ${manualBreaks} manuales, ${beforeBreaks} «salto antes»)`,
+  );
   assert(
     docxBreaks === editor.pages - 1,
     `DOCX tiene ${docxBreaks} saltos; se esperaban ${editor.pages - 1}`,

@@ -797,7 +797,7 @@ usuario edita datos con la vista previa abierta, un *debounce* de 900 ms vuelve 
 y refrescar el iframe. Esto da una previsualización casi en vivo sin duplicar el motor de
 render en el cliente.
 
-Las tarjetas de **Documentos** e **Inicio → Documentos recientes** usan
+Las tarjetas de **Documentos** usan
 `DocumentPreview.vue`: piden `GET /api/documents/:id/html?embed=1` con carga diferida
 (`IntersectionObserver`), cachean el HTML por `id`/versión/`updatedAt` del documento y
 `designUpdatedAt` (para invalidar la caché si cambian las imágenes globales), y muestran
@@ -816,7 +816,8 @@ HTML a pantalla completa.
 Al crear una plantilla, `NewTemplateDialog.vue` carga los diseños con `GET /api/designs`
 y muestra `DesignPreview` para cada uno. Al confirmar navega a `/templates/new?designId=…`
 y `TemplateEditorView` aplica ese diseño antes de mostrar el lienzo. El flujo de creación
-de documentos es directo: las tarjetas de Inicio y el botón **Usar** llaman a
+de documentos es directo: el selector de modelo del inicio (**Crear documento**), la
+píldora de IA y el botón **Usar** llaman a
 `POST /api/documents` con `templateId` y abren el editor.
 
 La vista previa usa una hoja continua: la cabecera y el pie aparecen **una vez** en su
@@ -900,6 +901,18 @@ sola y el interruptor de Ajustes cambia el estado).
   (solo `hasApiKey`).
 - `POST /api/ai/test` hace una llamada mínima al proveedor y mide latencia.
 
+Límites de la llamada, en variables de entorno:
+
+| Variable | Valor | Por qué |
+| --- | --- | --- |
+| `AI_TIMEOUT_MS` | `120000` | Las APIs alojadas responden en segundos; un tope corto evita esperas eternas. |
+| `AI_LOCAL_TIMEOUT_MS` | `600000` | Un modelo local (Ollama) redacta un documento entero en minutos, sobre todo sin GPU. |
+| `AI_NUM_CTX` | `8192` | **Ollama usa 4 096 por defecto y recorta el prompt por delante**: el modelo pierde el prompt de sistema y el cuerpo de la plantilla. Se envía como `options.num_ctx`. |
+
+El `fetch` de Node corta a los 5 minutos por su cuenta, así que las llamadas a IA usan un
+`Agent` de undici con `headersTimeout`/`bodyTimeout` de 15 minutos; el límite real de cada
+llamada lo marca su `AbortSignal`.
+
 ### 8.2 Rellenado de variables
 
 ```text
@@ -925,6 +938,9 @@ actual en cada turno, y el servidor devuelve una propuesta completa sin guardarl
 ```text
 POST /api/templates/:templateId/ai/draft
 POST /api/documents/:id/ai/draft
+POST /api/templates/:templateId/ai/draft/stream   (NDJSON)
+POST /api/documents/:id/ai/draft/stream           (NDJSON)
+
   { messages: [{ role: 'user'|'assistant', content }], current?: { title, description, content, data },
     useExamples?: boolean, expectedVersion?: number }
   → { reply, document: { title, description, content, data }, questions, warnings, model }
@@ -932,17 +948,37 @@ POST /api/documents/:id/ai/draft
 
 - `templates` exige acceso de uso y plantilla activa; `documents` exige permiso de edición,
   documento mutable y, si llega `expectedVersion`, coincidencia (409 si no).
-- El prompt incluye el tipo de documento, el esquema de variables, el JSON (o esqueleto) de
-  la plantilla, el documento actual, las instrucciones y el **perfil de estilo**
-  (`templates.ai_style`) y, opcionalmente, extractos de documentos aprobados del usuario.
-- La respuesta se sanea con `sanitizeAiContent` (`shared/src/ai.ts`): solo nodos TipTap
-  permitidos, sin imágenes, HTML, enlaces ni atributos arbitrarios; se recortan profundidad,
-  número de nodos y longitud. Después se mezcla **solo** con variables del esquema y se
-  elimina la clave reservada del número correlativo.
+- **El modelo no devuelve TipTap**: responde
+  `{ reply, title, description, body, data, questions, warnings }`, donde `body` es la prosa
+  del cuerpo en texto plano. Antes devolvía el documento completo, así que cambiar una frase
+  costaba regenerar ~2 000 tokens JSON (más de un minuto con un modelo local). Ahora cuesta
+  ~300 y el mismo cambio baja a ~10 s.
+- El servidor compone la hoja: parte del contenido actual, localiza el cuerpo (por el
+  marcador `{{clave}}` o por el texto que se escribió la vez anterior) y sustituye solo esa
+  región por párrafos. El resto de la plantilla (tablas, firmas, cabecera) no se toca.
+  Se descartan las líneas del cuerpo que repiten literalmente una línea fija de la hoja.
+- `data` se mezcla **solo** con variables del esquema y se elimina la clave reservada del
+  número correlativo. Un valor con forma de hueco (`[Nombre del entregador]`) se descarta.
+- El prompt incluye la **fecha de hoy** (para «hoy»/«el lunes»), el tipo de documento, el
+  esquema de variables, un **esqueleto** de la hoja, el texto actual del cuerpo y, si los
+  hay, extractos de documentos aprobados como muestra de estilo.
+- **Salidas estructuradas**: con Ollama se envía el esquema JSON de la respuesta como
+  `format`, con todas las variables descritas y marcadas como obligatorias. Es lo que evita
+  que un modelo pequeño devuelva `data` vacío o invente campos.
+- Si el modelo devolviera `content` (documento TipTap completo, camino heredado), se sanea
+  con `sanitizeAiContent` (`shared/src/ai.ts`): solo nodos permitidos, sin imágenes, HTML ni
+  atributos arbitrarios, y los bloques mal anidados se reubican (`normalizeStructure`) para
+  que `setContent` no los rechace.
+- Las variables del correlativo (`numero_documento` y la `numero` propia de muchas
+  plantillas) **no cuentan como campos vacíos**: las asigna la serie al aprobar y el
+  redactor tiene instrucción de no escribirlas, así que avisar de ellas sería un falso
+  positivo en todos los memorándums.
+- Las rutas `/stream` responden `application/x-ndjson` con
+  `{type:'progress',chars}` mientras el modelo escribe y `{type:'result',result}` o
+  `{type:'error',error}` al final. Usan `reply.hijack()`; la sesión, los permisos y el
+  versionado se validan **antes** de abrir el flujo, así que sus errores salen como JSON
+  normal.
 - `POST /api/templates/:id/ai/style` analiza hasta 3 documentos aprobados del usuario y devuelve un perfil de estilo editable; el editor lo guarda con el PATCH normal de la plantilla.
-- Si la plantilla tiene un campo marcado `bodySlot`, el bloque con `{{clave}}` se sustituye
-  por contenido rico; el campo deja de mostrarse en el panel de datos. El resto de la
-  plantilla (tablas de destinatario, firmas, cabecera y pie) se conserva.
 - El cliente aplica la propuesta al editor y el guardado sigue el flujo normal (incluido el
   versionado optimista). No se consume número: el correlativo se asigna al aprobar.
 
@@ -976,9 +1012,42 @@ POST /api/ai/choose-template  { prompt }
 | `openai` | `POST {baseUrl}/chat/completions` | Compatible con Azure, OpenRouter, LM Studio, vLLM… |
 | `anthropic` | `POST https://api.anthropic.com/v1/messages` | Cabecera `anthropic-version`. |
 | `gemini` | `POST …/v1beta/models/{model}:generateContent` | `responseMimeType: application/json`. |
-| `ollama` | `POST {baseUrl}/api/chat` | `format: 'json'`, sin clave. |
+| `ollama` | `POST {baseUrl}/api/chat` | `format: <esquema JSON>` (salidas estructuradas) o `'json'`; sin clave. |
 
-Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_ERROR`).
+Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_PROVIDER_ERROR`,
+`AI_UNREACHABLE`, `AI_EMPTY`, `AI_BAD_RESPONSE`).
+
+### 8.6 Modo consulta
+
+Preguntas en lenguaje natural sobre los documentos: «¿cuántas notas de entrega envié este
+mes?», «búscame la de Samuel Carico», «¿cuántos tipos de documento firmé?».
+
+```text
+POST /api/ai/ask  { question }
+  → { answer, filters, total, groups: [{ key, label, count }], results: [{ id, title, docType,
+      status, docNumber, updatedAt }] }
+```
+
+El modelo **no escribe SQL ni ve la base**: solo traduce la pregunta a un objeto de filtros
+(`intent`, `groupBy`, `scope`, `docTypes`, `statuses`, `templateName`, `recipient`, `text`,
+`from`, `to`, `approvedByMe`, `limit`). El servidor:
+
+1. **Valida** los filtros de forma tolerante: un `limit` fuera de rango se recorta, un estado
+   inventado se descarta y cada campo inválido cae a su valor por defecto. Un solo campo raro
+   no invalida la consulta entera.
+2. **Ejecuta** la consulta con la visibilidad del usuario (propias o compartidas con él),
+   reutilizando los filtros del listado de documentos. «Dirigidos a X» busca en las claves de
+   persona de las plantillas (`receptor`, `destinatario`, `nombre`…) sin distinguir tildes.
+3. **Responde** con una frase construida desde el resultado real: las cifras nunca salen del
+   texto del modelo.
+
+`intent = count` admite `groupBy` por tipo o por estado. `firmé` se interpreta como
+documentos propios en estado `final`/`sent`/`approved`; `aprobé`, como documentos con una
+aprobación del usuario en `document_messages.approved_by_id`.
+
+Si el modelo no devuelve un JSON utilizable, se cae a una búsqueda por texto de la pregunta
+completa. En la interfaz es un conmutador **Redactar / Consultar** en la barra del panel de
+trabajo; los resultados son tarjetas que abren el documento.
 
 ---
 

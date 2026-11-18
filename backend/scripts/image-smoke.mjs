@@ -105,13 +105,23 @@ async function main() {
     await page.goto(`${BASE}/login`, { waitUntil: 'networkidle0' });
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
-    await page.waitForSelector('text/Empezar un documento nuevo', { timeout: 15000 });
+    await page.waitForSelector('text/¿Por dónde empezamos', { timeout: 15000 });
     await wait(600);
 
     console.log('→ Crear documento');
-    const cards = await page.$$('section:nth-of-type(1) button');
-    if (cards.length > 1) await cards[1].click();
-    else await cards[0].click();
+    await page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll('button')).find((item) =>
+        item.textContent?.includes('Crear documento'),
+      );
+      button?.click();
+    });
+    await page.waitForSelector('[role="dialog"] button.card', { timeout: 15000 });
+    await page.evaluate(() => {
+      const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find((node) =>
+        node.textContent?.includes('Elige el modelo'),
+      );
+      dialog?.querySelector('button.card')?.click();
+    });
     await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 20000 });
     await wait(1200);
 

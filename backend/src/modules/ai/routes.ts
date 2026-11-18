@@ -1,19 +1,29 @@
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
-import type { FastifyInstance } from 'fastify';
-import { z } from 'zod';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { z, ZodError } from 'zod';
 
 import { AI_DRAFT_MAX_MESSAGES, plainTextFromContent } from '@sirpefoffice/shared';
-import type { AiDraftMessage, JSONContent, VariableDef } from '@sirpefoffice/shared';
+import type {
+  AiDraftMessage,
+  AiDraftResult,
+  AiInlineContext,
+  JSONContent,
+  VariableDef,
+} from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import { documents, templateShares, templates } from '../../db/schema.js';
 import { assertDocument, assertDocumentMutable, getTemplateAccess } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
-import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
-import { jsonContentSchema } from '../../lib/validators.js';
+import { AppError, badRequest, conflict, forbidden, internal, newReference, notFound } from '../../lib/errors.js';
+import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
+import { docTypeSchema, jsonContentSchema } from '../../lib/validators.js';
 import { defaultData, saveVersion } from '../documents/routes.js';
-import { deriveStyle, draftDocument } from './draft.js';
+import { askDocuments, questionSchema } from './ask.js';
+import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
+import { inlineText } from './inline.js';
+import type { AiConfig } from './providers.js';
 import {
   clearApiKey,
   generateVariables,
@@ -65,6 +75,23 @@ const chooseTemplateSchema = z.object({
   prompt: z.string().trim().min(3).max(2_000),
 });
 
+const inlineContextSchema = z.object({
+  selection: z.string().max(12_000).optional(),
+  before: z.string().max(6_000).optional(),
+  after: z.string().max(6_000).optional(),
+  docType: docTypeSchema.optional(),
+  title: z.string().max(240).optional(),
+  templateName: z.string().max(200).optional(),
+});
+
+const inlineSchema = z.object({
+  documentId: z.uuid().optional(),
+  templateId: z.uuid().optional(),
+  instruction: z.string().trim().min(3).max(4_000),
+  mode: z.enum(['insert', 'replace']).optional(),
+  context: inlineContextSchema.optional(),
+});
+
 
 /** Extractos de documentos aprobados del usuario para anclar el estilo. */
 async function loadStyleExamples(userId: string, templateId: string): Promise<string[]> {
@@ -104,6 +131,181 @@ function toDraftTemplate(template: {
     aiInstructions: template.aiInstructions,
     aiStyle: template.aiStyle,
   };
+}
+
+type AuthUser = Awaited<ReturnType<typeof authenticate>>;
+type DraftBody = z.infer<typeof draftSchema>;
+type DocumentDraftBody = z.infer<typeof documentDraftSchema>;
+
+/** Todo lo que necesita una llamada al redactor, ya validado y autorizado. */
+interface PreparedDraft {
+  config: AiConfig;
+  input: DraftInput;
+}
+
+/** Prepara el redactor para una plantilla (documento nuevo). */
+async function prepareTemplateDraft(
+  user: AuthUser,
+  templateId: string,
+  body: DraftBody,
+): Promise<PreparedDraft> {
+  const { template } = await getTemplateAccess(user.sub, templateId, user.role);
+  if (!template.isActive) {
+    throw badRequest('La plantilla está inactiva y no se puede usar para redactar');
+  }
+
+  const config = await loadConfig();
+  const examples =
+    body.useExamples === false ? [] : await loadStyleExamples(user.sub, template.id);
+
+  return {
+    config,
+    input: {
+      template: toDraftTemplate({
+        name: template.name,
+        docType: template.docType,
+        schema: template.schema ?? [],
+        body: template.body,
+        aiInstructions: template.aiInstructions,
+        aiStyle: template.aiStyle,
+      }),
+      current: {
+        title: body.current?.title ?? template.name,
+        description: body.current?.description ?? template.description.slice(0, 500),
+        content: body.current?.content ?? template.body,
+        data: { ...defaultData(template.schema ?? []), ...(body.current?.data ?? {}) },
+      },
+      messages: body.messages as AiDraftMessage[],
+      examples,
+    },
+  };
+}
+
+/** Prepara el redactor para un documento existente. */
+async function prepareDocumentDraft(
+  user: AuthUser,
+  id: string,
+  body: DocumentDraftBody,
+): Promise<PreparedDraft> {
+  const { document } = await assertDocument(user.sub, id, 'editor');
+  assertDocumentMutable(document);
+
+  if (body.expectedVersion !== undefined && body.expectedVersion !== document.version) {
+    throw conflict('El documento se modificó en otra sesión', {
+      currentVersion: document.version,
+    });
+  }
+
+  const [template] = document.templateId
+    ? await db
+        .select()
+        .from(templates)
+        .where(and(eq(templates.id, document.templateId), isNull(templates.deletedAt)))
+        .limit(1)
+    : [];
+
+  const config = await loadConfig();
+  const examples =
+    body.useExamples === false || !template
+      ? []
+      : await loadStyleExamples(user.sub, template.id);
+
+  return {
+    config,
+    input: {
+      template: template
+        ? toDraftTemplate({
+            name: template.name,
+            docType: template.docType,
+            schema: template.schema ?? [],
+            body: template.body,
+            aiInstructions: template.aiInstructions,
+            aiStyle: template.aiStyle,
+          })
+        : {
+            name: document.title,
+            docType: document.docType,
+            schema: [],
+            body: document.content,
+            aiInstructions: null,
+            aiStyle: null,
+          },
+      current: {
+        title: body.current?.title ?? document.title,
+        description: body.current?.description ?? document.description,
+        content: body.current?.content ?? document.content,
+        data: body.current?.data ?? document.data,
+      },
+      messages: body.messages as AiDraftMessage[],
+      examples,
+    },
+  };
+}
+
+/** Traduce un error a la forma que viaja por el flujo NDJSON. */
+function streamError(error: unknown, request: FastifyRequest): Record<string, unknown> {
+  if (error instanceof AppError) {
+    return {
+      error: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    };
+  }
+
+  if (error instanceof ZodError) {
+    return {
+      error: 'VALIDATION_ERROR',
+      message: summarizeZodIssues(error),
+      details: compactZodIssues(error),
+    };
+  }
+
+  const reference = newReference();
+  request.log.error({ err: error, reference }, 'Error no controlado en el asistente');
+  return {
+    error: 'INTERNAL_ERROR',
+    message: `Ocurrió un fallo al procesar la solicitud. Si el problema continúa, communícalo con la referencia ${reference}.`,
+    reference,
+  };
+}
+
+/**
+ * Responde en NDJSON: primero los avances y al final el resultado (o el
+ * error). La vista se toma con `reply.hijack()` porque la respuesta se
+ * escribe a mano, fuera del ciclo normal de Fastify.
+ */
+async function streamDraft(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  run: (onProgress: (chars: number) => void) => Promise<AiDraftResult>,
+): Promise<void> {
+  reply.hijack();
+  const raw = reply.raw;
+
+  raw.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-cache, no-transform',
+    'x-accel-buffering': 'no',
+  });
+
+  let abierto = true;
+  raw.on('close', () => {
+    abierto = false;
+  });
+
+  const send = (event: unknown): void => {
+    if (!abierto || raw.writableEnded) return;
+    raw.write(`${JSON.stringify(event)}\n`);
+  };
+
+  try {
+    const result = await run((chars) => send({ type: 'progress', chars }));
+    send({ type: 'result', result });
+  } catch (error) {
+    send({ type: 'error', error: streamError(error, request) });
+  } finally {
+    if (!raw.writableEnded) raw.end();
+  }
 }
 
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
@@ -203,6 +405,62 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /**
+   * Modo consulta: responde preguntas sobre los documentos del usuario
+   * («cuántas notas de entrega envié este mes», «búscame la de Samuel»).
+   *
+   * El modelo solo traduce la pregunta a filtros; la consulta y las cifras se
+   * resuelven en el servidor con la visibilidad del usuario.
+   */
+  app.post('/ai/ask', async (request) => {
+    const user = await authenticate(request);
+    const body = questionSchema.parse(request.body ?? {});
+    const config = await loadConfig();
+
+    return askDocuments(config, body.question, { userId: user.sub });
+  });
+
+  /**
+   * Genera un fragmento para insertar o reemplazar en el cursor.
+   *
+   * La barra inferior de la hoja lo usa para «escribe un párrafo sobre…»,
+   * «mejora la selección», etc. No guarda nada: el cliente aplica el
+   * fragmento y el autoguardado sigue su curso normal.
+   */
+  app.post('/ai/inline', async (request) => {
+    const user = await authenticate(request);
+    const body = inlineSchema.parse(request.body ?? {});
+    const config = await loadConfig();
+
+    let context: AiInlineContext = body.context ?? {};
+
+    if (body.documentId) {
+      const { document } = await assertDocument(user.sub, body.documentId, 'editor');
+      context = {
+        ...context,
+        docType: context.docType ?? document.docType,
+        title: context.title ?? document.title,
+      };
+    } else if (body.templateId) {
+      const { template, permission } = await getTemplateAccess(
+        user.sub,
+        body.templateId,
+        user.role,
+      );
+      if (permission === 'viewer') {
+        throw forbidden('Necesitas permiso de edición sobre esta plantilla');
+      }
+      context = {
+        ...context,
+        docType: context.docType ?? template.docType,
+        title: context.title ?? template.name,
+        templateName: context.templateName ?? template.name,
+      };
+    }
+
+    return inlineText(config, { instruction: body.instruction, context });
+  });
+
+  /**
    * Rellena las variables vacías del documento con el proveedor configurado.
    * No modifica el cuerpo: solo los datos, de modo que el formato se conserva.
    */
@@ -264,34 +522,23 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const { templateId } = z.object({ templateId: z.uuid() }).parse(request.params);
     const body = draftSchema.parse(request.body);
 
-    const { template } = await getTemplateAccess(user.sub, templateId, user.role);
-    if (!template.isActive) {
-      throw badRequest('La plantilla está inactiva y no se puede usar para redactar');
-    }
+    const prepared = await prepareTemplateDraft(user, templateId, body);
+    return draftDocument(prepared.config, prepared.input);
+  });
 
-    const config = await loadConfig();
-    const messages = body.messages as AiDraftMessage[];
-    const examples =
-      body.useExamples === false ? [] : await loadStyleExamples(user.sub, template.id);
+  /**
+   * Igual que la anterior, pero cuenta el avance mientras el modelo escribe
+   * (NDJSON). Es la que usa el asistente en pantalla.
+   */
+  app.post('/templates/:templateId/ai/draft/stream', async (request, reply) => {
+    const user = await authenticate(request);
+    const { templateId } = z.object({ templateId: z.uuid() }).parse(request.params);
+    const body = draftSchema.parse(request.body);
 
-    return draftDocument(config, {
-      template: toDraftTemplate({
-        name: template.name,
-        docType: template.docType,
-        schema: template.schema ?? [],
-        body: template.body,
-        aiInstructions: template.aiInstructions,
-        aiStyle: template.aiStyle,
-      }),
-      current: {
-        title: body.current?.title ?? template.name,
-        description: body.current?.description ?? template.description.slice(0, 500),
-        content: body.current?.content ?? template.body,
-        data: { ...defaultData(template.schema ?? []), ...(body.current?.data ?? {}) },
-      },
-      messages,
-      examples,
-    });
+    const prepared = await prepareTemplateDraft(user, templateId, body);
+    await streamDraft(request, reply, (onProgress) =>
+      draftDocument(prepared.config, prepared.input, { onProgress }),
+    );
   });
 
   /**
@@ -336,57 +583,20 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = documentDraftSchema.parse(request.body);
 
-    const { document } = await assertDocument(user.sub, id, 'editor');
-    assertDocumentMutable(document);
+    const prepared = await prepareDocumentDraft(user, id, body);
+    return draftDocument(prepared.config, prepared.input);
+  });
 
-    if (body.expectedVersion !== undefined && body.expectedVersion !== document.version) {
-      throw conflict('El documento se modificó en otra sesión', {
-        currentVersion: document.version,
-      });
-    }
+  /** Igual que la anterior, con el avance en NDJSON. */
+  app.post('/documents/:id/ai/draft/stream', async (request, reply) => {
+    const user = await authenticate(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const body = documentDraftSchema.parse(request.body);
 
-    const [template] = document.templateId
-      ? await db
-          .select()
-          .from(templates)
-          .where(and(eq(templates.id, document.templateId), isNull(templates.deletedAt)))
-          .limit(1)
-      : [];
-
-    const config = await loadConfig();
-    const messages = body.messages as AiDraftMessage[];
-    const examples =
-      body.useExamples === false || !template
-        ? []
-        : await loadStyleExamples(user.sub, template.id);
-
-    return draftDocument(config, {
-      template: template
-        ? toDraftTemplate({
-            name: template.name,
-            docType: template.docType,
-            schema: template.schema ?? [],
-            body: template.body,
-            aiInstructions: template.aiInstructions,
-            aiStyle: template.aiStyle,
-          })
-        : {
-            name: document.title,
-            docType: document.docType,
-            schema: [],
-            body: document.content,
-            aiInstructions: null,
-            aiStyle: null,
-          },
-      current: {
-        title: body.current?.title ?? document.title,
-        description: body.current?.description ?? document.description,
-        content: body.current?.content ?? document.content,
-        data: body.current?.data ?? document.data,
-      },
-      messages,
-      examples,
-    });
+    const prepared = await prepareDocumentDraft(user, id, body);
+    await streamDraft(request, reply, (onProgress) =>
+      draftDocument(prepared.config, prepared.input, { onProgress }),
+    );
   });
 
 }

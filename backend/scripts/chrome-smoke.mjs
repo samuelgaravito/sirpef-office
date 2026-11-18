@@ -150,30 +150,26 @@ async function waitForApi(fn, predicate, label, timeout = 15000) {
 }
 
 async function openTemplateFromHome(page, name) {
-  await page.waitForFunction(
-    (templateName) => {
-      const section = Array.from(document.querySelectorAll('section')).find((item) =>
-        item.textContent?.includes('Empezar un documento nuevo'),
-      );
-      return Array.from(section?.querySelectorAll('button') ?? []).some((button) =>
-        button.textContent?.includes(templateName),
-      );
-    },
-    { timeout: 15000 },
-    name,
-  );
-  const opened = await page.evaluate((templateName) => {
-    const section = Array.from(document.querySelectorAll('section')).find((item) =>
-      item.textContent?.includes('Empezar un documento nuevo'),
+  await page.waitForSelector('text/¿Por dónde empezamos', { timeout: 15000 });
+  await page.evaluate(() => {
+    const button = Array.from(document.querySelectorAll('button')).find((item) =>
+      item.textContent?.includes('Crear documento'),
     );
-    const target = Array.from(section?.querySelectorAll('button') ?? []).find((button) =>
+    button?.click();
+  });
+  await page.waitForSelector('[role="dialog"] button.card', { timeout: 15000 });
+  const opened = await page.evaluate((templateName) => {
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).find((node) =>
+      node.textContent?.includes('Elige el modelo'),
+    );
+    const target = Array.from(dialog?.querySelectorAll('button.card') ?? []).find((button) =>
       button.textContent?.includes(templateName),
     );
     if (!target) return false;
     target.click();
     return true;
   }, name);
-  if (!opened) throw new Error(`No se encontró la plantilla «${name}» en el inicio`);
+  if (!opened) throw new Error(`No se encontró la plantilla «${name}» en el selector de modelos`);
 }
 
 async function clickChromeButton(page, title) {
@@ -239,7 +235,7 @@ async function main() {
     await page.goto(`${BASE}/login`, { waitUntil: 'networkidle0' });
     await page.click('button[type="submit"]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
-    await page.waitForSelector('text/Documentos recientes', { timeout: 15000 });
+    await page.waitForSelector('text/¿Por dónde empezamos', { timeout: 15000 });
     await api.refreshCookies();
 
     console.log('→ Crear documento desde «Certificado»');

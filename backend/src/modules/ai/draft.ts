@@ -38,18 +38,27 @@ export interface DraftInput {
   examples?: string[];
 }
 
+/** Opciones de la llamada al redactor. */
+export interface DraftOptions {
+  /** Se invoca con el tamaño acumulado de la respuesta mientras llega. */
+  onProgress?: (chars: number) => void;
+}
+
 const DEFAULT_STYLE =
   'Tono institucional, claro y directo. Frases y párrafos cortos. Español de Perú, sin ' +
   'florituras ni muletillas. Estructura explícita: situación, detalle y solicitud o decisión.';
-
-/** Máximo de caracteres del esqueleto que se envía al modelo. */
-const MAX_PROMPT_DOC_CHARS = 18_000;
 
 function truncate(value: string, max: number): string {
   return value.length <= max ? value : `${value.slice(0, max)}…`;
 }
 
-/** Descripción compacta del documento cuando el JSON completo es muy grande. */
+/**
+ * Esqueleto de la hoja: encabezados, párrafos resumidos y tamaño de las
+ * tablas.
+ *
+ * El modelo no reescribe la hoja, solo necesita conocer su estructura, así
+ * que enviar el JSON completo solo gastaría contexto y tiempo de prefill.
+ */
 function skeletonOf(content: JSONContent): string {
   const lines: string[] = [];
 
@@ -83,50 +92,23 @@ function skeletonOf(content: JSONContent): string {
 }
 
 /**
- * Copia del documento apta para el prompt: fuera imágenes (pueden ser data
- * URLs enormes) y atributos que no aportan a la redacción.
+ * ¿Es la variable del correlativo?
+ *
+ * Las plantillas usan `numero_documento` (la de sistema) o una `numero`
+ * propia, y la serie de numeración la rellena al aprobar. El redactor tiene
+ * instrucción expresa de no escribirla, así que pedírsela al modelo —o avisar
+ * de que está vacía— sería un aviso falso en todos los borradores de
+ * memorándum, nota de entrega y acta.
  */
-function promptSafeContent(content: JSONContent): JSONContent {
-  if (content.type === 'image') {
-    return { type: 'paragraph', content: [{ type: 'text', text: '[imagen]' }] };
-  }
-
-  const attrs =
-    content.type === 'heading'
-      ? content.attrs?.level !== undefined
-        ? { level: content.attrs.level }
-        : undefined
-      : content.type === 'orderedList'
-        ? content.attrs?.start !== undefined
-          ? { start: content.attrs.start }
-          : undefined
-        : content.type === 'tableCell' || content.type === 'tableHeader'
-          ? {
-              ...(content.attrs?.colspan !== undefined ? { colspan: content.attrs.colspan } : {}),
-              ...(content.attrs?.rowspan !== undefined ? { rowspan: content.attrs.rowspan } : {}),
-            }
-          : undefined;
-
-  return {
-    ...content,
-    ...(attrs && Object.keys(attrs).length > 0 ? { attrs } : { attrs: undefined }),
-    ...(content.content ? { content: content.content.map(promptSafeContent) } : {}),
-  };
-}
-
-function documentForPrompt(content: JSONContent, label: string): string {
-  const json = JSON.stringify(promptSafeContent(content));
-  if (json.length <= MAX_PROMPT_DOC_CHARS) {
-    return `${label} (JSON TipTap):\n${json}`;
-  }
-  return `${label} (esqueleto; el JSON es demasiado largo):\n${skeletonOf(content)}`;
+function isNumberingVariable(variable: VariableDef): boolean {
+  return variable.key === DOCUMENT_NUMBER_VARIABLE || variable.key === 'numero';
 }
 
 function dataForPrompt(data: VariableValues, schema: VariableDef[]): string {
   const clean: VariableValues = {};
 
   for (const variable of schema) {
-    if (variable.key === DOCUMENT_NUMBER_VARIABLE) continue;
+    if (isNumberingVariable(variable)) continue;
     const value = data[variable.key];
     if (value === undefined) continue;
     if (variable.type === 'image') {
@@ -145,7 +127,7 @@ function dataForPrompt(data: VariableValues, schema: VariableDef[]): string {
 
 function conversationForPrompt(messages: AiDraftMessage[]): string {
   return messages
-    .slice(-8)
+    .slice(-6)
     .map((message) => `${message.role === 'user' ? 'Usuario' : 'Asistente'}: ${truncate(message.content, 2_000)}`)
     .join('\n');
 }
@@ -153,34 +135,43 @@ function conversationForPrompt(messages: AiDraftMessage[]): string {
 function buildSystemPrompt(): string {
   return [
     'Eres un redactor experto en documentos administrativos en español (Perú).',
-    'Trabajas dentro de un editor de documentos: cada respuesta construye o corrige el documento completo.',
+    'Trabajas dentro de una plantilla: la hoja (cabecera, tablas de datos, firmas) ya existe;',
+    'tú rellenas sus variables y redactas su cuerpo. No reinventas el formato.',
     'Escribes con un tono formal, claro y conciso, y no inventas datos verificables que no se te den.',
     '',
     'Devuelves SIEMPRE un único objeto JSON válido, sin markdown ni comentarios, con esta forma exacta:',
-    '{"reply":"...","title":"...","description":"...","content":<documento TipTap>,"data":{...},"questions":["..."],"warnings":["..."]}',
-    '',
-    'Reglas de "content":',
-    '- Es un documento TipTap completo: {"type":"doc","content":[...]}.',
-    '- Nodos permitidos: paragraph, heading (nivel 1-3), bulletList, orderedList, listItem, blockquote, horizontalRule, hardBreak, table, tableRow, tableCell, tableHeader.',
-    '- Marcas permitidas: bold, italic, underline, strike, code, highlight, superscript, subscript.',
-    '- No incluyas imágenes, HTML, enlaces, atributos de estilo ni nodos desconocidos.',
-    '- Conserva los marcadores {{clave}} de las variables que no sean el cuerpo redactable.',
-    '- No escribas el número correlativo: el sistema lo asigna al aprobar. Deja {{numero_documento}} o {{numero}} si la plantilla lo usa.',
-    '- Mantén la estructura fija de la plantilla (tablas de destinatario, firmas, etc.) salvo que la instrucción pida cambiarla.',
-    '- Si el documento actual ya tiene contenido, parte de él y aplícale los cambios; no vuelvas a insertar marcadores que ya se hayan integrado.',
+    '{"reply":"...","title":"...","description":"...","body":"...","data":{...},"questions":["..."],"warnings":["..."]}',
     '',
     'Reglas de "data":',
-    '- Incluye valores para las variables del esquema que puedas deducir o redactar.',
-    '- Respeta el tipo: fechas ISO (AAAA-MM-DD), números sin símbolos, tablas como arrays de objetos.',
-    '- No incluyas la clave reservada del número de documento.',
-    '- Para el campo marcado como cuerpo redactable, deja un resumen en texto plano o vacío: la prosa rica va en "content".',
+    '- Rellena en "data" TODAS las variables del esquema que puedas deducir del encargo; si no, quedarán vacías.',
+    '- Usa exactamente las claves del esquema: no inventes campos nuevos.',
+    '- Respeta el tipo: fechas ISO (AAAA-MM-DD), números sin símbolos ni separadores, tablas como arrays de objetos.',
+    '- Para una tabla, cada fila es un objeto con las claves que indica el esquema.',
+    '- No incluyas el número correlativo: lo asigna el sistema al aprobar.',
+    '- Si no conoces el valor de una variable, déjala como cadena vacía; no inventes datos ni escribas marcadores como [Nombre].',
+    '- Para fechas relativas («hoy», «el lunes») usa la fecha de hoy que se indica arriba.',
+    '',
+    'Reglas de "body":',
+    '- Es la prosa del cuerpo en TEXTO PLANO: nada de JSON, HTML ni marcadores {{...}}.',
+    '- Separa los párrafos con una línea en blanco.',
+    '- No repitas la cabecera, las tablas de datos ni las firmas: ya están en la hoja.',
+    '- No escribas etiquetas de la hoja («FECHA:», «RECIBE:», «ENTREGA:», «ÁREA / DESTINO:», «OBSERVACIONES:») ni vuelvas a enumerar los bienes de la tabla.',
+    '- Redacta solo la prosa que va en el cuerpo, como si fuera el texto que sigue a la etiqueta del cuerpo.',
+    '- Si hace falta enumerar, usa guiones al principio de la línea.',
     '',
     'Reglas de conversación:',
     '- "reply" es una respuesta breve (1-3 frases) en español que explica qué has cambiado y qué has asumido.',
     '- Si falta un dato importante, añádelo a "questions" pero entrega igualmente una propuesta completa.',
-    '- Usa "warnings" para avisar de suposiciones, campos vacíos o partes que conviene revisar.',
-    '- Devuelve el documento COMPLETO en cada turno, no un fragmento ni un parche.',
+    '- Usa "warnings" para avisar de suposiciones o campos que conviene revisar.',
+    '- Si la instrucción pide un cambio puntual, conserva todo lo demás tal y como estaba.',
   ].join('\n');
+}
+
+/** Fecha de hoy en ISO (`AAAA-MM-DD`), según la zona del servidor. */
+function todayIso(): string {
+  const now = new Date();
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 function buildUserPrompt(input: DraftInput): string {
@@ -189,20 +180,26 @@ function buildUserPrompt(input: DraftInput): string {
 
   const schemaLines = template.schema.length
     ? template.schema.map(describeVariable).join('\n')
-    : '(La plantilla no define variables; redacta el contenido directamente.)';
+    : '(La plantilla no define variables; redacta el cuerpo.)';
 
   const bodySlotRule = bodySlot
     ? [
-        `El campo "${bodySlot.key}" está marcado como cuerpo redactable.`,
-        `Sustituye el bloque que contiene {{${bodySlot.key}}} por varios bloques TipTap (párrafos, listas o tablas).`,
-        `No dejes el marcador {{${bodySlot.key}}} en "content".`,
-        `Si el documento actual ya no contiene {{${bodySlot.key}}}, el cuerpo ya está integrado: no lo vuelvas a insertar.`,
+        `El campo "${bodySlot.key}" («${bodySlot.label}») está marcado como cuerpo redactable.`,
+        `Su prosa va en "body"; no en "data".`,
+        `Si ya hay texto en el cuerpo, pártelo de él y aplícale el cambio.`,
       ].join(' ')
-    : 'No hay un campo marcado como cuerpo redactable: conserva la estructura y redacta dentro de los bloques existentes.';
+    : 'No hay un campo marcado como cuerpo redactable: redacta el cuerpo y rellena las variables.';
+
+  // La hoja se envía como esqueleto, no como JSON completo: el modelo no la
+  // reescribe, solo necesita conocer su estructura.
+  const sheet = skeletonOf(template.body);
+
+  const bodyText = bodySlot ? currentBodyText(current, bodySlot.key) : '';
 
   return [
     `Plantilla: ${template.name}`,
     `Tipo de documento: ${template.docType}`,
+    `Fecha de hoy: ${todayIso()}`,
     template.aiInstructions ? `Instrucciones de la plantilla:\n"""${template.aiInstructions}"""` : '',
     `Perfil de estilo:\n"""${template.aiStyle?.trim() || DEFAULT_STYLE}"""`,
     examples?.length
@@ -210,13 +207,15 @@ function buildUserPrompt(input: DraftInput): string {
       : '',
     `Esquema de variables:\n${schemaLines}`,
     bodySlotRule,
-    documentForPrompt(template.body, 'Cuerpo base de la plantilla'),
-    documentForPrompt(current.content, 'Documento actual'),
+    `Estructura de la hoja (ya está puesta; no la reescribas):\n${sheet}`,
+    bodySlot
+      ? `Texto actual del cuerpo:\n"""${bodyText || '(vacío)'}"""`
+      : `Documento actual (resumen):\n${skeletonOf(current.content)}`,
     `Datos actuales:\n${dataForPrompt(current.data, template.schema)}`,
     `Título actual: ${current.title || '(sin título)'}`,
     `Descripción actual: ${current.description || '(sin descripción)'}`,
     `Conversación hasta ahora:\n${conversationForPrompt(messages)}`,
-    'Genera la siguiente versión completa del documento siguiendo la última instrucción del usuario.',
+    'Genera la siguiente versión siguiendo la última instrucción del usuario.',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -243,6 +242,260 @@ function replacePlaceholder(content: JSONContent, key: string, text: string): JS
   return clone;
 }
 
+/* ─────────────────── El cuerpo redactable dentro de la hoja ─────────────────── */
+
+/** Marcador de la variable del cuerpo (`{{clave}}`). */
+function bodyMarker(key: string): RegExp {
+  return new RegExp(`\\{\\{\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}\\}`);
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function blockText(node: JSONContent): string {
+  return normalizeText(plainTextFromContent(node));
+}
+
+/** Párrafos TipTap a partir de texto plano: una línea en blanco = un párrafo. */
+function paragraphsFromText(text: string): JSONContent[] {
+  const parts = text
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) return [{ type: 'paragraph' }];
+
+  return parts.slice(0, 60).map((part) => {
+    const content: JSONContent[] = [];
+    part.split('\n').forEach((line, index) => {
+      if (index > 0) content.push({ type: 'hardBreak' });
+      const trimmed = line.trim();
+      if (trimmed) content.push({ type: 'text', text: trimmed });
+    });
+    return { type: 'paragraph', ...(content.length > 0 ? { content } : {}) };
+  });
+}
+
+interface BodyRegion {
+  start: number;
+  end: number;
+  /** El cuerpo sigue como marcador `{{clave}}` en la hoja. */
+  marker: boolean;
+}
+
+/**
+ * Localiza el cuerpo redactable dentro de la hoja.
+ *
+ * Primero por el marcador; si ya se integró, por el texto que se escribió la
+ * vez anterior (el que se guarda en la variable). Sin esto, cada turno
+ * duplicaría la prosa o la perdería.
+ */
+function locateBody(content: JSONContent, key: string, previous: string): BodyRegion | null {
+  const blocks = content.content ?? [];
+  const pattern = bodyMarker(key);
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (block?.content?.some((child) => child.type === 'text' && pattern.test(child.text ?? ''))) {
+      return { start: index, end: index, marker: true };
+    }
+  }
+
+  const target = normalizeText(previous);
+  if (target.length < 8) return null;
+
+  for (let start = 0; start < blocks.length; start += 1) {
+    let accumulated = '';
+    for (let end = start; end < blocks.length; end += 1) {
+      const block = blocks[end];
+      if (!block) break;
+      const text = blockText(block);
+      if (!text) break;
+      accumulated = normalizeText(accumulated ? `${accumulated} ${text}` : text);
+      if (accumulated === target) return { start, end, marker: false };
+      if (accumulated.length > target.length || !target.startsWith(accumulated)) break;
+    }
+  }
+
+  return null;
+}
+
+/** Texto del cuerpo tal y como está hoy en la hoja. */
+function currentBodyText(current: DraftInput['current'], key: string): string {
+  const stored = typeof current.data[key] === 'string' ? String(current.data[key]) : '';
+  const region = locateBody(current.content, key, stored);
+  if (!region) return stored;
+  if (region.marker) return '';
+
+  const blocks = current.content.content ?? [];
+  return blocks
+    .slice(region.start, region.end + 1)
+    .map(blockText)
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/** Reemplaza el cuerpo por los párrafos nuevos y conserva el resto de la hoja. */
+function replaceBody(
+  content: JSONContent,
+  key: string,
+  text: string,
+  previous: string,
+): JSONContent | null {
+  const region = locateBody(content, key, previous);
+  if (!region) return null;
+
+  const blocks = structuredClone(content.content ?? []);
+  const pattern = bodyMarker(key);
+
+  // El modelo tiende a repetir líneas fijas de la hoja («En señal de
+  // conformidad…»). Se descartan las que ya están fuera del cuerpo para no
+  // duplicarlas.
+  const sheetTexts = new Set(
+    blocks
+      .filter((_, index) => index < region.start || index > region.end)
+      .map((node) => blockText(node))
+      .filter((text) => text.length >= 12),
+  );
+
+  const paragraphs = paragraphsFromText(text);
+  const withoutEchoes = paragraphs.filter((node) => {
+    const block = blockText(node);
+    return !block || block.length < 12 || !sheetTexts.has(block);
+  });
+  const body = withoutEchoes.length > 0 ? withoutEchoes : paragraphs;
+
+  if (!region.marker) {
+    blocks.splice(region.start, region.end - region.start + 1, ...body);
+    return { ...content, content: blocks };
+  }
+
+  // El marcador puede compartir párrafo con su etiqueta («OBSERVACIONES: …»):
+  // la etiqueta se queda y la prosa va detrás.
+  const block = blocks[region.start];
+  if (!block) return null;
+
+  const kept: JSONContent[] = [];
+  if (block.type === 'paragraph' || block.type === 'heading') {
+    const prefix: JSONContent[] = [];
+    let cut = false;
+
+    for (const child of block.content ?? []) {
+      if (child.type !== 'text' && child.type !== 'hardBreak') continue;
+      if (cut) continue;
+      if (child.type === 'text' && pattern.test(child.text ?? '')) {
+        cut = true;
+        const before = (child.text ?? '').replace(pattern, '');
+        if (before.trim()) prefix.push({ type: 'text', text: before });
+        continue;
+      }
+      prefix.push(child);
+    }
+
+    if (prefix.some((node) => node.type === 'text' && (node.text ?? '').trim())) {
+      kept.push({ type: block.type, ...(block.attrs ? { attrs: block.attrs } : {}), content: prefix });
+    }
+  }
+
+  blocks.splice(region.start, 1, ...kept, ...body);
+  return { ...content, content: blocks };
+}
+
+/* ─────────────────────── Salidas estructuradas (B) ─────────────────────── */
+
+/** Tipo JSON de una variable según el esquema de la plantilla. */
+function variableSchema(variable: VariableDef | { type?: string; options?: { value: string }[]; columns?: { key: string }[] }): Record<string, unknown> {
+  switch (variable.type) {
+    case 'number':
+    case 'money':
+      return { type: 'number' };
+    case 'checkbox':
+      return { type: 'boolean' };
+    case 'select': {
+      const values = variable.options?.map((option) => option.value) ?? [];
+      return values.length > 0 ? { type: 'string', enum: values } : { type: 'string' };
+    }
+    case 'multiselect': {
+      const values = variable.options?.map((option) => option.value) ?? [];
+      return {
+        type: 'array',
+        ...(values.length > 0 ? { items: { type: 'string', enum: values } } : { items: { type: 'string' } }),
+      };
+    }
+    case 'date':
+      return { type: 'string', description: 'Fecha en formato AAAA-MM-DD' };
+    case 'table':
+      return {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: Object.fromEntries((variable.columns ?? []).map((column) => [column.key, { type: 'string' }])),
+          required: (variable.columns ?? []).map((column) => column.key),
+        },
+      };
+    default:
+      return { type: 'string' };
+  }
+}
+
+/** Descripción de una variable para el esquema de salida. */
+function variableDescription(variable: VariableDef): string {
+  return [variable.label, variable.description, variable.aiHint]
+    .filter((part): part is string => Boolean(part && part.trim()))
+    .join(' — ');
+}
+
+/**
+ * Esquema JSON de la respuesta del redactor.
+ *
+ * Con Ollama se envía como `format`, así que el modelo queda atado a estas
+ * claves y tipos: es lo que evita que devuelva `data` vacío o invente campos.
+ * Las claves van marcadas como obligatorias para que el modelo tenga que
+ * pronunciarse sobre cada variable (puede dejarla vacía si no la conoce).
+ */
+function draftSchemaFor(schema: VariableDef[]): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+
+  for (const variable of schema) {
+    if (isNumberingVariable(variable) || variable.type === 'image' || variable.type === 'user') continue;
+    properties[variable.key] = {
+      ...variableSchema(variable),
+      description: variableDescription(variable),
+    };
+  }
+
+  return {
+    type: 'object',
+    properties: {
+      reply: { type: 'string', description: 'Respuesta breve para el usuario' },
+      title: { type: 'string' },
+      description: { type: 'string' },
+      body: { type: 'string', description: 'Prosa del cuerpo, en texto plano' },
+      data: {
+        type: 'object',
+        properties,
+        required: Object.keys(properties),
+      },
+      questions: { type: 'array', items: { type: 'string' } },
+      warnings: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['reply', 'body', 'data'],
+  };
+}
+
+/** ¿El valor es un hueco tipo `[Nombre del entregador]` en vez de un dato? */
+function looksLikePlaceholder(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  // «[Nombre del entregador]» y «Nombre del Entregador» son huecos, no datos.
+  return (
+    /^\[.*\]$/.test(text) ||
+    /^<.*>$/.test(text) ||
+    /^(nombre|cargo|fecha|área|area|descripción|descripcion)\s+(del|de la|de)\b/i.test(text)
+  );
+}
+
 /** Aplica la respuesta del modelo sobre el estado actual. */
 function mergeResult(
   parsed: Record<string, unknown>,
@@ -262,8 +515,6 @@ function mergeResult(
       ? (parsed.document as Record<string, unknown>)
       : parsed;
 
-  let content = sanitizeAiContent(rawDocument.content ?? parsed.content ?? current.content);
-
   const title =
     typeof rawDocument.title === 'string' && rawDocument.title.trim()
       ? truncate(rawDocument.title.trim(), 240)
@@ -274,6 +525,8 @@ function mergeResult(
       ? truncate(rawDocument.description.trim(), 500)
       : current.description;
 
+  const bodyText = typeof rawDocument.body === 'string' ? rawDocument.body.trim() : '';
+
   const incoming =
     rawDocument.data && typeof rawDocument.data === 'object' && !Array.isArray(rawDocument.data)
       ? (rawDocument.data as Record<string, unknown>)
@@ -283,45 +536,62 @@ function mergeResult(
   const bodySlot = resolveBodyVariable(template.schema);
 
   for (const variable of template.schema) {
-    if (variable.key === DOCUMENT_NUMBER_VARIABLE) continue;
-    if (!(variable.key in incoming)) continue;
+    if (isNumberingVariable(variable)) continue;
 
     if (variable.bodySlot) {
-      // La prosa del cuerpo vive en `content`; guardamos solo un resumen.
-      const value = incoming[variable.key];
-      if (typeof value === 'string' && value.trim()) {
-        data[variable.key] = truncate(value.trim(), 20_000);
-      }
+      // La prosa viaja en "body"; en "data" se guarda el texto plano.
+      const value = bodyText || (typeof incoming[variable.key] === 'string' ? String(incoming[variable.key]).trim() : '');
+      if (value) data[variable.key] = truncate(value, 20_000);
       continue;
     }
 
+    if (!(variable.key in incoming)) continue;
     const value = coerce(variable, incoming[variable.key]);
-    if (!isEmpty(value)) data[variable.key] = value;
+    // Un hueco («[Nombre del entregador]») no es un dato: se deja vacío para
+    // que el aviso de campo obligatorio siga teniendo sentido.
+    if (!isEmpty(value) && !looksLikePlaceholder(value)) data[variable.key] = value;
   }
 
   delete data[DOCUMENT_NUMBER_VARIABLE];
 
-  // Fallback: si el modelo dejó el marcador del cuerpo, se rellena con el
-  // texto que haya devuelto en `data` para no perder la redacción.
-  if (bodySlot && contentHasVariable(content, bodySlot.key)) {
-    const fallback = typeof data[bodySlot.key] === 'string' ? String(data[bodySlot.key]) : '';
-    if (fallback.trim()) {
-      content = replacePlaceholder(content, bodySlot.key, fallback.trim());
-      warnings.push(
-        `El cuerpo se ha insertado desde el campo «${bodySlot.label}»; revisa el formato porque la IA no lo integró como bloques.`,
-      );
-    } else {
-      warnings.push(`El cuerpo redactable «${bodySlot.label}» quedó como marcador sin contenido.`);
+  // Contenido: la hoja de la plantilla se conserva y solo cambia el cuerpo.
+  let content = current.content;
+  const explicitContent = rawDocument.content ?? parsed.content;
+
+  if (explicitContent !== undefined) {
+    // Camino antiguo: el modelo devolvió el documento TipTap completo.
+    content = sanitizeAiContent(explicitContent);
+    if (bodySlot && contentHasVariable(content, bodySlot.key)) {
+      const fallback = typeof data[bodySlot.key] === 'string' ? String(data[bodySlot.key]) : '';
+      if (fallback.trim()) {
+        content = replacePlaceholder(content, bodySlot.key, fallback.trim());
+        warnings.push(
+          `El cuerpo se ha insertado desde el campo «${bodySlot.label}»; revisa el formato porque la IA no lo integró como bloques.`,
+        );
+      } else {
+        warnings.push(`El cuerpo redactable «${bodySlot.label}» quedó como marcador sin contenido.`);
+      }
     }
-  } else if (bodySlot && !contentHasVariable(content, bodySlot.key)) {
-    // El cuerpo ya está integrado en la hoja: conservamos un texto plano para
-    // búsquedas y para el panel de datos.
-    data[bodySlot.key] = truncate(plainTextFromContent(content), 20_000);
+  } else if (bodySlot && bodyText) {
+    const previous = typeof current.data[bodySlot.key] === 'string' ? String(current.data[bodySlot.key]) : '';
+    const composed =
+      replaceBody(current.content, bodySlot.key, bodyText, previous) ??
+      // Si la hoja se editó a mano y no se encuentra el cuerpo, se recompone
+      // desde la plantilla para no perder la redacción.
+      replaceBody(template.body, bodySlot.key, bodyText, '');
+
+    if (composed) {
+      content = composed;
+    } else {
+      warnings.push(
+        `No se localizó el cuerpo «${bodySlot.label}» en la hoja; revisa su contenido a mano.`,
+      );
+    }
   }
 
   // Avisos por variables obligatorias que siguen vacías.
   for (const variable of template.schema) {
-    if (!variable.required || variable.key === DOCUMENT_NUMBER_VARIABLE) continue;
+    if (!variable.required || isNumberingVariable(variable)) continue;
     if (variable.bodySlot && !contentHasVariable(content, variable.key)) continue;
     if (isEmpty(data[variable.key])) {
       warnings.push(`El campo obligatorio «${variable.label}» sigue vacío.`);
@@ -391,7 +661,11 @@ export async function deriveStyle(config: AiConfig, input: StyleInput): Promise<
  * La respuesta se sanea y se mezcla con el estado actual: el modelo no puede
  * inventar variables nuevas, ni tocar la numeración, ni colar HTML.
  */
-export async function draftDocument(config: AiConfig, input: DraftInput): Promise<AiDraftResult> {
+export async function draftDocument(
+  config: AiConfig,
+  input: DraftInput,
+  options: DraftOptions = {},
+): Promise<AiDraftResult> {
   if (config.provider === 'none' || (config.provider !== 'ollama' && !config.apiKey)) {
     throw new AppError(
       400,
@@ -403,9 +677,10 @@ export async function draftDocument(config: AiConfig, input: DraftInput): Promis
   const raw = await chat(
     {
       ...config,
-      // Un documento completo necesita más espacio de salida que un
-      // formulario; se respeta el máximo del administrador si ya es mayor.
-      maxTokens: Math.min(Math.max(config.maxTokens, 6_000), 16_000),
+      // El redactor ya no devuelve el documento TipTap: solo los datos y la
+      // prosa del cuerpo, así que necesita mucho menos espacio de salida. El
+      // tope sigue holgado por si el cuerpo es largo.
+      maxTokens: Math.min(Math.max(config.maxTokens, 2_000), 8_000),
       temperature: Math.min(Math.max(config.temperature, 0.2), 0.7),
     },
     [
@@ -413,6 +688,10 @@ export async function draftDocument(config: AiConfig, input: DraftInput): Promis
       { role: 'user', content: buildUserPrompt(input) },
     ],
     true,
+    {
+      jsonSchema: draftSchemaFor(input.template.schema),
+      ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+    },
   );
 
   const parsed = extractJsonObject(raw, 'AI_INVALID_JSON');
