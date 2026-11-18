@@ -14,6 +14,7 @@ import { AppError, badRequest, conflict, forbidden, internal, newReference, notF
 import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
 import { jsonContentSchema } from '../../lib/validators.js';
 import { defaultData, saveVersion } from '../documents/routes.js';
+import { askDocuments, questionSchema } from './ask.js';
 import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
 import type { AiConfig } from './providers.js';
 import {
@@ -377,6 +378,21 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
     const config = await loadConfig();
     return chooseTemplate(config, body.prompt, candidates);
+  });
+
+  /**
+   * Modo consulta: responde preguntas sobre los documentos del usuario
+   * («cuántas notas de entrega envié este mes», «búscame la de Samuel»).
+   *
+   * El modelo solo traduce la pregunta a filtros; la consulta y las cifras se
+   * resuelven en el servidor con la visibilidad del usuario.
+   */
+  app.post('/ai/ask', async (request) => {
+    const user = await authenticate(request);
+    const body = questionSchema.parse(request.body ?? {});
+    const config = await loadConfig();
+
+    return askDocuments(config, body.question, { userId: user.sub });
   });
 
   /**

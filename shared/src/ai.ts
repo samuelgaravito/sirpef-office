@@ -7,7 +7,7 @@
  * desacoplada y no hace falta una tabla de conversaciones para empezar.
  */
 
-import type { DocType, JSONContent, VariableDef, VariableValues } from './types.js';
+import type { DocType, DocumentStatus, JSONContent, VariableDef, VariableValues } from './types.js';
 
 /** Límites que comparten la validación del servidor y la interfaz. */
 export const AI_DRAFT_MAX_MESSAGES = 24;
@@ -399,4 +399,61 @@ export function contentHasVariable(content: JSONContent, key: string): boolean {
 
   walk(content);
   return found;
+}
+
+/* ───────────────────────── Modo consulta (A8.6) ───────────────────────── */
+
+/**
+ * Filtros que el modelo extrae de una pregunta en lenguaje natural.
+ *
+ * El modelo **no escribe SQL**: solo rellena estos campos. La consulta la
+ * ejecuta el servidor con las mismas reglas de visibilidad que el listado, y
+ * las cifras de la respuesta salen de la base, nunca del texto del modelo.
+ */
+export interface AiAskFilters {
+  intent: 'count' | 'list' | 'find';
+  /** Agrupación del conteo; `none` devuelve un total. */
+  groupBy: 'none' | 'docType' | 'status';
+  scope: 'mine' | 'all';
+  docTypes: DocType[];
+  statuses: DocumentStatus[];
+  /** Nombre de la plantilla, si la pregunta la menciona. */
+  templateName: string;
+  /** Persona a la que va dirigido el documento. */
+  recipient: string;
+  /** Texto libre para buscar en título, descripción y datos. */
+  text: string;
+  /** Rango de fechas en ISO (`AAAA-MM-DD`); vacío = sin límite. */
+  from: string;
+  to: string;
+  /** Documentos que el usuario aprobó como revisor. */
+  approvedByMe: boolean;
+  limit: number;
+}
+
+/** Un grupo del conteo (por tipo o por estado). */
+export interface AiAskGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/** Documento devuelto por el modo consulta. */
+export interface AiAskRow {
+  id: string;
+  title: string;
+  docType: DocType;
+  status: DocumentStatus;
+  docNumber: string | null;
+  updatedAt: string;
+}
+
+export interface AiAskResult {
+  /** Respuesta en español, construida a partir del resultado real. */
+  answer: string;
+  /** Filtros aplicados, en lenguaje legible. */
+  filters: string;
+  total: number;
+  groups: AiAskGroup[];
+  results: AiAskRow[];
 }

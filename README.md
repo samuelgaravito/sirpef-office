@@ -580,7 +580,7 @@ Configuración (solo administradores) en **Ajustes → Asistente de IA**:
 La configuración se guarda en la tabla `app_settings` (clave `ai`), tiene prioridad sobre
 las variables de entorno y **nunca devuelve la API key al navegador**.
 
-Hay dos formas de usar la IA:
+Hay tres formas de usar la IA:
 
 - **Asistente de redacción** (la barra de IA del panel de trabajo, encima de las tarjetas):
   describes el encargo en lenguaje natural y la IA elige la plantilla que mejor encaja; el
@@ -594,9 +594,15 @@ Hay dos formas de usar la IA:
 - **Rellenar con IA** del panel de datos: envía el esquema, los valores actuales y las
   instrucciones de cada variable, y mezcla el JSON resultante **solo en los campos del
   formulario**.
+- **Modo consulta**: el conmutador **Consultar** de la barra del panel de trabajo responde
+  preguntas sobre tus documentos («¿cuántas notas de entrega envié este mes?», «búscame la
+  de Samuel Carico», «¿cuántos tipos de documento firmé?»). El modelo solo traduce la
+  pregunta a filtros; la consulta se ejecuta en el servidor con tu visibilidad y **las
+  cifras salen de la base**, nunca del texto del modelo. Los resultados son tarjetas que
+  abren el documento. Solo se ven documentos propios o compartidos contigo.
 
 En la plantilla, marca un campo como **cuerpo redactable**: el asistente sustituirá su
-marcador `{{clave}}` por párrafos, listas o tablas reales. El perfil de estilo se edita en
+marcador `{{clave}}` por la prosa del cuerpo en párrafos reales. El perfil de estilo se edita en
 **Plantilla → IA → Perfil de estilo**; el botón **Deducir de aprobados** lo propone a
 partir de los documentos ya aprobados de esa plantilla. Antes de generar se puede probar
 la conexión con **Probar conexión**.
