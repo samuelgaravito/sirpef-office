@@ -267,6 +267,7 @@ function buildPrompt(question: string, templateNames: string[]): string {
     '- «toqué», «modifiqué» → dateField="updated".',
     '- «este mes», «el mes pasado», «este año», «esta semana» → rellena from y to.',
     '- Una sola dimensión por plan.',
+    '- Si piden «gráfico de líneas», usa chart="line"; «de barras», "bar"; «dona/pastel», "donut"; «tabla», "table".',
     '',
     'Ejemplos:',
     'P: ¿cuántos documentos por tipo hice este mes?',
@@ -447,6 +448,21 @@ export function applyPlanHints(
     if (plan.mode === 'count') plan.mode = 'compare';
     plan.compare ??= 'previous_month';
     plan.chart = 'comparison';
+  }
+
+  // Petición explícita del tipo de gráfico.
+  if (plan.mode !== 'compare') {
+    if (/\bdona\b|\btarta\b|\bpastel\b|\bcircular\b/.test(value) && plan.dimensions.length > 0) {
+      plan.chart = 'donut';
+    } else if (/\blineas?\b|\btendencia\b/.test(value) && plan.dimensions.length > 0) {
+      plan.chart = 'line';
+    } else if (/\bbarras?\b/.test(value) && plan.dimensions.length > 0) {
+      plan.chart = 'bar';
+    } else if (/\btabla\b/.test(value)) {
+      plan.chart = 'table';
+    } else if (/\bkpi\b|\bnumero grande\b/.test(value) && plan.dimensions.length === 0) {
+      plan.chart = 'kpi';
+    }
   }
 
   return plan;
