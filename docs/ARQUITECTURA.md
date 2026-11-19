@@ -116,11 +116,13 @@ frontend/src/
   api/client.ts          # fetch con refresh automático y descarga de blobs
   stores/auth.ts         # Pinia: usuario, token, login/logout
   composables/           # useToast, useInboxBadge, useRealtime, useNotifications, …
-  views/                 # Login, Home, Documents, DocumentEditor, Templates,
-                         # TemplateEditor, Designs, DesignEditor, Settings, NotFound,
-                         # Inbox, InboxMessage
+  views/                 # Login, Home, Consulta, Stats, Documents, DocumentEditor,
+                         # Templates, TemplateEditor, Designs, DesignEditor, Settings,
+                         # NotFound, Inbox, InboxMessage
   components/
     layout/AppShell.vue | NotificationBell.vue
+    consult/AskAnswer.vue | TypingDots.vue
+    stats/StatsBreakdownBars.vue | StatsMonthTrend.vue | StatsDetailDialog.vue
     documents/DocumentCard.vue | DocumentThumbnail.vue
     inbox/SendDocumentDialog.vue
     templates/TemplatePreview.vue | NewTemplateDialog.vue
@@ -1019,35 +1021,52 @@ Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_PR
 
 ### 8.6 Modo consulta
 
-Preguntas en lenguaje natural sobre los documentos: «¿cuántas notas de entrega envié este
-mes?», «búscame la de Samuel Carico», «¿cuántos tipos de documento firmé?».
+Preguntas en lenguaje natural sobre los documentos: «¿cuáles son mis últimos 5 documentos?»,
+«¿cuántos certificados hice este mes?», «búscame la de Samuel Carico».
 
 ```text
-POST /api/ai/ask  { question }
-  → { answer, filters, total, groups: [{ key, label, count }], results: [{ id, title, docType,
-      status, docNumber, updatedAt }] }
+POST /api/ai/ask  { question?, history?, filters? }
+  → { answer, filters, applied, view, total,
+      groups: [{ key, label, count }],
+      results: [{ id, title, docType, status, docNumber, updatedAt }],
+      dashboard: { totals, byType, byStatus, monthly, topTemplates } | null,
+      suggestions: string[] }
 ```
 
 El modelo **no escribe SQL ni ve la base**: solo traduce la pregunta a un objeto de filtros
 (`intent`, `groupBy`, `scope`, `docTypes`, `statuses`, `templateName`, `recipient`, `text`,
-`from`, `to`, `approvedByMe`, `limit`). El servidor:
+`from`, `to`, `dateField`, `approvedByMe`, `limit`). El servidor:
 
 1. **Valida** los filtros de forma tolerante: un `limit` fuera de rango se recorta, un estado
    inventado se descarta y cada campo inválido cae a su valor por defecto. Un solo campo raro
-   no invalida la consulta entera.
+   no invalida la consulta entera. Un posesivo explícito («mis», «hice», «creé») corrige a
+   `scope = "mine"` aunque el modelo se olvide.
 2. **Ejecuta** la consulta con la visibilidad del usuario (propias o compartidas con él),
-   reutilizando los filtros del listado de documentos. «Dirigidos a X» busca en las claves de
-   persona de las plantillas (`receptor`, `destinatario`, `nombre`…) sin distinguir tildes.
+   reutilizando los filtros del listado. «Dirigidos a X» busca en las claves de persona de las
+   plantillas (`receptor`, `destinatario`, `nombre`…) sin distinguir tildes.
 3. **Responde** con una frase construida desde el resultado real: las cifras nunca salen del
    texto del modelo.
 
-`intent = count` admite `groupBy` por tipo o por estado. `firmé` se interpreta como
-documentos propios en estado `final`/`sent`/`approved`; `aprobé`, como documentos con una
-aprobación del usuario en `document_messages.approved_by_id`.
+`intent = count` devuelve `view = "dashboard"` y un `dashboard` calculado por el **mismo motor
+que la vista de Estadísticas** (`stats/query.ts`): totales, desglose por tipo y estado,
+actividad mensual y plantillas más usadas del conjunto filtrado. `intent = list`/`find` devuelve
+`view = "list"` y las filas que abren el documento. `firmé` se interpreta como documentos
+propios en estado `final`/`sent`/`approved`; `aprobé`, como documentos con una aprobación del
+usuario en `document_messages.approved_by_id`.
+
+`dateField` decide a qué fecha se aplica el rango: `created` («hice», «creé») o `updated`
+(«toqué», «modifiqué»). Es lo que hace que el panel del chat y el módulo cuenten lo mismo.
+
+**Camino determinista.** El cliente reenvía `filters` ya resueltos cuando el usuario pulsa un
+chip o una barra del panel; el servidor los valida y ejecuta **sin llamar al modelo**. Así los
+refinamientos son instantáneos y funcionan incluso sin proveedor configurado. `history` lleva
+los últimos turnos para seguimientos («¿y el mes pasado?»).
 
 Si el modelo no devuelve un JSON utilizable, se cae a una búsqueda por texto de la pregunta
-completa. En la interfaz es un conmutador **Redactar / Consultar** en la barra del panel de
-trabajo; los resultados son tarjetas que abren el documento.
+completa. En la interfaz, **Redactar / Consultar** en la barra del inicio abre la vista
+`/consulta`: un chat con historial por pestaña, tarjetas de documentos con enlaces y un panel
+de cifras incrustado cuyas barras vuelven a consultar. Cada respuesta enlaza con
+`/stats` llevando los filtros aplicados.
 
 ---
 
@@ -1087,7 +1106,8 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `POST` | `/inbox/:id/cancel` | El remitente cancela un envío pendiente. |
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
 | `GET` | `/stats/overview?dateFrom=<ISO>&dateTo=<ISO>` | Resumen del espacio (propios + compartidos, mismo criterio que `/documents?scope=all`): totales, plantillas más usadas, actividad mensual y resultados de aprobación. El filtro limita por fecha de creación de documentos, plantillas y diseños; sin fechas abarca todo el histórico. |
-| `GET` | `/stats/detail?kind=template\|approved\|rejected\|pending&templateId=<uuid\|none>&dateFrom=<ISO>&dateTo=<ISO>&page=1&pageSize=10` | Documentos detrás de un valor del panel: los de una plantilla, los envíos aprobados/rechazados del usuario o la cola de pendientes. Cada `kind` replica el criterio de su contador para que el total coincida. |
+| `GET` | `/stats/panel?dateFrom=<ISO>&dateTo=<ISO>&docType=&status=&scope=&templateId=&q=&dateField=` | Panel de un conjunto de documentos: totales, desglose por tipo y estado, actividad mensual y plantillas más usadas. Es el mismo motor que alimenta el dashboard del chat de consulta. |
+| `GET` | `/stats/detail?kind=template\|documents\|drafts\|official\|trashed\|stale\|approved\|rejected\|pending&templateId=<uuid\|none>&docType=&status=&dateFrom=<ISO>&dateTo=<ISO>&page=1&pageSize=10` | Documentos detrás de un valor del panel: los de una plantilla o estado, borradores, oficiales, papelera, abandonados, envíos aprobados/rechazados del usuario o cola de pendientes. Cada `kind` replica el criterio de su contador para que el total coincida. |
 | `GET/POST` | `/templates` | Listado y creación (acepta `header`/`footer` y `numbering`). |
 | `GET/PATCH/DELETE` | `/templates/:id` | Detalle con `chrome`/`inheritedChrome` y edición de bandas y numeración. |
 | `GET` | `/numbering` | Series de numeración con su último emitido y próximo número (la serie se identifica por su `id`). |
@@ -1102,6 +1122,7 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `GET` | `/ai/status` | ¿Hay IA configurada? |
 | `GET/PUT` | `/ai/settings` | Configuración (admin). |
 | `DELETE` | `/ai/key` | Borra la clave. |
+| `POST` | `/ai/ask` | Modo consulta: responde una pregunta sobre los documentos. Acepta `history` y `filters` (camino determinista); devuelve frase, documentos, panel y sugerencias. |
 | `POST` | `/ai/test` | Prueba de conexión. |
 | `POST` | `/ai/choose-template` | Elige la plantilla que mejor encaja con un encargo escrito (no crea nada). |
 | `POST` | `/documents/:id/ai/generate` | Rellena variables con IA. |

@@ -38,8 +38,10 @@ const canSeeInbox = computed(() => auth.canSeeMenu('inbox'));
 
 const sectionLabel = computed(() => {
   const title = typeof route.meta.title === 'string' ? route.meta.title : 'Inicio';
-  const menu = MENU_CATALOG.find((item) => item.key === route.meta.menu);
+  const explicit = typeof route.meta.section === 'string' ? route.meta.section : null;
   if (route.name === 'home') return 'Panel de trabajo';
+  if (explicit) return explicit;
+  const menu = MENU_CATALOG.find((item) => item.key === route.meta.menu);
   return menu?.label ?? title;
 });
 

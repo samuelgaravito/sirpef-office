@@ -25,6 +25,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:fullwidth": "tsx scripts/migrate-fullwidth-chrome.ts",
     "db:migrate:numbering": "tsx scripts/backfill-document-numbering.ts",
+    "db:migrate:stats-menu": "tsx scripts/backfill-stats-menu.ts",
     "db:reconcile-counters": "tsx scripts/reconcile-counters.ts",
     "db:purge-empty-drafts": "tsx scripts/purge-empty-drafts.ts",
     "predb:seed": "node ../scripts/sync-shared.mjs",

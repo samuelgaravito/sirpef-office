@@ -7,7 +7,14 @@
  * desacoplada y no hace falta una tabla de conversaciones para empezar.
  */
 
-import type { DocType, DocumentStatus, JSONContent, VariableDef, VariableValues } from './types.js';
+import type {
+  DocType,
+  DocumentStatus,
+  JSONContent,
+  StatsPanel,
+  VariableDef,
+  VariableValues,
+} from './types.js';
 
 /** Límites que comparten la validación del servidor y la interfaz. */
 export const AI_DRAFT_MAX_MESSAGES = 24;
@@ -435,6 +442,12 @@ export function contentHasVariable(content: JSONContent, key: string): boolean {
 
 /* ───────────────────────── Modo consulta (A8.6) ───────────────────────── */
 
+/** Turno previo de la conversación, para resolver seguimientos. */
+export interface AiAskHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 /**
  * Filtros que el modelo extrae de una pregunta en lenguaje natural.
  *
@@ -458,6 +471,8 @@ export interface AiAskFilters {
   /** Rango de fechas en ISO (`AAAA-MM-DD`); vacío = sin límite. */
   from: string;
   to: string;
+  /** Campo de fecha al que se aplica el rango: «hice» es creado. */
+  dateField: 'created' | 'updated';
   /** Documentos que el usuario aprobó como revisor. */
   approvedByMe: boolean;
   limit: number;
@@ -485,7 +500,15 @@ export interface AiAskResult {
   answer: string;
   /** Filtros aplicados, en lenguaje legible. */
   filters: string;
+  /** Filtros validados, para pintar chips y poder refinarlos sin el modelo. */
+  applied: AiAskFilters;
+  /** `dashboard` cuando la pregunta pide cifras; `list` cuando pide documentos. */
+  view: 'list' | 'dashboard';
   total: number;
   groups: AiAskGroup[];
   results: AiAskRow[];
+  /** Panel estadístico del conjunto filtrado; `null` en las listas. */
+  dashboard: StatsPanel | null;
+  /** Preguntas cortas para continuar la conversación. */
+  suggestions: string[];
 }

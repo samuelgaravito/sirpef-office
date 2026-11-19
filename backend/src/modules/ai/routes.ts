@@ -20,7 +20,7 @@ import { AppError, badRequest, conflict, forbidden, internal, newReference, notF
 import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
 import { docTypeSchema, jsonContentSchema } from '../../lib/validators.js';
 import { defaultData, saveVersion } from '../documents/routes.js';
-import { askDocuments, questionSchema } from './ask.js';
+import { askDocuments, askRequestSchema } from './ask.js';
 import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
 import { inlineText } from './inline.js';
 import type { AiConfig } from './providers.js';
@@ -413,10 +413,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post('/ai/ask', async (request) => {
     const user = await authenticate(request);
-    const body = questionSchema.parse(request.body ?? {});
+    const body = askRequestSchema.parse(request.body ?? {});
     const config = await loadConfig();
 
-    return askDocuments(config, body.question, { userId: user.sub });
+    return askDocuments(config, body.question, { userId: user.sub }, {
+      ...(body.filters ? { filters: body.filters } : {}),
+      ...(body.history ? { history: body.history } : {}),
+    });
   });
 
   /**

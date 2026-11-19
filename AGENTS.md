@@ -56,7 +56,8 @@ cd frontend && npm run build       # vue-tsc + bundle de Vite
 - `npm run db:generate` (drizzle-kit) genera el SQL en `backend/drizzle/`; `npm run
   db:migrate` lo aplica. **Cambiar el schema = `src/db/schema.ts` → generate → migrate.**
 - Scripts de datos (idempotentes, con copia en `backend/data/backups/`):
-  `db:migrate:fullwidth`, `db:migrate:numbering`, `db:reconcile-counters` (`--apply`),
+  `db:migrate:fullwidth`, `db:migrate:numbering`, `db:migrate:stats-menu`,
+  `db:reconcile-counters` (`--apply`),
   `db:purge-empty-drafts` (`--apply`).
 - `npm run db:seed` crea el admin, **4 diseños y 8 plantillas**; no duplica si ya existen.
 - `npm run admin:reset` realinea email y contraseña del admin con `SEED_ADMIN_*`.
@@ -72,6 +73,9 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   **no necesita proveedor ni base de datos**.
 - `npm run smoke:ai-template` prueba la elección de plantilla con un `fetch` simulado →
   **no necesita proveedor ni base de datos**.
+- `npm run smoke:ai-ask` prueba la interpretación del modo consulta con un `fetch` simulado →
+  **no necesita proveedor ni base de datos**. Cubre el recorte de filtros, los posesivos y el
+  campo de fecha.
 - `npm run smoke:*` restantes (inbox, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean
@@ -114,7 +118,7 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   sola vez tras un 401 y ya traduce los errores de red (no muestres «Failed to fetch»).
 - Las **vistas** viven en `views/`, los componentes en `components/<dominio>/`
   (`editor/`, `designs/`, `documents/`, `templates/`, `inbox/`, `layout/`, `ui/`).
-- Los módulos (bandeja, documentos, plantillas, diseños, ajustes) se abren como **paneles
+- Los módulos (bandeja, documentos, plantillas, diseños, estadísticas, ajustes) se abren como **paneles
   modales sobre el panel de trabajo**, pero las **URLs siguen siendo normales y
   recargables** (`meta.overlay` en el router). `lib/panel.ts` expone `PANEL_MODE` /
   `PANEL_CLOSE` para que `AppShell` omita su cabecera al montarse dentro del panel.

@@ -85,7 +85,7 @@ export const users = pgTable(
       .array()
       .$type<MenuKey[]>()
       .notNull()
-      .default(sql`ARRAY['home','inbox','documents','templates','designs']::text[]`),
+      .default(sql`ARRAY['home','inbox','documents','templates','designs','stats']::text[]`),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
