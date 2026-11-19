@@ -55,7 +55,8 @@
     "smoke:ai-draft": "tsx scripts/ai-draft-smoke.ts",
     "smoke:ai-inline": "tsx scripts/ai-inline-smoke.ts",
     "smoke:ai-template": "tsx scripts/ai-template-choice-smoke.ts",
-    "smoke:ai-ask": "tsx scripts/ai-ask-smoke.ts"
+    "smoke:ai-ask": "tsx scripts/ai-ask-smoke.ts",
+    "smoke:ai-conversations": "tsx scripts/ai-conversations-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

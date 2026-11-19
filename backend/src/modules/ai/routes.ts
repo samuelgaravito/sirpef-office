@@ -20,7 +20,14 @@ import { AppError, badRequest, conflict, forbidden, internal, newReference, notF
 import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
 import { docTypeSchema, jsonContentSchema } from '../../lib/validators.js';
 import { defaultData, saveVersion } from '../documents/routes.js';
-import { askDocuments, askRequestSchema } from './ask.js';
+import { askDocuments, askPlanSchema, askRequestSchema, loadAskTemplates, runWithPlan } from './ask.js';
+import {
+  appendTurn,
+  assertConversation,
+  conversationHistory,
+  createConversation,
+  discardConversation,
+} from './conversations.js';
 import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
 import { inlineText } from './inline.js';
 import type { AiConfig } from './providers.js';
@@ -408,18 +415,54 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
    * Modo consulta: responde preguntas sobre los documentos del usuario
    * («cuántas notas de entrega envié este mes», «búscame la de Samuel»).
    *
-   * El modelo solo traduce la pregunta a filtros; la consulta y las cifras se
-   * resuelven en el servidor con la visibilidad del usuario.
+   * El modelo solo produce un plan; la consulta y las cifras se resuelven en
+   * el servidor con la visibilidad del usuario. Cada turno queda guardado en
+   * una conversación (se crea sola si el cliente no manda `conversationId`).
    */
   app.post('/ai/ask', async (request) => {
     const user = await authenticate(request);
     const body = askRequestSchema.parse(request.body ?? {});
     const config = await loadConfig();
 
-    return askDocuments(config, body.question, { userId: user.sub }, {
-      ...(body.filters ? { filters: body.filters } : {}),
-      ...(body.history ? { history: body.history } : {}),
-    });
+    if (body.conversationId) {
+      await assertConversation(user.sub, body.conversationId);
+    }
+    const created = !body.conversationId;
+    const conversationId =
+      body.conversationId ?? (await createConversation(user.sub, body.question));
+
+    // Con conversación, el historial sale de la base: el cliente no lo manda.
+    const history = body.conversationId
+      ? await conversationHistory(conversationId)
+      : body.history;
+
+    try {
+      const result = await askDocuments(config, body.question, { userId: user.sub }, {
+        ...(body.plan ? { plan: body.plan } : {}),
+        ...(body.filters ? { filters: body.filters } : {}),
+        ...(history ? { history } : {}),
+      });
+
+      await appendTurn(conversationId, body.question, result);
+      return { ...result, conversationId };
+    } catch (error) {
+      // Una conversación recién creada que no llegó a responder no se guarda.
+      if (created) await discardConversation(conversationId);
+      throw error;
+    }
+  });
+
+  /**
+   * Ejecuta un plan ya resuelto sin modelo y sin conversación.
+   *
+   * Lo usan los informes guardados y cualquier vista que quiera repetir una
+   * consulta con los permisos actuales.
+   */
+  app.post('/ai/run', async (request) => {
+    const user = await authenticate(request);
+    const body = z.object({ plan: askPlanSchema }).parse(request.body ?? {});
+    const templates = await loadAskTemplates(user.sub);
+    return runWithPlan({ userId: user.sub }, body.plan, templates);
   });
 
   /**

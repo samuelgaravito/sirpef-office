@@ -2,18 +2,17 @@
 import {
   ArrowRight,
   ArrowUpRight,
-  BarChart3,
   FileText,
-  ListChecks,
+  Save,
+  Sparkles,
   X,
 } from 'lucide-vue-next';
 import { computed } from 'vue';
 
-import StatsBreakdownBars from '@/components/stats/StatsBreakdownBars.vue';
-import StatsMonthTrend from '@/components/stats/StatsMonthTrend.vue';
+import ChartRenderer from '@/components/charts/ChartRenderer.vue';
 import { formatDayLabel } from '@/lib/date-presets';
 import { docTypeLabel, formatDate, STATUS_LABELS } from '@/lib/labels';
-import type { AiAskFilters, AiAskResult } from '@sirpefoffice/shared';
+import type { AiAskFilters, AiAskPlan, AiAskResult } from '@sirpefoffice/shared';
 
 const props = defineProps<{ result: AiAskResult }>();
 
@@ -21,6 +20,7 @@ const emit = defineEmits<{
   refine: [patch: Partial<AiAskFilters>, label: string];
   ask: [question: string];
   open: [id: string];
+  save: [plan: AiAskPlan, title: string];
 }>();
 
 interface FilterChip {
@@ -125,14 +125,6 @@ const documentNoun = computed(() =>
   props.result.total === 1 ? 'documento' : 'documentos',
 );
 
-/** Los estados del backend vienen en minúsculas para la frase; la UI usa sus etiquetas. */
-const statusItems = computed(() =>
-  (props.result.dashboard?.byStatus ?? []).map((item) => ({
-    ...item,
-    label: STATUS_LABELS[item.key as keyof typeof STATUS_LABELS] ?? item.label,
-  })),
-);
-
 const canShowMore = computed(
   () =>
     props.result.view === 'list' &&
@@ -157,16 +149,33 @@ function removeChip(chip: FilterChip): void {
   emit('refine', chip.patch, chip.title);
 }
 
-function selectType(key: string): void {
-  emit('refine', { docTypes: [key as AiAskFilters['docTypes'][number]] }, `Solo ${docTypeLabel(key)}`);
-}
+/** Pulsa una barra del gráfico: refina con la dimensión que eligió la IA. */
+function onChartSelect(key: string, label: string): void {
+  const dimension = props.result.plan.dimensions[0];
+  if (!dimension) return;
 
-function selectStatus(key: string): void {
-  emit(
-    'refine',
-    { statuses: [key as AiAskFilters['statuses'][number]] },
-    `Solo ${STATUS_LABELS[key as keyof typeof STATUS_LABELS] ?? key}`,
-  );
+  if (dimension === 'docType') {
+    emit('refine', { docTypes: [key as AiAskFilters['docTypes'][number]] }, `Solo ${label}`);
+    return;
+  }
+  if (dimension === 'status') {
+    emit('refine', { statuses: [key as AiAskFilters['statuses'][number]] }, `Solo ${label}`);
+    return;
+  }
+  if (dimension === 'template') {
+    emit('refine', { templateName: label }, `Plantilla ${label}`);
+    return;
+  }
+  if (dimension === 'recipient') {
+    emit('refine', { recipient: label }, `Para ${label}`);
+    return;
+  }
+  if (dimension === 'month' && /^\d{4}-\d{2}$/.test(key)) {
+    const [year, month] = key.split('-').map(Number);
+    const from = `${year}-${String(month).padStart(2, '0')}-01`;
+    const to = new Date(year ?? 2000, month ?? 1, 0).toISOString().slice(0, 10);
+    emit('refine', { from, to }, label);
+  }
 }
 
 /** Pide la lista que hay detrás de la cifra, sin volver a llamar al modelo. */
@@ -198,12 +207,12 @@ function showDocuments(): void {
       </button>
     </div>
 
-    <!-- Panel estadístico de la consulta -->
+    <!-- Respuesta visual: KPI, gráfico e insights -->
     <div
-      v-if="result.dashboard"
+      v-if="result.chart || result.insights.length > 0"
       class="rounded-2xl border border-white/12 bg-white/[0.04] p-3.5"
     >
-      <div class="grid grid-cols-3 gap-2">
+      <div v-if="result.dashboard" class="grid grid-cols-3 gap-2">
         <div class="rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5">
           <p class="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">
             Documentos
@@ -230,52 +239,47 @@ function showDocuments(): void {
         </div>
       </div>
 
-      <div v-if="result.dashboard.byType.length > 0" class="mt-3.5">
-        <p class="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-white/45">
-          <BarChart3 class="size-3" aria-hidden="true" />
-          Por tipo
-        </p>
-        <StatsBreakdownBars
-          :items="result.dashboard.byType"
-          color="#4e85c8"
-          clickable
-          dark
-          @select="selectType"
-        />
-      </div>
-
-      <div v-if="result.dashboard.byStatus.length > 0" class="mt-3.5">
-        <p class="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-white/45">
-          <ListChecks class="size-3" aria-hidden="true" />
-          Por estado
-        </p>
-        <StatsBreakdownBars
-          :items="statusItems"
-          color="#06e3bd"
-          clickable
-          dark
-          @select="selectStatus"
-        />
-      </div>
-
-      <div
-        v-if="result.dashboard.monthly.some((point) => point.created > 0 || point.approved > 0)"
+      <ChartRenderer
+        v-if="result.chart"
+        :chart="result.chart"
+        dark
+        :interactive="result.plan.mode !== 'compare'"
         class="mt-3.5"
-      >
-        <p class="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-white/45">
-          Actividad
-        </p>
-        <StatsMonthTrend :points="result.dashboard.monthly" :limit="12" dark />
-      </div>
+        @select="onChartSelect"
+      />
 
-      <button
-        type="button"
-        class="mt-3.5 inline-flex items-center gap-1.5 rounded-full border border-[#06e3bd]/40 bg-[#06e3bd]/10 px-3 py-1.5 text-[11.5px] font-medium text-[#7df3dd] transition-colors hover:bg-[#06e3bd]/20 hover:text-white"
-        @click="showDocuments"
-      >
-        <FileText class="size-3.5" aria-hidden="true" />
-        Ver los {{ result.total }} {{ documentNoun }}
-      </button>
+      <ul v-if="result.insights.length > 0" class="mt-3 space-y-1">
+        <li
+          v-for="insight in result.insights"
+          :key="insight"
+          class="flex items-start gap-1.5 text-[11.5px] leading-snug text-white/60"
+        >
+          <Sparkles class="mt-0.5 size-3 shrink-0 text-[#7df3dd]" aria-hidden="true" />
+          {{ insight }}
+        </li>
+      </ul>
+
+      <div class="mt-3.5 flex flex-wrap items-center gap-2">
+        <button
+          v-if="result.total > 0"
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-full border border-[#06e3bd]/40 bg-[#06e3bd]/10 px-3 py-1.5 text-[11.5px] font-medium text-[#7df3dd] transition-colors hover:bg-[#06e3bd]/20 hover:text-white"
+          @click="showDocuments"
+        >
+          <FileText class="size-3.5" aria-hidden="true" />
+          Ver los {{ result.total }} {{ documentNoun }}
+        </button>
+
+        <button
+          v-if="result.chart && result.chart.kind !== 'table'"
+          type="button"
+          class="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-[11.5px] text-white/65 transition-colors hover:border-white/30 hover:text-white"
+          @click="emit('save', result.plan, result.chart.title)"
+        >
+          <Save class="size-3.5" aria-hidden="true" />
+          Guardar gráfico
+        </button>
+      </div>
     </div>
 
     <!-- Documentos de la respuesta -->

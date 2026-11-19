@@ -76,6 +76,9 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
 - `npm run smoke:ai-ask` prueba la interpretación del modo consulta con un `fetch` simulado →
   **no necesita proveedor ni base de datos**. Cubre el recorte de filtros, los posesivos y el
   campo de fecha.
+- `npm run smoke:ai-conversations` prueba el historial y los informes guardados contra la API y
+  la base reales: crear, listar, reconstruir, renombrar, borrar, guardar/ejecutar/borrar un
+  informe y comprobar el 404 de otro usuario.
 - `npm run smoke:*` restantes (inbox, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean
@@ -179,6 +182,6 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
   flujos, API y render (léelo antes de tocar render o numeración). `docs/SVA.md` = integración
   con SVA y sus modos de autenticación (`local` / `hybrid` / `sva`).
 - La tabla de variables del README y `docs/ARQUITECTURA.md` están **al día** con el código
-  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **16 tablas**), pero
+  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **19 tablas**), pero
   compruébalo: si vuelve a haber discrepancia, **manda el código ejecutable**.
 - Si el README y el código discrepan, **manda el código ejecutable**.

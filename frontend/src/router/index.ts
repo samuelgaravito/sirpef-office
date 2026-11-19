@@ -79,6 +79,12 @@ const router = createRouter({
       meta: { title: 'Consulta', menu: 'documents', section: 'Consulta' },
     },
     {
+      path: '/consulta/:id',
+      name: 'consulta-chat',
+      component: () => import('@/views/ConsultaView.vue'),
+      meta: { title: 'Consulta', menu: 'documents', section: 'Consulta' },
+    },
+    {
       path: '/documents/new',
       name: 'document-new',
       component: () => import('@/views/DocumentEditorView.vue'),

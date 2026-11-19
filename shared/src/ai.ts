@@ -485,6 +485,65 @@ export interface AiAskGroup {
   count: number;
 }
 
+/* ───────────────────── Plan analítico (A8.6) ───────────────────── */
+
+export const AI_ASK_MODES = ['count', 'list', 'search', 'aggregate', 'compare', 'clarify'] as const;
+export type AiAskMode = (typeof AI_ASK_MODES)[number];
+
+export const AI_ASK_METRICS = ['count', 'approval_hours', 'approval_rate'] as const;
+export type AiAskMetric = (typeof AI_ASK_METRICS)[number];
+
+export const AI_ASK_DIMENSIONS = [
+  'docType',
+  'status',
+  'template',
+  'recipient',
+  'month',
+  'week',
+  'owner',
+] as const;
+export type AiAskDimension = (typeof AI_ASK_DIMENSIONS)[number];
+
+export const AI_CHART_KINDS = ['kpi', 'bar', 'line', 'donut', 'comparison', 'table'] as const;
+export type AiChartKind = (typeof AI_CHART_KINDS)[number];
+
+export const AI_COMPARE_PRESETS = ['previous_period', 'previous_month', 'previous_year'] as const;
+export type AiComparePreset = (typeof AI_COMPARE_PRESETS)[number];
+
+export type AiTimeBucket = 'day' | 'week' | 'month';
+
+/**
+ * Plan que produce el modelo para responder una consulta.
+ *
+ * Sigue sin escribir SQL: elige **qué** contar (métrica), **cómo** agrupar
+ * (dimensión) y **qué gráfico** quiere. El servidor valida la combinación y
+ * construye la consulta con los permisos del usuario.
+ */
+export interface AiAskPlan {
+  mode: AiAskMode;
+  filters: AiAskFilters;
+  metrics: AiAskMetric[];
+  dimensions: AiAskDimension[];
+  bucket: AiTimeBucket | null;
+  compare: AiComparePreset | null;
+  chart: AiChartKind;
+  sort: { by: 'value' | 'label'; dir: 'asc' | 'desc' };
+  limit: number;
+  clarification: { question: string; options: string[] } | null;
+}
+
+/** Gráfico ya materializado por el servidor: el cliente solo lo pinta. */
+export interface AiChart {
+  kind: AiChartKind;
+  title: string;
+  unit: 'documents' | 'hours' | 'percent';
+  categories: string[];
+  /** Claves internas alineadas con `categories` (para refinar sin ambigüedad). */
+  keys?: string[];
+  series: { label: string; values: number[] }[];
+}
+
+
 /** Documento devuelto por el modo consulta. */
 export interface AiAskRow {
   id: string;
@@ -502,6 +561,8 @@ export interface AiAskResult {
   filters: string;
   /** Filtros validados, para pintar chips y poder refinarlos sin el modelo. */
   applied: AiAskFilters;
+  /** Plan completo, base para repetir la respuesta sin llamar al modelo. */
+  plan: AiAskPlan;
   /** `dashboard` cuando la pregunta pide cifras; `list` cuando pide documentos. */
   view: 'list' | 'dashboard';
   total: number;
@@ -509,6 +570,57 @@ export interface AiAskResult {
   results: AiAskRow[];
   /** Panel estadístico del conjunto filtrado; `null` en las listas. */
   dashboard: StatsPanel | null;
+  /** Gráfico elegido por el plan y rellenado por el servidor. */
+  chart: AiChart | null;
+  /** Lecturas cortas y deterministas del resultado. */
+  insights: string[];
+  /** Pregunta de aclaración cuando el plan no es concluyente. */
+  clarification: { question: string; options: string[] } | null;
   /** Preguntas cortas para continuar la conversación. */
   suggestions: string[];
+}
+
+/* ─────────────────── Conversaciones e informes ─────────────────── */
+
+export interface AiConversationSummary {
+  id: string;
+  title: string;
+  /** Última pregunta o respuesta, recortada para la lista. */
+  preview: string;
+  messageCount: number;
+  updatedAt: string;
+}
+
+export interface AiConversationsPage {
+  items: AiConversationSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AiConversationMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  /** Respuesta reconstruida con los permisos actuales; `null` en preguntas. */
+  result: AiAskResult | null;
+  createdAt: string;
+}
+
+export interface AiConversation {
+  id: string;
+  title: string;
+  messages: AiConversationMessage[];
+  hasMore: boolean;
+  updatedAt: string;
+}
+
+/** Gráfico guardado: se almacena el plan, no las cifras. */
+export interface SavedChart {
+  id: string;
+  title: string;
+  plan: AiAskPlan;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
 }

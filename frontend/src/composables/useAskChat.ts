@@ -4,12 +4,11 @@ import { api } from '@/api/client';
 import { errorMessage } from '@/lib/error-message';
 import type {
   AiAskFilters,
-  AiAskHistoryMessage,
+  AiAskPlan,
   AiAskResult,
+  AiConversation,
+  SavedChart,
 } from '@sirpefoffice/shared';
-
-/** El hilo vive en la pestaña: al volver de un documento sigue intacto. */
-const STORAGE_KEY = 'sirpef.consulta.thread';
 
 export interface AskChatMessage {
   id: string;
@@ -17,11 +16,14 @@ export interface AskChatMessage {
   text: string;
   result?: AiAskResult;
   error?: string;
+  createdAt?: string;
 }
+
+type AskResponse = AiAskResult & { conversationId: string };
 
 interface AskRequest {
   question: string;
-  filters?: AiAskFilters;
+  plan?: AiAskPlan;
 }
 
 function newId(): string {
@@ -29,92 +31,115 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function restore(): AskChatMessage[] {
-  try {
-    const raw = sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (item): item is AskChatMessage =>
-        typeof item === 'object' &&
-        item !== null &&
-        typeof (item as AskChatMessage).id === 'string' &&
-        ((item as AskChatMessage).role === 'user' || (item as AskChatMessage).role === 'assistant') &&
-        typeof (item as AskChatMessage).text === 'string',
-    );
-  } catch {
-    return [];
-  }
-}
-
 /**
  * Conversación del modo consulta.
  *
- * El servidor es sin estado: cada envío lleva los últimos turnos y, cuando el
- * usuario pulsa un chip o una barra, los filtros ya resueltos. Así el hilo se
- * puede retomar en la misma pestaña sin guardar nada en la base.
+ * El historial vive en el servidor: aquí solo se mantiene el hilo visible.
+ * Los chips y las barras reenvían el plan ya resuelto, sin llamar al modelo.
  */
 export function useAskChat() {
-  const messages = ref<AskChatMessage[]>(restore());
+  const messages = ref<AskChatMessage[]>([]);
   const sending = ref(false);
+  const loading = ref(false);
+  const conversationId = ref<string | null>(null);
+  const title = ref('');
+  const hasMore = ref(false);
   const lastRequest = ref<AskRequest | null>(null);
 
   const hasThread = computed(() => messages.value.length > 0);
 
-  function persist(): void {
+  function reset(): void {
+    messages.value = [];
+    conversationId.value = null;
+    title.value = '';
+    hasMore.value = false;
+    lastRequest.value = null;
+  }
+
+  /** Carga una conversación y reconstruye sus respuestas con permisos actuales. */
+  async function open(id: string): Promise<void> {
+    loading.value = true;
+    lastRequest.value = null;
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.value));
-    } catch {
-      // La sesión puede estar llena o bloqueada; el hilo sigue en memoria.
+      const data = await api.get<AiConversation>(`/ai/conversations/${id}`);
+      conversationId.value = data.id;
+      title.value = data.title;
+      hasMore.value = data.hasMore;
+      messages.value = data.messages.map((message) => ({
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+        ...(message.result ? { result: message.result } : {}),
+      }));
+    } catch (error) {
+      reset();
+      messages.value = [
+        {
+          id: newId(),
+          role: 'assistant',
+          text: errorMessage(error, 'No se pudo abrir la conversación'),
+          error: 'load',
+        },
+      ];
+    } finally {
+      loading.value = false;
     }
   }
 
-  /** Turnos recientes para resolver referencias («¿y el mes pasado?»). */
-  function historyOf(list: AskChatMessage[]): AiAskHistoryMessage[] {
-    return list
-      .filter((message) => !message.error)
-      .slice(-4)
-      .map((message) => ({
+  /** Trae los mensajes anteriores de la conversación abierta. */
+  async function loadOlder(): Promise<void> {
+    const id = conversationId.value;
+    const first = messages.value[0];
+    if (!id || !hasMore.value || !first?.createdAt || loading.value) return;
+
+    loading.value = true;
+    try {
+      const data = await api.get<AiConversation>(
+        `/ai/conversations/${id}?before=${encodeURIComponent(first.createdAt)}`,
+      );
+      const older = data.messages.map((message) => ({
+        id: message.id,
         role: message.role,
-        content: message.role === 'assistant' ? (message.result?.answer ?? message.text) : message.text,
+        text: message.text,
+        createdAt: message.createdAt,
+        ...(message.result ? { result: message.result } : {}),
       }));
+      messages.value = [...older, ...messages.value];
+      hasMore.value = data.hasMore;
+    } finally {
+      loading.value = false;
+    }
   }
 
-  /**
-   * Envía una pregunta.
-   *
-   * Sin `filters` la interpreta el modelo; con `filters` se aplica de forma
-   * determinista (chips y barras) sin gastar una llamada al proveedor.
-   */
   async function run(
     question: string,
-    filters: AiAskFilters | undefined,
+    plan: AiAskPlan | undefined,
     appendUser: boolean,
-  ): Promise<void> {
-    if (!question || sending.value) return;
+  ): Promise<AskResponse | null> {
+    if (!question || sending.value) return null;
 
-    // Un reintento no repite la burbuja: el turno del usuario ya está.
-    const previous = appendUser ? messages.value : messages.value.slice(0, -1);
-    const turns = historyOf(previous);
-    lastRequest.value = { question, ...(filters ? { filters } : {}) };
-
-    if (appendUser) messages.value.push({ id: newId(), role: 'user', text: question });
+    if (appendUser) {
+      messages.value.push({ id: newId(), role: 'user', text: question });
+    }
+    lastRequest.value = { question, ...(plan ? { plan } : {}) };
     sending.value = true;
-    persist();
 
     try {
-      const result = await api.post<AiAskResult>('/ai/ask', {
+      const result = await api.post<AskResponse>('/ai/ask', {
         question,
-        history: turns,
-        ...(filters ? { filters } : {}),
+        ...(conversationId.value ? { conversationId: conversationId.value } : {}),
+        ...(plan ? { plan } : {}),
       });
+      conversationId.value = result.conversationId;
+      if (!title.value) title.value = question.slice(0, 80);
       messages.value.push({
         id: newId(),
         role: 'assistant',
         text: result.answer,
         result,
       });
+      return result;
     } catch (error) {
       messages.value.push({
         id: newId(),
@@ -122,50 +147,81 @@ export function useAskChat() {
         text: errorMessage(error, 'No se pudo consultar tus documentos'),
         error: 'ask',
       });
+      return null;
     } finally {
       sending.value = false;
-      persist();
     }
   }
 
-  async function send(input: string, options: { filters?: AiAskFilters } = {}): Promise<void> {
-    await run(input.trim(), options.filters, true);
+  async function send(
+    input: string,
+    options: { plan?: AiAskPlan } = {},
+  ): Promise<AskResponse | null> {
+    return run(input.trim(), options.plan, true);
   }
 
-  /** Últimos filtros aplicados, base para refinar sin volver al modelo. */
-  function lastFilters(): AiAskFilters | null {
+  /** Último plan aplicado, base para refinar sin volver al modelo. */
+  function lastPlan(): AiAskPlan | null {
     for (let index = messages.value.length - 1; index >= 0; index -= 1) {
       const result = messages.value[index]?.result;
-      if (result) return result.applied;
+      if (result) return result.plan;
     }
     return null;
   }
 
-  /** Aplica un cambio de filtro sobre la última respuesta. */
+  /** Aplica un cambio de filtros conservando métrica, dimensión y gráfico. */
   async function refine(patch: Partial<AiAskFilters>, label: string): Promise<void> {
-    const base = lastFilters();
+    const base = lastPlan();
     if (!base) return;
-    await send(label, { filters: { ...base, ...patch } });
+
+    const plan: AiAskPlan = {
+      ...base,
+      filters: { ...base.filters, ...patch },
+      limit: patch.limit ?? base.limit,
+    };
+
+    // «Ver esos documentos» cambia a lista, no a un conteo.
+    if (patch.intent === 'list' || patch.intent === 'find') {
+      plan.mode = patch.intent === 'find' ? 'search' : 'list';
+      plan.dimensions = [];
+      plan.chart = 'table';
+      plan.limit = plan.filters.limit;
+    }
+
+    await send(label, { plan });
   }
 
-  /** Repite la última petición sin duplicar la burbuja del usuario. */
   async function retry(): Promise<void> {
     const request = lastRequest.value;
     if (!request || sending.value) return;
     const last = messages.value[messages.value.length - 1];
     if (last?.role === 'assistant' && last.error) messages.value.pop();
-    await run(request.question, request.filters, false);
+    await run(request.question, request.plan, false);
   }
 
-  function reset(): void {
-    messages.value = [];
-    lastRequest.value = null;
-    try {
-      sessionStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // Sin sesión disponible, basta con vaciar la memoria.
-    }
+  /** Guarda un gráfico concreto (no necesariamente el último del hilo). */
+  async function saveChart(plan: AiAskPlan, titleOverride?: string): Promise<SavedChart> {
+    return api.post<SavedChart>('/stats/charts', {
+      title: titleOverride?.trim() || 'Gráfico de consulta',
+      plan,
+    });
   }
 
-  return { messages, sending, hasThread, send, refine, retry, reset, lastFilters };
+  return {
+    messages,
+    sending,
+    loading,
+    conversationId,
+    title,
+    hasMore,
+    hasThread,
+    open,
+    loadOlder,
+    send,
+    refine,
+    retry,
+    reset,
+    saveChart,
+    lastPlan,
+  };
 }

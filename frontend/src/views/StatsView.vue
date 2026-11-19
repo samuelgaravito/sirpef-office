@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AlertCircle,
+  BarChart3,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -19,10 +20,12 @@ import { useRoute, useRouter } from 'vue-router';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import ChartRenderer from '@/components/charts/ChartRenderer.vue';
 import StatsBreakdownBars from '@/components/stats/StatsBreakdownBars.vue';
 import StatsDetailDialog from '@/components/stats/StatsDetailDialog.vue';
 import StatsMonthTrend from '@/components/stats/StatsMonthTrend.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
+import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useToast } from '@/composables/useToast';
 import { useWorkspaceStats } from '@/composables/useWorkspaceStats';
@@ -38,7 +41,12 @@ import {
 } from '@/lib/date-presets';
 import { errorMessage } from '@/lib/error-message';
 import { docTypeLabel, relativeTime, STATUS_LABELS } from '@/lib/labels';
-import type { StatsDetailKind, StatsPanel } from '@sirpefoffice/shared';
+import type {
+  AiAskResult,
+  SavedChart,
+  StatsDetailKind,
+  StatsPanel,
+} from '@sirpefoffice/shared';
 
 const route = useRoute();
 const router = useRouter();
@@ -236,12 +244,57 @@ const documentsDetailTitle = computed(() =>
   filteredMode.value ? 'Documentos de la consulta' : `Documentos ${periodPhrase.value}`,
 );
 
+/* ── Informes guardados ───────────────────────────────────────────── */
+
+const charts = ref<SavedChart[]>([]);
+const chartOpen = ref(false);
+const chartLoading = ref(false);
+const chartError = ref('');
+const activeChart = ref<SavedChart | null>(null);
+const chartResult = ref<AiAskResult | null>(null);
+
+async function loadCharts(): Promise<void> {
+  try {
+    const data = await api.get<{ items: SavedChart[] }>('/stats/charts');
+    charts.value = data.items;
+  } catch {
+    charts.value = [];
+  }
+}
+
+async function openChart(chart: SavedChart): Promise<void> {
+  activeChart.value = chart;
+  chartOpen.value = true;
+  chartLoading.value = true;
+  chartError.value = '';
+  chartResult.value = null;
+  try {
+    chartResult.value = await api.post<AiAskResult>('/ai/run', { plan: chart.plan });
+  } catch (caught) {
+    chartError.value = errorMessage(caught, 'No se pudo abrir el informe');
+  } finally {
+    chartLoading.value = false;
+  }
+}
+
+async function deleteChart(chart: SavedChart): Promise<void> {
+  try {
+    await api.del(`/stats/charts/${chart.id}`);
+    charts.value = charts.value.filter((item) => item.id !== chart.id);
+    toast.success('Informe eliminado');
+  } catch (caught) {
+    toast.failure(caught, 'No se pudo eliminar el informe');
+  }
+}
+
 onMounted(() => {
   void load();
+  void loadCharts();
 });
 
 function refresh(): void {
   void load();
+  void loadCharts();
   toast.success('Estadísticas actualizadas');
 }
 </script>
@@ -569,6 +622,44 @@ function refresh(): void {
           </p>
         </div>
       </template>
+
+      <!-- Informes guardados -->
+      <section class="mt-6">
+        <div class="mb-3 flex items-center gap-2">
+          <BarChart3 class="size-4 text-accent" aria-hidden="true" />
+          <h2 class="text-[12px] font-semibold uppercase tracking-[0.08em] text-ink-subtle">
+            Informes guardados
+          </h2>
+          <span class="rounded-full bg-surface-muted px-2 py-0.5 text-[10.5px] text-ink-subtle">
+            {{ charts.length }}
+          </span>
+        </div>
+
+        <p v-if="charts.length === 0" class="rounded-card border border-dashed border-hairline px-3 py-4 text-[12.5px] text-ink-subtle">
+          Guarda un gráfico desde una respuesta de <strong class="text-ink">Consulta</strong> y aparecerá aquí.
+        </p>
+
+        <div v-else class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div v-for="chart in charts" :key="chart.id" class="card flex flex-col gap-2 p-3.5">
+            <div class="flex items-start gap-2">
+              <p class="min-w-0 flex-1 truncate text-[13px] font-medium text-ink">{{ chart.title }}</p>
+              <button
+                type="button"
+                class="grid size-6 shrink-0 place-items-center rounded text-ink-subtle transition-colors hover:bg-danger-soft hover:text-danger"
+                title="Eliminar informe"
+                @click="deleteChart(chart)"
+              >
+                <Trash2 class="size-3.5" />
+              </button>
+            </div>
+            <p class="text-[11px] text-ink-subtle">Actualizado {{ relativeTime(chart.updatedAt) }}</p>
+            <button type="button" class="btn btn-outline btn-sm mt-auto self-start" @click="openChart(chart)">
+              <BarChart3 class="size-3.5" />
+              Abrir informe
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
 
     <StatsDetailDialog
@@ -577,6 +668,34 @@ function refresh(): void {
       :query="detailQuery"
       @close="detailOpen = false"
     />
+
+    <BaseModal
+      :open="chartOpen"
+      :title="activeChart?.title ?? 'Informe'"
+      size="lg"
+      @close="chartOpen = false"
+    >
+      <div v-if="chartLoading" class="flex items-center justify-center gap-2 py-12 text-ink-muted">
+        <Loader2 class="size-4 animate-spin" />
+        Ejecutando el informe…
+      </div>
+      <p v-else-if="chartError" class="rounded-card bg-danger-soft px-3 py-2 text-[13px] text-danger">
+        {{ chartError }}
+      </p>
+      <div v-else-if="chartResult">
+        <p class="mb-3 text-[13px] text-ink-muted">{{ chartResult.answer }}</p>
+        <ChartRenderer v-if="chartResult.chart" :chart="chartResult.chart" />
+        <ul v-if="chartResult.insights.length > 0" class="mt-3 space-y-1">
+          <li
+            v-for="insight in chartResult.insights"
+            :key="insight"
+            class="text-[11.5px] leading-snug text-ink-subtle"
+          >
+            · {{ insight }}
+          </li>
+        </ul>
+      </div>
+    </BaseModal>
   </AppShell>
 </template>
 

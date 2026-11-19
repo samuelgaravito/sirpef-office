@@ -421,3 +421,33 @@ export function templateMatches(
     })
     .map((row) => row.id);
 }
+
+/** Traduce los filtros del chat al contrato del motor de estadísticas. */
+export function statsFilterFromAsk(
+  filters: {
+    scope: 'mine' | 'all';
+    docTypes: DocType[];
+    statuses: DocumentStatus[];
+    templateName: string;
+    text: string;
+    recipient: string;
+    approvedByMe: boolean;
+    from: string;
+    to: string;
+    dateField: 'created' | 'updated';
+  },
+  templateRows: { id: string; name: string }[],
+): StatsDocumentFilter {
+  return {
+    scope: filters.scope,
+    docTypes: filters.docTypes,
+    statuses: filters.statuses,
+    templateIds: filters.templateName ? templateMatches(templateRows, filters.templateName) : [],
+    text: filters.text,
+    recipient: filters.recipient,
+    approvedByMe: filters.approvedByMe,
+    from: filters.from,
+    to: filters.to,
+    dateField: filters.dateField,
+  };
+}
