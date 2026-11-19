@@ -170,6 +170,31 @@ async function countDocuments(userId: string, filter: StatsDocumentFilter): Prom
   return Number(row?.count ?? 0);
 }
 
+/** Valor de una métrica sobre el conjunto filtrado (sin agrupar). */
+async function metricValue(
+  userId: string,
+  filter: StatsDocumentFilter,
+  metric: AiAskMetric,
+): Promise<number> {
+  if (metric === 'count') return countDocuments(userId, filter);
+
+  const where = await documentWhere(userId, filter);
+  const value = metricExpression(metric);
+  const [row] = await db
+    .select({ value })
+    .from(documentMessages)
+    .innerJoin(documents, eq(documents.id, documentMessages.documentId))
+    .where(messageWhere(where, metric));
+
+  return Number(row?.value ?? 0);
+}
+
+function describeMetric(metric: AiAskMetric, value: number): string {
+  if (metric === 'approval_hours') return `${value.toFixed(1)} h`;
+  if (metric === 'approval_rate') return `${Math.round(value)} %`;
+  return `${Math.round(value)} documento${Math.round(value) === 1 ? '' : 's'}`;
+}
+
 /** Serie temporal por mes o semana. */
 async function timeSeries(
   userId: string,
@@ -310,8 +335,9 @@ async function comparePeriods(
 
   const currentTotal = await countDocuments(userId, currentFilter);
   const previousTotal = await countDocuments(userId, previousFilter);
+  const currentValue = dimension ? currentTotal : await metricValue(userId, currentFilter, metric);
+  const previousValue = dimension ? previousTotal : await metricValue(userId, previousFilter, metric);
 
-  const currentLabel = current.from === current.to ? current.from : `${current.from} → ${current.to}`;
   const previousLabel = `${previous.from} → ${previous.to}`;
 
   const categories = dimension
@@ -338,11 +364,13 @@ async function comparePeriods(
       })()
     : null;
 
-  const delta = previousTotal > 0 ? ((currentTotal - previousTotal) / previousTotal) * 100 : null;
+  const delta = previousValue > 0 ? ((currentValue - previousValue) / previousValue) * 100 : null;
   const deltaText =
-    delta === null
-      ? `${previousTotal} → ${currentTotal}`
-      : `${delta >= 0 ? '+' : ''}${Math.round(delta)} %`;
+    metric === 'approval_rate'
+      ? `${currentValue - previousValue >= 0 ? '+' : ''}${(currentValue - previousValue).toFixed(1)} pts`
+      : delta === null
+        ? `${previousValue} → ${currentValue}`
+        : `${delta >= 0 ? '+' : ''}${Math.round(delta)} %`;
 
   const chart: AiChart = categories
     ? {
@@ -362,13 +390,13 @@ async function comparePeriods(
         unit: unitFor(metric),
         categories: ['Actual', 'Anterior'],
         keys: ['current', 'previous'],
-        series: [{ label: METRIC_LABELS[metric], values: [currentTotal, previousTotal] }],
+        series: [{ label: METRIC_LABELS[metric], values: [currentValue, previousValue] }],
       };
 
   return {
     chart,
     insights: [
-      `${currentTotal} documento${currentTotal === 1 ? '' : 's'} en el periodo actual frente a ${previousTotal} en ${previous.label} (${deltaText}).`,
+      `${describeMetric(metric, currentValue)} en el periodo actual frente a ${describeMetric(metric, previousValue)} en ${previous.label} (${deltaText}).`,
     ],
     groups: categories
       ? categories.labels.map((label, index) => ({
@@ -401,17 +429,23 @@ export async function runAnalytics(
   const total = await countDocuments(userId, filter);
 
   if (!dimension) {
+    const value = metric === 'count' ? total : await metricValue(userId, filter, metric);
     const chart: AiChart = {
       kind: 'kpi',
       title: chartTitle(metric, null),
       unit: unitFor(metric),
       categories: [METRIC_LABELS[metric]],
       keys: ['total'],
-      series: [{ label: METRIC_LABELS[metric], values: [total] }],
+      series: [{ label: METRIC_LABELS[metric], values: [value] }],
     };
     return {
       chart,
-      insights: total > 0 ? [] : ['No hay documentos con esos criterios.'],
+      insights:
+        metric === 'count'
+          ? total > 0
+            ? []
+            : ['No hay documentos con esos criterios.']
+          : [`${METRIC_LABELS[metric]}: ${describeMetric(metric, value)}.`],
       groups: [],
     };
   }
