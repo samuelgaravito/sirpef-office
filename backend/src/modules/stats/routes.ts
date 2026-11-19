@@ -16,19 +16,23 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
-import { STATS_DETAIL_KINDS } from '@sirpefoffice/shared';
-import type {
-  StatsDetailItem,
-  StatsDetailKind,
-  StatsDetailPage,
-  WorkspaceStats,
+import {
+  DOCUMENT_STATUSES,
+  DOC_TYPES,
+  STATS_DETAIL_KINDS,
+  type DocType,
+  type DocumentStatus,
+  type StatsDetailItem,
+  type StatsDetailPage,
+  type StatsDocumentFilter,
+  type StatsPanel,
+  type WorkspaceStats,
 } from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import {
   designs,
   documentMessages,
-  documentShares,
   documents,
   templates,
   templateShares,
@@ -36,12 +40,15 @@ import {
 } from '../../db/schema.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import { badRequest } from '../../lib/errors.js';
+import {
+  listDocuments,
+  monthWindow,
+  STALE_DRAFT_DAYS,
+  statsFor,
+  visibleDocuments,
+} from './query.js';
 
 const DAY_MS = 86_400_000;
-/** Un borrador pasa a «viejo» cuando nadie lo toca durante este plazo. */
-const STALE_DRAFT_DAYS = 30;
-/** Meses máximos del gráfico de actividad, para que siga siendo legible. */
-const MAX_MONTHS = 24;
 
 const periodSchema = {
   /** Límites ISO ya convertidos desde el día local del navegador. */
@@ -51,8 +58,24 @@ const periodSchema = {
 
 const overviewQuery = z.object(periodSchema);
 
+/** Filtros de documento que comparten el panel y el chat de consulta. */
+const documentFilterSchema = {
+  scope: z.enum(['mine', 'all']).optional(),
+  docType: z.string().max(200).optional(),
+  status: z.string().max(400).optional(),
+  q: z.string().trim().max(200).optional(),
+  dateField: z.enum(['created', 'updated']).optional(),
+};
+
+const panelQuery = z.object({
+  ...periodSchema,
+  ...documentFilterSchema,
+  templateId: z.union([z.uuid(), z.literal('none')]).optional(),
+});
+
 const detailQuery = z.object({
   ...periodSchema,
+  ...documentFilterSchema,
   kind: z.enum(STATS_DETAIL_KINDS),
   /** uuid de la plantilla o `none` para los documentos sin plantilla. */
   templateId: z.union([z.uuid(), z.literal('none')]).optional(),
@@ -60,20 +83,24 @@ const detailQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(10),
 });
 
-/**
- * Propios o compartidos, nunca en papelera.
- *
- * Es el mismo predicado que usa `GET /documents?scope=all`; compartirlo evita
- * que el panel y sus listas de detalle cuenten cosas distintas.
- */
-function visibleDocuments(userId: string) {
-  return and(
-    isNull(documents.deletedAt),
-    or(
-      eq(documents.ownerId, userId),
-      sql`exists (select 1 from ${documentShares} where ${documentShares.documentId} = ${documents.id} and ${documentShares.userId} = ${userId})`,
-    ),
-  );
+/** Lista de tipos separada por comas, descartando valores inventados. */
+function parseDocTypes(value: string | undefined): DocType[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item): item is DocType => (DOC_TYPES as readonly string[]).includes(item));
+}
+
+/** Lista de estados separada por comas, descartando valores inventados. */
+function parseStatuses(value: string | undefined): DocumentStatus[] {
+  if (!value) return [];
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item): item is DocumentStatus =>
+      (DOCUMENT_STATUSES as readonly string[]).includes(item),
+    );
 }
 
 /** Valida el rango y lo convierte en fechas. */
@@ -88,43 +115,6 @@ function periodBounds(query: {
     from: query.dateFrom ? new Date(query.dateFrom) : null,
     to: query.dateTo ? new Date(query.dateTo) : null,
   };
-}
-
-/** Clave `YYYY-MM` de una fecha. */
-function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-}
-
-/**
- * Meses que dibuja el gráfico de actividad.
- *
- * Sin filtro son los últimos 12; con filtro, los que abarca el periodo. Se
- * recortan a 24 meses para que las barras no se vuelvan hilos.
- */
-function monthWindow(
-  from: Date | null,
-  to: Date | null,
-  now: Date,
-): { months: string[]; start: Date } {
-  const last = to ?? now;
-  const endMonth = new Date(last.getFullYear(), last.getMonth(), 1);
-  const naturalStart = from
-    ? new Date(from.getFullYear(), from.getMonth(), 1)
-    : new Date(endMonth.getFullYear(), endMonth.getMonth() - 11, 1);
-
-  const limitStart = new Date(endMonth.getFullYear(), endMonth.getMonth() - (MAX_MONTHS - 1), 1);
-  const startMonth = naturalStart.getTime() < limitStart.getTime() ? limitStart : naturalStart;
-
-  const months: string[] = [];
-  const count =
-    (endMonth.getFullYear() - startMonth.getFullYear()) * 12 +
-    (endMonth.getMonth() - startMonth.getMonth()) +
-    1;
-
-  for (let index = 0; index < count; index += 1) {
-    months.push(monthKey(new Date(startMonth.getFullYear(), startMonth.getMonth() + index, 1)));
-  }
-  return { months, start: startMonth };
 }
 
 /** Página de la lista de detalle. */
@@ -200,6 +190,29 @@ async function messageDetailPage(
 }
 
 export async function statsRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * Panel de estadísticas de un conjunto de documentos.
+   *
+   * Es la misma pieza que alimenta las respuestas del chat de consulta. Acepta
+   * los filtros que la IA ya validó (tipo, estado, plantilla, texto, rango) y
+   * devuelve cifras, desgloses y tendencia calculados sobre ese conjunto.
+   */
+  app.get('/panel', async (request): Promise<StatsPanel> => {
+    const user = await authenticate(request);
+    const query = panelQuery.parse(request.query);
+
+    return statsFor(user.sub, {
+      scope: query.scope,
+      docTypes: parseDocTypes(query.docType),
+      statuses: parseStatuses(query.status),
+      templateId: query.templateId,
+      text: query.q,
+      from: query.dateFrom,
+      to: query.dateTo,
+      dateField: query.dateField,
+    });
+  });
+
   /**
    * Panel estadístico del espacio: propios + compartidos.
    *
@@ -429,64 +442,49 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
     const { from, to } = periodBounds(query);
     const paging: DetailPaging = { page: query.page, pageSize: query.pageSize };
 
+    const documentFilter: StatsDocumentFilter = {
+      scope: query.scope,
+      docTypes: parseDocTypes(query.docType),
+      statuses: parseStatuses(query.status),
+      text: query.q,
+      from: query.dateFrom,
+      to: query.dateTo,
+      dateField: query.dateField ?? 'created',
+    };
+
     if (query.kind === 'template') {
       if (!query.templateId) {
         throw badRequest('Falta la plantilla de la que se quiere ver el detalle');
       }
-
-      const where = and(
-        visibleDocuments(user.sub),
-        query.templateId === 'none'
-          ? isNull(documents.templateId)
-          : eq(documents.templateId, query.templateId),
-        from ? gte(documents.createdAt, from) : undefined,
-        to ? lte(documents.createdAt, to) : undefined,
+      return listDocuments(
+        user.sub,
+        { ...documentFilter, templateId: query.templateId },
+        paging,
       );
+    }
 
-      const rows = await db
-        .select({
-          documentId: documents.id,
-          title: documents.title,
-          docNumber: documents.docNumber,
-          docType: documents.docType,
-          status: documents.status,
-          ownerName: users.name,
-          templateName: templates.name,
-          date: documents.createdAt,
-        })
-        .from(documents)
-        .innerJoin(users, eq(users.id, documents.ownerId))
-        .leftJoin(templates, eq(templates.id, documents.templateId))
-        .where(where)
-        .orderBy(desc(documents.createdAt))
-        .limit(query.pageSize)
-        .offset((query.page - 1) * query.pageSize);
+    if (query.kind === 'documents') {
+      return listDocuments(user.sub, documentFilter, paging);
+    }
 
-      const [countRow] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(documents)
-        .where(where);
+    if (query.kind === 'drafts') {
+      return listDocuments(user.sub, { ...documentFilter, statuses: ['draft'] }, paging);
+    }
 
-      const items: StatsDetailItem[] = rows.map((row) => ({
-        documentId: row.documentId,
-        messageId: null,
-        title: row.title,
-        docNumber: row.docNumber,
-        docType: row.docType,
-        status: row.status,
-        ownerName: row.ownerName,
-        templateName: row.templateName ?? null,
-        date: row.date.toISOString(),
-        subject: null,
-        resolvedByName: null,
-      }));
+    if (query.kind === 'official') {
+      return listDocuments(
+        user.sub,
+        { ...documentFilter, statuses: ['sent', 'approved', 'final', 'archived'] },
+        paging,
+      );
+    }
 
-      return {
-        items,
-        total: Number(countRow?.count ?? 0),
-        page: query.page,
-        pageSize: query.pageSize,
-      };
+    if (query.kind === 'trashed') {
+      return listDocuments(user.sub, { ...documentFilter, trashed: true }, paging);
+    }
+
+    if (query.kind === 'stale') {
+      return listDocuments(user.sub, { ...documentFilter, stale: true }, paging);
     }
 
     if (query.kind === 'pending') {

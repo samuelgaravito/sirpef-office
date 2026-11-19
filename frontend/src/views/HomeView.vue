@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { ArrowRight, FileText, Inbox, LayoutTemplate, Loader2, Palette, Plus, Search } from 'lucide-vue-next';
+import {
+  ChartNoAxesColumn,
+  FileText,
+  Inbox,
+  LayoutTemplate,
+  Loader2,
+  Palette,
+  Plus,
+  Search,
+} from 'lucide-vue-next';
 import { computed, onMounted, ref, type Component } from 'vue';
 import { useRouter } from 'vue-router';
 
@@ -13,10 +22,9 @@ import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
 import { useToast } from '@/composables/useToast';
 import { describeError } from '@/lib/error-message';
-import { docTypeLabel, formatDate, STATUS_LABELS } from '@/lib/labels';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import type { AiAskResult, AiTemplateChoice } from '@sirpefoffice/shared';
+import type { AiTemplateChoice } from '@sirpefoffice/shared';
 import type { ListResponse } from '@/types';
 
 const auth = useAuthStore();
@@ -29,8 +37,6 @@ const { status: aiStatus, loading: aiLoading, load: loadAiStatus } = useAiStatus
 /** Encargo enviado desde la barra de IA: se está eligiendo plantilla. */
 const aiPromptBusy = ref(false);
 const aiPromptError = ref('');
-/** Respuesta del modo consulta. */
-const aiAnswer = ref<AiAskResult | null>(null);
 
 const counts = ref({ documents: 0, drafts: 0, templates: 0, designs: 0 });
 const shellLoading = ref(true);
@@ -58,6 +64,7 @@ const canSeeDocuments = computed(() => auth.canSeeMenu('documents'));
 const canSeeTemplates = computed(() => auth.canSeeMenu('templates'));
 const canSeeDesigns = computed(() => auth.canSeeMenu('designs'));
 const canSeeInbox = computed(() => auth.canSeeMenu('inbox'));
+const canSeeStats = computed(() => auth.canSeeMenu('stats'));
 
 const summary = computed(() => {
   if (!canSeeDocuments.value) return 'Accede a tus módulos desde aquí.';
@@ -131,6 +138,18 @@ const tiles = computed<ModuleTile[]>(() => {
     });
   }
 
+  if (canSeeStats.value) {
+    list.push({
+      key: 'stats',
+      label: 'Estadísticas',
+      description: 'Actividad, aprobaciones y documentos detrás de cada cifra',
+      icon: ChartNoAxesColumn,
+      route: 'stats',
+      value: String(counts.value.documents),
+      caption: 'documentos',
+    });
+  }
+
   return list;
 });
 
@@ -190,6 +209,9 @@ function onCreate(templateId: string | null): void {
 /**
  * La IA elige la plantilla que mejor encaja con el encargo y el editor abre el
  * asistente con ese primer mensaje ya enviado. Si falla, el texto se conserva.
+ *
+ * En modo consulta se abre el chat de `/consulta` con la pregunta ya lanzada:
+ * la conversación vive en su propia vista, no en una tarjeta del inicio.
  */
 async function onAiPrompt(prompt: string, mode: 'draft' | 'ask' = 'draft'): Promise<void> {
   if (aiPromptBusy.value) return;
@@ -198,18 +220,16 @@ async function onAiPrompt(prompt: string, mode: 'draft' | 'ask' = 'draft'): Prom
     return;
   }
 
-  aiPromptBusy.value = true;
   aiPromptError.value = '';
-  aiAnswer.value = null;
+
+  if (mode === 'ask') {
+    await router.push({ name: 'consulta', query: { q: prompt } });
+    return;
+  }
+
+  aiPromptBusy.value = true;
 
   try {
-    if (mode === 'ask') {
-      // Modo consulta: la pregunta se traduce a filtros y la cifra sale de la
-      // base. No se crea ni se modifica ningún documento.
-      aiAnswer.value = await api.post<AiAskResult>('/ai/ask', { question: prompt });
-      return;
-    }
-
     const choice = await api.post<AiTemplateChoice>('/ai/choose-template', { prompt });
     toast.success(`Plantilla elegida: ${choice.templateName}`);
     await createDocument(choice.templateId, { ai: true, prompt });
@@ -218,11 +238,6 @@ async function onAiPrompt(prompt: string, mode: 'draft' | 'ask' = 'draft'): Prom
   } finally {
     aiPromptBusy.value = false;
   }
-}
-
-/** Abre un documento de la lista de resultados del modo consulta. */
-function openAnswerResult(id: string): void {
-  void router.push({ name: 'document', params: { id } });
 }
 
 /** Recuerda de qué tile sale el panel para anclar la animación. */
@@ -271,38 +286,6 @@ onMounted(() => {
               :error="aiPromptError"
               @submit="onAiPrompt"
             />
-
-            <!-- Resultado del modo consulta -->
-            <div
-              v-if="aiAnswer"
-              class="mt-4 rounded-2xl border border-white/15 bg-white/[0.06] p-4 text-left backdrop-blur"
-              aria-live="polite"
-            >
-              <p class="text-[13.5px] leading-relaxed text-white/90">{{ aiAnswer.answer }}</p>
-
-              <ul v-if="aiAnswer.results.length > 0" class="mt-3 space-y-1.5">
-                <li v-for="item in aiAnswer.results" :key="item.id">
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-left transition-colors hover:border-white/25 hover:bg-white/[0.1]"
-                    @click="openAnswerResult(item.id)"
-                  >
-                    <FileText class="size-4 shrink-0 text-[#7df3dd]" aria-hidden="true" />
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-[13px] font-medium text-white">
-                        {{ item.title }}
-                      </span>
-                      <span class="block truncate text-[11.5px] text-white/60">
-                        {{ docTypeLabel(item.docType) }} · {{ STATUS_LABELS[item.status] }}
-                        <template v-if="item.docNumber"> · {{ item.docNumber }}</template>
-                        · {{ formatDate(item.updatedAt) }}
-                      </span>
-                    </span>
-                    <ArrowRight class="size-3.5 shrink-0 text-white/40" aria-hidden="true" />
-                  </button>
-                </li>
-              </ul>
-            </div>
           </div>
 
           <div v-if="canSeeDocuments" class="mt-7 flex flex-wrap items-center justify-center gap-2">

@@ -53,6 +53,12 @@ const router = createRouter({
           meta: { title: 'Diseños', menu: 'designs', overlay: true },
         },
         {
+          path: 'stats',
+          name: 'stats',
+          component: () => import('@/views/StatsView.vue'),
+          meta: { title: 'Estadísticas', menu: 'stats', overlay: true },
+        },
+        {
           path: 'settings',
           name: 'settings',
           component: () => import('@/views/SettingsView.vue'),
@@ -65,6 +71,18 @@ const router = createRouter({
           meta: { title: 'Usuarios y menús', adminOnly: true, overlay: true },
         },
       ],
+    },
+    {
+      path: '/consulta',
+      name: 'consulta',
+      component: () => import('@/views/ConsultaView.vue'),
+      meta: { title: 'Consulta', menu: 'documents', section: 'Consulta' },
+    },
+    {
+      path: '/consulta/:id',
+      name: 'consulta-chat',
+      component: () => import('@/views/ConsultaView.vue'),
+      meta: { title: 'Consulta', menu: 'documents', section: 'Consulta' },
     },
     {
       path: '/documents/new',

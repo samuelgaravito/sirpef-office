@@ -20,7 +20,7 @@ const emit = defineEmits<{ open: [route: string]; origin: [event: PointerEvent] 
 
 <template>
   <section
-    class="dock grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4"
+    class="dock grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-5"
     aria-label="Módulos"
   >
     <button

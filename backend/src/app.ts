@@ -10,6 +10,7 @@ import { errorHandler } from './lib/errors.js';
 import { applySpanishZodMessages } from './lib/validation.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
+import { conversationRoutes } from './modules/ai/conversations.js';
 import { designRoutes } from './modules/designs/routes.js';
 import { documentRoutes } from './modules/documents/routes.js';
 import { exportRoutes } from './modules/exports/routes.js';
@@ -18,6 +19,7 @@ import { menuRoutes } from './modules/menus/routes.js';
 import { numberingRoutes } from './modules/numbering/routes.js';
 import { realtimeRoutes } from './modules/realtime/routes.js';
 import { statsRoutes } from './modules/stats/routes.js';
+import { chartRoutes } from './modules/stats/charts.js';
 import { systemRoutes } from './modules/system/routes.js';
 import { templateRoutes } from './modules/templates/routes.js';
 
@@ -82,6 +84,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(menuRoutes, { prefix: '/api/menus' });
   await app.register(aiRoutes, { prefix: '/api' });
+  await app.register(conversationRoutes, { prefix: '/api' });
   await app.register(templateRoutes, { prefix: '/api/templates' });
   await app.register(numberingRoutes, { prefix: '/api/numbering' });
   await app.register(designRoutes, { prefix: '/api/designs' });
@@ -89,6 +92,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(exportRoutes, { prefix: '/api/documents' });
   await app.register(inboxRoutes, { prefix: '/api/inbox' });
   await app.register(statsRoutes, { prefix: '/api/stats' });
+  await app.register(chartRoutes, { prefix: '/api/stats' });
   await app.register(realtimeRoutes, { prefix: '/api' });
   await app.register(systemRoutes, { prefix: '/api/system' });
 

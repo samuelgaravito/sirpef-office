@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import type {
+  AiAskPlan,
   ChromeConfig,
   DesignTokens,
   DocType,
@@ -85,7 +86,7 @@ export const users = pgTable(
       .array()
       .$type<MenuKey[]>()
       .notNull()
-      .default(sql`ARRAY['home','inbox','documents','templates','designs']::text[]`),
+      .default(sql`ARRAY['home','inbox','documents','templates','designs','stats']::text[]`),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -526,6 +527,68 @@ export const appSettings = pgTable('app_settings', {
   updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
 });
 
+/**
+ * Conversaciones del chat de consulta.
+ *
+ * El historial guarda el **plan** de cada respuesta, no las cifras: al abrirlo
+ * se vuelve a ejecutar con los permisos actuales.
+ */
+export const aiConversations = pgTable(
+  'ai_conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull().default('Nueva consulta'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('ai_conversations_user_idx').on(t.userId, t.updatedAt),
+    index('ai_conversations_active_idx')
+      .on(t.userId)
+      .where(sql`${t.deletedAt} is null`),
+  ],
+);
+
+export const aiConversationMessages = pgTable(
+  'ai_conversation_messages',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => aiConversations.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+    content: text('content').notNull(),
+    /** Plan ejecutable de las respuestas; `null` en las preguntas. */
+    plan: jsonb('plan').$type<AiAskPlan | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('ai_conversation_messages_conversation_idx').on(t.conversationId, t.createdAt),
+  ],
+);
+
+/** Gráficos guardados: se almacena el plan, no los datos. */
+export const savedCharts = pgTable(
+  'saved_charts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    plan: jsonb('plan').$type<AiAskPlan>().notNull(),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [index('saved_charts_user_idx').on(t.userId, t.position)],
+);
+
 /* ────────────────────────────── Relaciones ──────────────────────────── */
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -634,3 +697,6 @@ export type CommentRow = typeof comments.$inferSelect;
 export type ActivityRow = typeof activities.$inferSelect;
 export type DocumentMessageRow = typeof documentMessages.$inferSelect;
 export type DocumentMessageRecipientRow = typeof documentMessageRecipients.$inferSelect;
+export type AiConversationRow = typeof aiConversations.$inferSelect;
+export type AiConversationMessageRow = typeof aiConversationMessages.$inferSelect;
+export type SavedChartRow = typeof savedCharts.$inferSelect;
