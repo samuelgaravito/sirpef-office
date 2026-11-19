@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ArrowRight,
+  ChartNoAxesColumn,
   CornerDownLeft,
   FileText,
   House,
@@ -49,6 +50,7 @@ const menuIcons: Record<MenuKey, Component> = {
   documents: FileText,
   templates: LayoutTemplate,
   designs: Palette,
+  stats: ChartNoAxesColumn,
 };
 
 interface PaletteItem {

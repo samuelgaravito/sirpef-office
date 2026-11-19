@@ -94,7 +94,7 @@ backend/src/
     designs/             # CRUD, clonado
     numbering/           # Series por plantilla y contador
     realtime/            # Canal de eventos en tiempo real (hub, handshake y publicación)
-    ai/                  # providers, service, routes
+    ai/                  # providers, service, routes, ask (plan), analytics, conversations
     exports/             # /export/:format
   lib/
     auth-guard.ts        # authenticate(request) → { sub, role }
@@ -116,11 +116,14 @@ frontend/src/
   api/client.ts          # fetch con refresh automático y descarga de blobs
   stores/auth.ts         # Pinia: usuario, token, login/logout
   composables/           # useToast, useInboxBadge, useRealtime, useNotifications, …
-  views/                 # Login, Home, Documents, DocumentEditor, Templates,
-                         # TemplateEditor, Designs, DesignEditor, Settings, NotFound,
-                         # Inbox, InboxMessage
+  views/                 # Login, Home, Consulta, Stats, Documents, DocumentEditor,
+                         # Templates, TemplateEditor, Designs, DesignEditor, Settings,
+                         # NotFound, Inbox, InboxMessage
   components/
     layout/AppShell.vue | NotificationBell.vue
+    consult/AskAnswer.vue | ConversationList.vue | TypingDots.vue
+    charts/ChartRenderer.vue
+    stats/StatsBreakdownBars.vue | StatsMonthTrend.vue | StatsDetailDialog.vue
     documents/DocumentCard.vue | DocumentThumbnail.vue
     inbox/SendDocumentDialog.vue
     templates/TemplatePreview.vue | NewTemplateDialog.vue
@@ -173,6 +176,9 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 | `numbering_series` | `id` PK, `template_id` (FK, único), `template_name`, `prefix`, `start_value`, `padding`, `include_year` | **Única fuente de verdad de la enumeración.** Declara a su plantilla con `template_id` (índice único `numbering_series_template_id_unique_idx` → una enumeración por plantilla) y guarda su nombre en `template_name` como etiqueta legible, que se actualiza al renombrar la plantilla. Su contador y su suelo son exclusivos. El prefijo es la etiqueta visible del número, **puede repetirse** entre series y puede estar vacío (serie sin prefijo). Las plantillas sin numeración no ocupan serie. |
 | `document_counters` | `series_id` (FK), `year`, `counter` | Último número emitido por serie y año; se incrementa solo al oficializar el documento y se puede recalcular desde `documents.numbering_*`. |
 | `app_settings` | `key` único, `value` JSONB, `updated_by` | Configuración de IA (`key = 'ai'`). |
+| `ai_conversations` | `user_id`, `title`, `deleted_at` | Historial del chat de consulta. Propiedad por usuario; el borrado es suave y en cascada elimina sus mensajes. |
+| `ai_conversation_messages` | `conversation_id`, `role`, `content`, `plan` JSONB | Pregunta o respuesta. En las respuestas se guarda el **plan** ejecutable, no las cifras: al abrir se reconstruye con los permisos actuales. |
+| `saved_charts` | `user_id`, `title`, `plan` JSONB, `position`, `deleted_at` | Informes guardados del panel. También guardan el plan, no los datos. |
 
 `templates` guarda además `ai_instructions` (cómo rellenar) y `ai_style` (perfil de estilo del asistente). Las variables con `bodySlot` marcan el bloque que el asistente sustituye por contenido rico.
 
@@ -1019,35 +1025,67 @@ Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_PR
 
 ### 8.6 Modo consulta
 
-Preguntas en lenguaje natural sobre los documentos: «¿cuántas notas de entrega envié este
-mes?», «búscame la de Samuel Carico», «¿cuántos tipos de documento firmé?».
+Preguntas en lenguaje natural sobre los documentos: «¿cuáles son mis últimos 5 documentos?»,
+«¿cuántos certificados hice este mes?», «evolución mensual por tipo», «tiempo medio de
+aprobación por plantilla», «compara este mes con el anterior».
+
+El modelo **no escribe SQL ni ve la base**. Devuelve un **plan** validado y el servidor lo
+ejecuta con Drizzle:
 
 ```text
-POST /api/ai/ask  { question }
-  → { answer, filters, total, groups: [{ key, label, count }], results: [{ id, title, docType,
-      status, docNumber, updatedAt }] }
+POST /api/ai/ask  { question?, history?, plan?, filters?, conversationId? }
+  → { answer, filters, applied, plan, view, total, groups,
+      results: [{ id, title, docType, status, docNumber, updatedAt }],
+      dashboard, chart: { kind, title, unit, categories, keys, series } | null,
+      insights: string[], clarification, suggestions, conversationId }
 ```
 
-El modelo **no escribe SQL ni ve la base**: solo traduce la pregunta a un objeto de filtros
-(`intent`, `groupBy`, `scope`, `docTypes`, `statuses`, `templateName`, `recipient`, `text`,
-`from`, `to`, `approvedByMe`, `limit`). El servidor:
+```ts
+interface AiAskPlan {
+  mode: 'count' | 'list' | 'search' | 'aggregate' | 'compare' | 'clarify';
+  filters: AiAskFilters;              // scope, tipo, estado, fechas, texto, destinatario…
+  metrics: ('count' | 'approval_hours' | 'approval_rate')[];
+  dimensions: ('docType' | 'status' | 'template' | 'recipient' | 'month' | 'week' | 'owner')[];
+  bucket: 'day' | 'week' | 'month' | null;
+  compare: 'previous_period' | 'previous_month' | 'previous_year' | null;
+  chart: 'kpi' | 'bar' | 'line' | 'donut' | 'comparison' | 'table';
+  sort: { by: 'value' | 'label'; dir: 'asc' | 'desc' };
+  limit: number;
+  clarification: { question: string; options: string[] } | null;
+}
+```
 
-1. **Valida** los filtros de forma tolerante: un `limit` fuera de rango se recorta, un estado
-   inventado se descarta y cada campo inválido cae a su valor por defecto. Un solo campo raro
-   no invalida la consulta entera.
-2. **Ejecuta** la consulta con la visibilidad del usuario (propias o compartidas con él),
-   reutilizando los filtros del listado de documentos. «Dirigidos a X» busca en las claves de
-   persona de las plantillas (`receptor`, `destinatario`, `nombre`…) sin distinguir tildes.
-3. **Responde** con una frase construida desde el resultado real: las cifras nunca salen del
-   texto del modelo.
+1. **Valida** el plan de forma tolerante: un `limit` fuera de rango se recorta, un estado
+   inventado se descarta y cada campo inválido cae a su valor por defecto. Las expresiones de
+   calendario («este mes», «el mes pasado»…), los posesivos y las dimensiones explícitas
+   («por tipo») se corrigen con reglas deterministas, sin depender del modelo.
+2. **Ejecuta** con la visibilidad del usuario (propias o compartidas) y el `dateField` elegido:
+   `created` («hice», «creé») o `updated` («toqué», «modifiqué»). «Dirigidos a X» busca en las
+   claves de persona de las plantillas sin distinguir tildes.
+3. **Construye** el gráfico (`chart`) y los **insights** (peso del top, deltas del periodo
+   anterior) desde las filas reales: las cifras nunca salen del texto del modelo.
 
-`intent = count` admite `groupBy` por tipo o por estado. `firmé` se interpreta como
-documentos propios en estado `final`/`sent`/`approved`; `aprobé`, como documentos con una
-aprobación del usuario en `document_messages.approved_by_id`.
+`backend/src/modules/ai/analytics.ts` es el motor: agrupa por dimensión, calcula métricas de
+aprobación y series temporales, y elige el gráfico. Un plan sin dimensión devuelve un KPI; uno
+con dimensión devuelve barras, línea, dona o tabla. Si el modelo pide un gráfico sin sentido, el
+servidor lo corrige. Si falta información, `mode = "clarify"` devuelve una pregunta y opciones.
 
-Si el modelo no devuelve un JSON utilizable, se cae a una búsqueda por texto de la pregunta
-completa. En la interfaz es un conmutador **Redactar / Consultar** en la barra del panel de
-trabajo; los resultados son tarjetas que abren el documento.
+**Camino determinista.** `POST /api/ai/ask` acepta también `plan` o `filters` ya resueltos (chips,
+barras, informes guardados): el servidor los ejecuta **sin llamar al modelo**, incluso sin
+proveedor configurado. `POST /api/ai/run` ejecuta un plan aislado sin crear conversación.
+
+**Historial.** Cada turno se guarda en `ai_conversations` + `ai_conversation_messages`, con el
+plan de la respuesta. `GET /api/ai/conversations/:id` reconstruye las respuestas ejecutando de
+nuevo el plan, así que **respeta los permisos actuales**. La interfaz es `/consulta/:id`
+(recargable) con panel lateral para buscar, renombrar y borrar. Las conversaciones son privadas:
+una ajena responde 404.
+
+**Informes.** `POST /api/stats/charts` guarda un plan con título; se ejecuta de nuevo al abrirlo
+(`/ai/run`), nunca guarda cifras. La vista de Estadísticas los lista en «Informes guardados».
+
+Si el modelo no devuelve un JSON utilizable, se cae a una búsqueda por texto. En la interfaz,
+**Redactar / Consultar** en la barra del inicio abre el chat; los documentos son tarjetas que
+abren el editor y las barras del gráfico refinan la consulta.
 
 ---
 
@@ -1087,7 +1125,10 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `POST` | `/inbox/:id/cancel` | El remitente cancela un envío pendiente. |
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
 | `GET` | `/stats/overview?dateFrom=<ISO>&dateTo=<ISO>` | Resumen del espacio (propios + compartidos, mismo criterio que `/documents?scope=all`): totales, plantillas más usadas, actividad mensual y resultados de aprobación. El filtro limita por fecha de creación de documentos, plantillas y diseños; sin fechas abarca todo el histórico. |
-| `GET` | `/stats/detail?kind=template\|approved\|rejected\|pending&templateId=<uuid\|none>&dateFrom=<ISO>&dateTo=<ISO>&page=1&pageSize=10` | Documentos detrás de un valor del panel: los de una plantilla, los envíos aprobados/rechazados del usuario o la cola de pendientes. Cada `kind` replica el criterio de su contador para que el total coincida. |
+| `GET` | `/stats/panel?dateFrom=<ISO>&dateTo=<ISO>&docType=&status=&scope=&templateId=&q=&dateField=` | Panel de un conjunto de documentos: totales, desglose por tipo y estado, actividad mensual y plantillas más usadas. Es el mismo motor que alimenta el dashboard del chat de consulta. |
+| `GET` | `/stats/detail?kind=template\|documents\|drafts\|official\|trashed\|stale\|approved\|rejected\|pending&templateId=<uuid\|none>&docType=&status=&dateFrom=<ISO>&dateTo=<ISO>&page=1&pageSize=10` | Documentos detrás de un valor del panel: los de una plantilla o estado, borradores, oficiales, papelera, abandonados, envíos aprobados/rechazados del usuario o cola de pendientes. Cada `kind` replica el criterio de su contador para que el total coincida. |
+| `GET/POST` | `/stats/charts` | Informes guardados del usuario (título + plan); el POST crea uno nuevo. |
+| `PATCH/DELETE` | `/stats/charts/:id` | Renombrar, reordenar, actualizar el plan o borrar un informe. Ajena ⇒ 404. |
 | `GET/POST` | `/templates` | Listado y creación (acepta `header`/`footer` y `numbering`). |
 | `GET/PATCH/DELETE` | `/templates/:id` | Detalle con `chrome`/`inheritedChrome` y edición de bandas y numeración. |
 | `GET` | `/numbering` | Series de numeración con su último emitido y próximo número (la serie se identifica por su `id`). |
@@ -1102,6 +1143,11 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `GET` | `/ai/status` | ¿Hay IA configurada? |
 | `GET/PUT` | `/ai/settings` | Configuración (admin). |
 | `DELETE` | `/ai/key` | Borra la clave. |
+| `POST` | `/ai/ask` | Modo consulta: interpreta la pregunta como plan y responde con frase, documentos, gráfico e insights. Acepta `plan`/`filters` ya resueltos (sin modelo), `history` y `conversationId`; guarda el turno en el historial. |
+| `POST` | `/ai/run` | Ejecuta un plan ya resuelto sin modelo y sin crear conversación (informes guardados). |
+| `GET/POST` | `/ai/conversations` | Historial del usuario: lista paginada con búsqueda por título, o conversación vacía nueva. |
+| `GET` | `/ai/conversations/:id?before=<ISO>` | Mensajes con las respuestas **reconstruidas** con los permisos actuales; paginación hacia atrás. |
+| `PATCH/DELETE` | `/ai/conversations/:id` | Renombrar o borrar (suave) una conversación. Ajena ⇒ 404. |
 | `POST` | `/ai/test` | Prueba de conexión. |
 | `POST` | `/ai/choose-template` | Elige la plantilla que mejor encaja con un encargo escrito (no crea nada). |
 | `POST` | `/documents/:id/ai/generate` | Rellena variables con IA. |

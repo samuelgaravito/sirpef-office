@@ -1,0 +1,1 @@
+ALTER TABLE "users" ALTER COLUMN "menu_keys" SET DEFAULT ARRAY['home','inbox','documents','templates','designs','stats']::text[];

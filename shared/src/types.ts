@@ -339,9 +339,78 @@ export interface WorkspaceStats {
   };
 }
 
+/**
+ * Filtros de documentos que comparten el panel estadístico y el modo consulta.
+ *
+ * Las fechas son ISO (`AAAA-MM-DD` o un instante completo). Un valor de diez
+ * caracteres se interpreta como el día completo en la zona local del servidor.
+ */
+export interface StatsDocumentFilter {
+  scope?: 'mine' | 'all';
+  docTypes?: DocType[];
+  statuses?: DocumentStatus[];
+  /** uuid de la plantilla, `none` para los documentos sin plantilla. */
+  templateId?: string | null;
+  /** Varias plantillas cuando el nombre coincide con más de una. */
+  templateIds?: string[];
+  /** Texto libre en título, descripción y datos. */
+  text?: string;
+  /** Persona destinataria, buscada en las claves de persona de las plantillas. */
+  recipient?: string;
+  /** Solo documentos con una aprobación del usuario. */
+  approvedByMe?: boolean;
+  from?: string;
+  to?: string;
+  /** Campo de fecha al que se aplica el rango. */
+  dateField?: 'created' | 'updated';
+  /** Borradores sin tocar en los últimos 30 días. */
+  stale?: boolean;
+  /** Solo la papelera del usuario. */
+  trashed?: boolean;
+}
+
+/** Un grupo del desglose (por tipo o por estado). */
+export interface StatsBreakdownItem {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * Panel de estadísticas **de un conjunto de documentos**.
+ *
+ * Es la pieza que comparten la vista de Estadísticas y las respuestas del chat
+ * de consulta: mismas cifras, mismos filtros y mismo criterio de visibilidad.
+ * Los totales del espacio (plantillas, diseños, papelera o salud) no forman
+ * parte de este panel porque no tienen sentido filtrados por tipo o estado.
+ */
+export interface StatsPanel {
+  generatedAt: string;
+  totals: {
+    documents: number;
+    drafts: number;
+    /** Enviados, aprobados, finales y archivados. */
+    official: number;
+  };
+  byType: StatsBreakdownItem[];
+  byStatus: StatsBreakdownItem[];
+  monthly: StatsMonthPoint[];
+  topTemplates: StatsTemplateUsage[];
+}
+
 /* ─────────────────────── Detalle de estadísticas ─────────────────────── */
 
-export const STATS_DETAIL_KINDS = ['template', 'approved', 'rejected', 'pending'] as const;
+export const STATS_DETAIL_KINDS = [
+  'template',
+  'approved',
+  'rejected',
+  'pending',
+  'documents',
+  'drafts',
+  'official',
+  'trashed',
+  'stale',
+] as const;
 
 export type StatsDetailKind = (typeof STATS_DETAIL_KINDS)[number];
 
@@ -484,7 +553,14 @@ export type AuthProvider = 'local' | 'sva';
  * debe corresponder a una ruta real de la SPA; la base de datos solo guarda
  * qué claves puede ver cada usuario.
  */
-export const MENU_KEYS = ['home', 'inbox', 'documents', 'templates', 'designs'] as const;
+export const MENU_KEYS = [
+  'home',
+  'inbox',
+  'documents',
+  'templates',
+  'designs',
+  'stats',
+] as const;
 
 export type MenuKey = (typeof MENU_KEYS)[number];
 
@@ -502,6 +578,7 @@ export const MENU_CATALOG: MenuDefinition[] = [
   { key: 'documents', label: 'Documentos', icon: 'FileText', sort: 3 },
   { key: 'templates', label: 'Plantillas', icon: 'LayoutTemplate', sort: 4 },
   { key: 'designs', label: 'Diseños', icon: 'Palette', sort: 5 },
+  { key: 'stats', label: 'Estadísticas', icon: 'ChartNoAxesColumn', sort: 6 },
 ];
 
 /** Menús que se asignan por defecto a una cuenta nueva. */
