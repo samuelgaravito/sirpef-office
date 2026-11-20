@@ -10,8 +10,8 @@ import {
 } from '@sirpefoffice/shared';
 
 import { db } from '../../../db/index.js';
-import { aiNodes } from '../../../db/schema.js';
-import { authenticate } from '../../../lib/auth-guard.js';
+import { aiNodes, users } from '../../../db/schema.js';
+import { authenticate, requireAdmin } from '../../../lib/auth-guard.js';
 import { AppError, notFound } from '../../../lib/errors.js';
 import {
   closeNode,
@@ -94,6 +94,31 @@ export async function aiNodeRoutes(app: FastifyInstance): Promise<void> {
     return { nodes: rows.map((row) => toNodeSummary(row, live.get(row.id))) };
   });
 
+  /** Inventario de todos los equipos (solo administradores). */
+  app.get('/ai/nodes/all', async (request) => {
+    await requireAdmin(request);
+
+    const rows = await db
+      .select({
+        node: aiNodes,
+        ownerId: users.id,
+        ownerName: users.name,
+        ownerEmail: users.email,
+      })
+      .from(aiNodes)
+      .innerJoin(users, eq(users.id, aiNodes.userId))
+      .where(isNull(aiNodes.revokedAt))
+      .orderBy(desc(aiNodes.createdAt));
+
+    const live = new Map(connectedNodes().map((node) => [node.id, node]));
+    return {
+      nodes: rows.map((row) => ({
+        ...toNodeSummary(row.node, live.get(row.node.id)),
+        owner: { id: row.ownerId, name: row.ownerName, email: row.ownerEmail },
+      })),
+    };
+  });
+
   /** Crea un equipo y devuelve el token una sola vez. */
   app.post('/ai/nodes', async (request) => {
     const user = await authenticate(request);
@@ -134,6 +159,45 @@ export async function aiNodeRoutes(app: FastifyInstance): Promise<void> {
     closeNode(id, 'Equipo revocado');
 
     return { ok: true };
+  });
+
+  /** Rota el token: la conexión actual se cierra y hay que actualizar el agente. */
+  app.post('/ai/nodes/:id/token', async (request) => {
+    const user = await authenticate(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+
+    const [row] = await db
+      .select()
+      .from(aiNodes)
+      .where(and(eq(aiNodes.id, id), isNull(aiNodes.revokedAt)))
+      .limit(1);
+
+    if (!row) throw notFound('El equipo no existe');
+    if (row.userId !== user.sub && user.role !== 'admin') {
+      throw notFound('El equipo no existe');
+    }
+
+    const token = randomBytes(32).toString('base64url');
+    const [updated] = await db
+      .update(aiNodes)
+      .set({
+        tokenHash: hashToken(token),
+        // Las capacidades se vuelven a reportar en el próximo `hello`.
+        lastSeenAt: null,
+        ollamaVersion: null,
+        models: [],
+        gpu: false,
+        vramGb: null,
+        tokensPerSecond: null,
+      })
+      .where(eq(aiNodes.id, id))
+      .returning();
+
+    if (!updated) throw new AppError(500, 'AI_NODE_ROTATE_FAILED', 'No se pudo rotar el token');
+
+    closeNode(id, 'Token rotado');
+
+    return { node: toNodeSummary(updated), token };
   });
 
   /**

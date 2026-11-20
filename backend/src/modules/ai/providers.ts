@@ -20,6 +20,11 @@ export interface AiConfig {
    * Lo rellena `loadConfig(actor)` cuando el usuario tiene un agente conectado.
    */
   node?: { id: string; name: string };
+  /**
+   * Configuración del servidor para reintentar si el equipo se cae a mitad de
+   * la petición. La rellena `loadConfig(actor)`; nunca se persiste.
+   */
+  fallback?: AiConfig;
 }
 
 export interface AiMessage {
@@ -147,6 +152,11 @@ function providerError(response: Response, text: string): AppError {
         ? 'El proveedor de IA alcanzó su límite de peticiones. Espera unos minutos e inténtalo de nuevo.'
         : `El proveedor de IA respondió con un error (${response.status}): ${detail}`,
   );
+}
+
+/** ¿El proveedor puede atender una llamada sin configurar nada más? */
+function canUse(config: AiConfig): boolean {
+  return config.provider !== 'none' && (config.provider === 'ollama' || config.apiKey.length > 0);
 }
 
 export function assertConfigured(config: AiConfig): void {
@@ -369,7 +379,16 @@ export async function chat(
       // El equipo del usuario tiene prioridad. El agente reenvía este mismo
       // cuerpo a su Ollama y devuelve el NDJSON; el parseo sigue aquí.
       if (config.node) {
-        return chatViaNode(config.node.id, body, options.onProgress);
+        try {
+          return await chatViaNode(config.node.id, body, options.onProgress);
+        } catch (error) {
+          // Solo se reintenta si el problema fue la conexión del equipo: un
+          // error del modelo o una respuesta inválida no se repiten a ciegas.
+          const offline = error instanceof AppError && error.code === 'AI_NODE_OFFLINE';
+          const fallback = config.fallback;
+          if (!offline || !fallback || !canUse(fallback)) throw error;
+          return chat(fallback, messages, jsonMode, options);
+        }
       }
 
       if (options.onProgress) {

@@ -8,6 +8,7 @@
  * necesita PostgreSQL, porque el handshake valida el token contra `ai_nodes`.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { eq } from 'drizzle-orm';
@@ -17,6 +18,7 @@ import { buildApp } from '../src/app.js';
 import { db, sql } from '../src/db/index.js';
 import { aiNodes, users } from '../src/db/schema.js';
 import { chatViaNode, isOnline } from '../src/modules/ai/nodes/registry.js';
+import { chat } from '../src/modules/ai/providers.js';
 
 let failures = 0;
 
@@ -56,6 +58,8 @@ async function main(): Promise<void> {
   if (!node) throw new Error('No se pudo crear el nodo de prueba');
 
   const sockets: WebSocket[] = [];
+  let revokedId: string | null = null;
+  let fallbackServer: ReturnType<typeof createServer> | null = null;
 
   try {
     // 1. Token inválido: el servidor cierra el handshake.
@@ -67,6 +71,29 @@ async function main(): Promise<void> {
       setTimeout(() => reject(new Error('El handshake inválido no cerró')), 5_000);
     });
     check('rechaza un token inválido', rejected === 4401, `código de cierre ${rejected}`);
+
+    // 1b. Un equipo revocado tampoco entra, aunque el token exista.
+    const revokedToken = randomBytes(32).toString('base64url');
+    const [revoked] = await db
+      .insert(aiNodes)
+      .values({
+        userId: user.id,
+        name: 'PC revocada',
+        tokenHash: hash(revokedToken),
+        revokedAt: new Date(),
+      })
+      .returning();
+    revokedId = revoked?.id ?? null;
+
+    const revokedCode = await new Promise<number>((resolve) => {
+      const socket = new WebSocket(url, {
+        headers: { authorization: `Bearer ${revokedToken}` },
+      });
+      sockets.push(socket);
+      socket.on('close', (code) => resolve(code));
+      socket.on('error', () => resolve(4401));
+    });
+    check('rechaza un equipo revocado', revokedCode === 4401, `código de cierre ${revokedCode}`);
 
     // 2. Agente falso: responde a los trabajos con NDJSON como Ollama.
     const agent = new WebSocket(url, { headers: { authorization: `Bearer ${token}` } });
@@ -139,7 +166,48 @@ async function main(): Promise<void> {
       offline = (error as { code?: string }).code === 'AI_NODE_OFFLINE';
     }
     check('sin agente responde AI_NODE_OFFLINE', offline, 'el fallo se explica y no se cuelga');
+
+    // 5. Si el equipo se cae, la llamada se reintenta en el proveedor del
+    //    servidor (un Ollama falso en un puerto local).
+    fallbackServer = createServer((request, response) => {
+      if (request.method !== 'POST' || request.url !== '/api/chat') {
+        response.writeHead(404).end();
+        return;
+      }
+      request.resume();
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ message: { content: 'respuesta del servidor' } }));
+    });
+    await new Promise<void>((resolve) => fallbackServer?.listen(0, '127.0.0.1', resolve));
+
+    const fallbackPort = (fallbackServer.address() as AddressInfo).port;
+    const serverConfig = {
+      provider: 'ollama' as const,
+      baseUrl: `http://127.0.0.1:${fallbackPort}`,
+      apiKey: '',
+      model: 'qwen2.5:14b',
+      temperature: 0.2,
+      maxTokens: 120,
+    };
+    const fromServer = await chat(
+      {
+        ...serverConfig,
+        node: { id: 'equipo-caido', name: 'Equipo caído' },
+        fallback: serverConfig,
+      },
+      [{ role: 'user', content: 'hola' }],
+      false,
+    );
+    check(
+      'reintenta en el servidor si el equipo se cae',
+      fromServer === 'respuesta del servidor',
+      `contenido «${fromServer}»`,
+    );
   } finally {
+    if (fallbackServer?.listening) {
+      await new Promise<void>((resolve) => fallbackServer?.close(() => resolve()));
+    }
+    if (revokedId) await db.delete(aiNodes).where(eq(aiNodes.id, revokedId));
     for (const socket of sockets) {
       try {
         socket.close();

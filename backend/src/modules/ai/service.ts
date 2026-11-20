@@ -68,6 +68,7 @@ export async function loadConfig(actor?: { userId: string }): Promise<AiConfig> 
   if (!node) return config;
 
   const models = node.capabilities?.models ?? [];
+  const { node: _node, fallback: _fallback, ...serverConfig } = config;
   return {
     ...config,
     provider: 'ollama',
@@ -75,6 +76,8 @@ export async function loadConfig(actor?: { userId: string }): Promise<AiConfig> 
     apiKey: '',
     model: pickNodeModel(config.model, models),
     node: { id: node.id, name: node.name },
+    // Si el equipo se cae a mitad de la petición, se reintenta en el servidor.
+    fallback: serverConfig,
   };
 }
 

@@ -667,6 +667,11 @@ export interface AiNodeSummary {
   lastSeenAt: string | null;
 }
 
+/** Equipo con su dueño: solo para el inventario del administrador. */
+export interface AiNodeAdminSummary extends AiNodeSummary {
+  owner: { id: string; name: string; email: string };
+}
+
 /** Mensajes del agente hacia el servidor. */
 export type AiNodeClientMessage =
   | { type: 'hello'; protocol: number; version: string; capabilities: AiNodeCapabilities }

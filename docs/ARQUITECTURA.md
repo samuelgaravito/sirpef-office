@@ -1042,8 +1042,13 @@ Chrome → API → (WebSocket saliente) → agente en la PC → Ollama en Docker
   (`14b` antes que `7b`).
 - El registro de conexiones vive en memoria del proceso (`modules/ai/nodes/registry.ts`) y
   admite **un trabajo por equipo**. `AI_NODE_ENABLED=false` lo desactiva.
-- Si el equipo se apaga, la llamada falla con `AI_NODE_OFFLINE` y la interfaz ofrece el
-  proveedor del servidor o el modo manual.
+- Si el equipo se apaga, la llamada falla con `AI_NODE_OFFLINE` y, si hay proveedor del
+  servidor, se **reintenta una vez** allí (`AiConfig.fallback`); si no, la interfaz ofrece el
+  modo manual.
+- El administrador ve el inventario completo en `GET /api/ai/nodes/all` y el dueño puede
+  **rotar el token** (`POST /api/ai/nodes/:id/token`, cierra la conexión actual).
+- Cada uso del equipo queda en `activities` como `ai_node_used` con `nodeId`, `nodeName`,
+  `model` y `task`. No se guardan prompts ni respuestas.
 - Las capacidades (`gpu`, `vram_gb`, `tokens_per_second`) son un **auto-reporte**: sirven para
   elegir equipo y mostrar estado, no como permiso.
 

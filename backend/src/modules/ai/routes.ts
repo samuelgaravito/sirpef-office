@@ -317,6 +317,29 @@ async function streamDraft(
   }
 }
 
+/**
+ * Deja constancia de que una tarea la atendió el equipo del usuario.
+ *
+ * Guarda el nodo y el modelo, nunca el prompt ni la respuesta. Si la tarea la
+ * hizo el proveedor del servidor no se registra aquí: eso ya queda en la
+ * actividad normal de la operación.
+ */
+function logNodeUsage(
+  userId: string,
+  entityType: 'document' | 'template' | 'user',
+  entityId: string,
+  task: string,
+  config: AiConfig,
+): void {
+  if (!config.node) return;
+  void logActivity(userId, entityType, entityId, 'ai_node_used', {
+    nodeId: config.node.id,
+    nodeName: config.node.name,
+    model: config.model,
+    task,
+  });
+}
+
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /** Estado del proveedor, visible para cualquier usuario autenticado. */
   app.get('/ai/status', async (request) => {
@@ -425,7 +448,9 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       .limit(MAX_TEMPLATE_CANDIDATES);
 
     const config = await loadConfig({ userId: user.sub });
-    return chooseTemplate(config, body.prompt, candidates);
+    const choice = await chooseTemplate(config, body.prompt, candidates);
+    logNodeUsage(user.sub, 'user', user.sub, 'choose-template', config);
+    return choice;
   });
 
   /**
@@ -461,6 +486,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       });
 
       await appendTurn(conversationId, body.question, result);
+      logNodeUsage(user.sub, 'user', user.sub, 'ask', config);
       return { ...result, conversationId };
     } catch (error) {
       // Una conversación recién creada que no llegó a responder no se guarda.
@@ -520,7 +546,15 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       };
     }
 
-    return inlineText(config, { instruction: body.instruction, context });
+    const result = await inlineText(config, { instruction: body.instruction, context });
+    logNodeUsage(
+      user.sub,
+      body.documentId ? 'document' : body.templateId ? 'template' : 'user',
+      body.documentId ?? body.templateId ?? user.sub,
+      'inline',
+      config,
+    );
+    return result;
   });
 
   /**
@@ -573,6 +607,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       model: config.model,
       filled: result.filled,
     });
+    logNodeUsage(user.sub, 'document', id, 'generate', config);
 
     return { data: result.data, filled: result.filled, version: updated.version };
   });
@@ -586,7 +621,9 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const body = draftSchema.parse(request.body);
 
     const prepared = await prepareTemplateDraft(user, templateId, body);
-    return draftDocument(prepared.config, prepared.input);
+    const result = await draftDocument(prepared.config, prepared.input);
+    logNodeUsage(user.sub, 'template', templateId, 'draft', prepared.config);
+    return result;
   });
 
   /**
@@ -599,9 +636,11 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const body = draftSchema.parse(request.body);
 
     const prepared = await prepareTemplateDraft(user, templateId, body);
-    await streamDraft(request, reply, (onProgress) =>
-      draftDocument(prepared.config, prepared.input, { onProgress }),
-    );
+    await streamDraft(request, reply, async (onProgress) => {
+      const result = await draftDocument(prepared.config, prepared.input, { onProgress });
+      logNodeUsage(user.sub, 'template', templateId, 'draft', prepared.config);
+      return result;
+    });
   });
 
   /**
@@ -633,6 +672,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       examples,
     });
 
+    logNodeUsage(user.sub, 'template', id, 'style', config);
     return { style };
   });
 
@@ -647,7 +687,9 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const body = documentDraftSchema.parse(request.body);
 
     const prepared = await prepareDocumentDraft(user, id, body);
-    return draftDocument(prepared.config, prepared.input);
+    const result = await draftDocument(prepared.config, prepared.input);
+    logNodeUsage(user.sub, 'document', id, 'draft', prepared.config);
+    return result;
   });
 
   /** Igual que la anterior, con el avance en NDJSON. */
@@ -657,9 +699,11 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     const body = documentDraftSchema.parse(request.body);
 
     const prepared = await prepareDocumentDraft(user, id, body);
-    await streamDraft(request, reply, (onProgress) =>
-      draftDocument(prepared.config, prepared.input, { onProgress }),
-    );
+    await streamDraft(request, reply, async (onProgress) => {
+      const result = await draftDocument(prepared.config, prepared.input, { onProgress });
+      logNodeUsage(user.sub, 'document', id, 'draft', prepared.config);
+      return result;
+    });
   });
 
 }

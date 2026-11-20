@@ -235,9 +235,11 @@ const creatingNode = ref(false);
 const nodeName = ref('Mi equipo');
 const createdNode = ref<{ node: LocalNode; token: string } | null>(null);
 const revokingNode = ref<string | null>(null);
+const rotatingNode = ref<string | null>(null);
 let nodesTimer: ReturnType<typeof setInterval> | null = null;
 
-async function loadNodes(): Promise<void> {
+async function loadNodes(silent = false): Promise<void> {
+  if (!silent) loadingNodes.value = true;
   try {
     const data = await api.get<{ nodes: LocalNode[] }>('/ai/nodes');
     nodes.value = data.nodes;
@@ -287,6 +289,71 @@ async function revokeNode(node: LocalNode): Promise<void> {
     toast.failure(error, 'No se pudo revocar el equipo');
   } finally {
     revokingNode.value = null;
+  }
+}
+
+async function rotateNode(node: LocalNode): Promise<void> {
+  if (rotatingNode.value) return;
+  if (
+    !window.confirm(
+      `¿Rotar el token de «${node.name}»? El agente se desconectará hasta que actualices su configuración.`,
+    )
+  ) {
+    return;
+  }
+  rotatingNode.value = node.id;
+  try {
+    const data = await api.post<{ node: LocalNode; token: string }>(`/ai/nodes/${node.id}/token`);
+    createdNode.value = data;
+    nodes.value = nodes.value.map((item) => (item.id === node.id ? data.node : item));
+    toast.success('Token rotado. Copia el nuevo y actualiza el agente.');
+  } catch (error) {
+    toast.failure(error, 'No se pudo rotar el token');
+  } finally {
+    rotatingNode.value = null;
+  }
+}
+
+/* ─────────────── Inventario de equipos (administradores) ─────────────── */
+
+interface AdminNode extends LocalNode {
+  owner: { id: string; name: string; email: string };
+}
+
+const adminNodes = ref<AdminNode[]>([]);
+const loadingAdminNodes = ref(false);
+
+async function loadAdminNodes(silent = false): Promise<void> {
+  if (!auth.isAdmin) return;
+  if (!silent) loadingAdminNodes.value = true;
+  try {
+    const data = await api.get<{ nodes: AdminNode[] }>('/ai/nodes/all');
+    adminNodes.value = data.nodes;
+  } catch {
+    // Es un panel informativo: un fallo no debe ensuciar la página.
+  } finally {
+    loadingAdminNodes.value = false;
+  }
+}
+
+async function revokeAdminNode(node: AdminNode): Promise<void> {
+  if (!window.confirm(`¿Revocar «${node.name}» de ${node.owner.email}?`)) return;
+  try {
+    await api.del(`/ai/nodes/${node.id}`);
+    adminNodes.value = adminNodes.value.filter((item) => item.id !== node.id);
+    nodes.value = nodes.value.filter((item) => item.id !== node.id);
+    toast.success('Equipo revocado');
+  } catch (error) {
+    toast.failure(error, 'No se pudo revocar el equipo');
+  }
+}
+
+function formatWhen(iso: string | null): string {
+  if (!iso) return 'nunca';
+  try {
+    return new Date(iso).toLocaleString('es-VE', { dateStyle: 'short', timeStyle: 'short' });
+  } catch {
+    return iso;
   }
 }
 
@@ -354,8 +421,12 @@ onMounted(() => {
   profileName.value = auth.user?.name ?? '';
   void loadAi();
   void loadNodes();
+  void loadAdminNodes();
   // El estado del agente cambia solo: se refresca mientras la página está abierta.
-  nodesTimer = setInterval(() => void loadNodes(), 20_000);
+  nodesTimer = setInterval(() => {
+    void loadNodes(true);
+    void loadAdminNodes(true);
+  }, 20_000);
 });
 
 onUnmounted(() => {
@@ -660,7 +731,7 @@ onUnmounted(() => {
               Conectado
             </span>
             <span v-else class="chip">Sin conexión</span>
-            <button type="button" class="btn btn-ghost !px-2" title="Actualizar" @click="loadNodes">
+            <button type="button" class="btn btn-ghost !px-2" title="Actualizar" @click="loadNodes()">
               <component :is="loadingNodes ? Loader2 : RefreshCw" :class="['size-4', loadingNodes ? 'animate-spin' : '']" />
             </button>
           </div>
@@ -700,15 +771,26 @@ SD_TOKEN={{ createdNode.token }}</pre>
                 <span class="text-[13px] font-medium">{{ node.name }}</span>
                 <span class="chip">{{ nodeStatusLabel(node) }}</span>
               </div>
-              <button
-                type="button"
-                class="btn btn-ghost !px-2 text-danger"
-                title="Revocar equipo"
-                :disabled="revokingNode === node.id"
-                @click="revokeNode(node)"
-              >
-                <component :is="revokingNode === node.id ? Loader2 : Trash2" :class="['size-4', revokingNode === node.id ? 'animate-spin' : '']" />
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="btn btn-ghost !px-2"
+                  title="Rotar token"
+                  :disabled="rotatingNode === node.id"
+                  @click="rotateNode(node)"
+                >
+                  <component :is="rotatingNode === node.id ? Loader2 : KeyRound" :class="['size-4', rotatingNode === node.id ? 'animate-spin' : '']" />
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost !px-2 text-danger"
+                  title="Revocar equipo"
+                  :disabled="revokingNode === node.id"
+                  @click="revokeNode(node)"
+                >
+                  <component :is="revokingNode === node.id ? Loader2 : Trash2" :class="['size-4', revokingNode === node.id ? 'animate-spin' : '']" />
+                </button>
+              </div>
             </div>
             <p class="mt-1 text-[11.5px] text-ink-muted">
               <template v-if="node.capabilities">
@@ -733,6 +815,55 @@ SD_TOKEN={{ createdNode.token }}</pre>
             Crear equipo
           </button>
         </div>
+      </section>
+
+      <!-- Inventario de equipos (solo administradores) -->
+      <section v-if="auth.isAdmin" class="card mt-5 p-5">
+        <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <Server class="size-4 text-ink-muted" />
+            <h2 class="text-[14px] font-semibold">Equipos de la oficina</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="chip">{{ adminNodes.filter((node) => node.online).length }} conectado(s)</span>
+            <button type="button" class="btn btn-ghost !px-2" title="Actualizar" @click="loadAdminNodes()">
+              <component :is="loadingAdminNodes ? Loader2 : RefreshCw" :class="['size-4', loadingAdminNodes ? 'animate-spin' : '']" />
+            </button>
+          </div>
+        </header>
+
+        <p class="text-[12.5px] text-ink-muted">
+          Todos los equipos registrados. Las capacidades son un auto-reporte del agente: sirven para
+          saber quién tiene GPU, no como permiso.
+        </p>
+
+        <div v-if="adminNodes.length === 0" class="mt-4 rounded-lg bg-surface-muted px-3 py-3 text-[12.5px] text-ink-muted">
+          Ningún equipo registrado todavía.
+        </div>
+        <ul v-else class="mt-4 space-y-2">
+          <li v-for="node in adminNodes" :key="node.id" class="rounded-lg border border-hairline px-3 py-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="size-2 rounded-full" :class="node.online ? 'bg-success' : 'bg-ink-subtle'" />
+                <span class="text-[13px] font-medium">{{ node.name }}</span>
+                <span class="chip">{{ node.online ? 'Conectado' : 'Desconectado' }}</span>
+                <span class="text-[11.5px] text-ink-subtle">{{ node.owner.name }} · {{ node.owner.email }}</span>
+              </div>
+              <button type="button" class="btn btn-ghost !px-2 text-danger" title="Revocar equipo" @click="revokeAdminNode(node)">
+                <Trash2 class="size-4" />
+              </button>
+            </div>
+            <p class="mt-1 text-[11.5px] text-ink-muted">
+              <template v-if="node.capabilities">
+                {{ node.capabilities.gpu ? 'GPU' : 'CPU' }}
+                <template v-if="node.capabilities.vramGb"> · {{ node.capabilities.vramGb }} GB VRAM</template>
+                <template v-if="node.capabilities.models.length"> · {{ node.capabilities.models.join(', ') }}</template>
+              </template>
+              <template v-else>Sin datos del equipo.</template>
+              · última vez: {{ formatWhen(node.lastSeenAt) }}
+            </p>
+          </li>
+        </ul>
       </section>
 
       <!-- Diagnóstico del sistema (solo administradores) -->

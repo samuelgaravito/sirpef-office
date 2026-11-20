@@ -644,9 +644,11 @@ a su Ollama en Docker. No se publica ningún puerto y Ollama no queda expuesto a
 
 - Si el equipo está conectado, la IA se atiende **en su GPU**: el servidor arma el prompt y
   sanea el resultado, igual que con cualquier proveedor. La interfaz lo muestra como
-  `IA · mi equipo`.
-- Si el equipo está apagado o el agente caído, se usa el proveedor del servidor o el modo
-  manual; la aplicación nunca se bloquea.
+  `IA · mi equipo` en la cabecera.
+- Si el equipo se apaga a mitad de una redacción, se reintenta una vez en el proveedor del
+  servidor; si tampoco hay, se usa el modo manual. La aplicación nunca se bloquea.
+- El administrador ve el **inventario de todos los equipos** en Ajustes y puede revocarlos.
+  El dueño puede **rotar el token** (el agente se desconecta hasta actualizar su `.env`).
 - El agente reporta versión de Ollama, modelos, VRAM y tokens/s. Es un **auto-reporte** para
   elegir equipo y mostrar estado, no un permiso.
 - Un equipo atiende un trabajo a la vez; el resto se encola.
