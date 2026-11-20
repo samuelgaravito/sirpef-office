@@ -1035,6 +1035,8 @@ Chrome → API → (WebSocket saliente) → agente en la PC → Ollama en Docker
 
 - El agente se conecta a `GET /api/ai/node` con `Authorization: Bearer <token>` y solo deja
   pasar `/api/chat` y las consultas de estado (`/api/version`, `/api/tags`, `/api/ps`).
+  El handshake tiene su **propio cupo de rate limit** (600/min): un reinicio del servidor
+  hace reconectar a varios agentes a la vez y no deben chocar con el límite de la API.
 - El servidor le envía el **mismo cuerpo** que enviaría a Ollama y recibe el NDJSON: el parseo,
   el saneado, las conversaciones y la auditoría no cambian.
 - `loadConfig(actor)` adjunta el nodo conectado del usuario y normaliza el proveedor a

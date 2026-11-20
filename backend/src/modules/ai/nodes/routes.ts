@@ -206,7 +206,16 @@ export async function aiNodeRoutes(app: FastifyInstance): Promise<void> {
    * La autenticación va en la cabecera `Authorization`, no en la query: el
    * agente no es un navegador y así el token no acaba en los logs de acceso.
    */
-  app.get('/ai/node', { websocket: true }, async (socket, request) => {
+  app.get(
+    '/ai/node',
+    {
+      websocket: true,
+      // El handshake no comparte el cupo global: un reinicio del servidor o una
+      // red inestable hacen que varios agentes reconecten a la vez y no deben
+      // quedarse fuera por el límite pensado para la API normal.
+      config: { rateLimit: { max: 600, timeWindow: '1 minute' } },
+    },
+    async (socket, request) => {
     const token = bearer(request);
     if (!token) {
       socket.close(CLOSE_UNAUTHENTICATED, 'Token requerido');
