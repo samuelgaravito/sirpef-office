@@ -415,6 +415,8 @@ function designCss(design: DesignTokens, forPdf = false, embed = false): string 
   .doc-body th { background: var(--sd-cell-bg, var(--doc-th-bg)); font-weight: 600; text-align: left; }
   .doc-body thead { display: table-header-group; }
   .doc-body p { orphans: 2; widows: 2; }
+  /* Bloques de firma o párrafos que el usuario marca como indivisibles. */
+  .doc-body [data-keep-together='true'] { break-inside: avoid; page-break-inside: avoid; }
   .doc-body td p,
   .doc-body th p { margin: 0; }
 

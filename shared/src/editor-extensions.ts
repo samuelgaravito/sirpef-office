@@ -1,5 +1,5 @@
 import type { Extensions } from '@tiptap/core';
-import { mergeAttributes } from '@tiptap/core';
+import { Extension, mergeAttributes } from '@tiptap/core';
 
 import { HardBreak } from '@tiptap/extension-hard-break';
 import Highlight from '@tiptap/extension-highlight';
@@ -32,6 +32,30 @@ const HardBreakWithoutModEnter = HardBreak.extend({
     return {
       'Shift-Enter': () => this.editor.commands.setHardBreak(),
     };
+  },
+});
+
+/**
+ * «Mantener junto»: párrafos de firma y bloques que no deben partirse entre
+ * páginas. Se guarda como atributo y lo comparten editor, HTML, PDF y DOCX.
+ */
+export const KeepTogether = Extension.create({
+  name: 'keepTogether',
+
+  addGlobalAttributes() {
+    return [
+      {
+        types: ['paragraph', 'heading'],
+        attributes: {
+          keepTogether: {
+            default: false,
+            parseHTML: (element) => element.getAttribute('data-keep-together') === 'true',
+            renderHTML: (attributes) =>
+              attributes.keepTogether ? { 'data-keep-together': 'true' } : {},
+          },
+        },
+      },
+    ];
   },
 });
 
@@ -380,6 +404,7 @@ export function createEditorExtensions(options?: {
       },
     }),
     HardBreakWithoutModEnter,
+    KeepTogether,
     ...(options?.pageBreak === false ? [] : [PageBreak]),
     ExtendedTable.configure({
       resizable: true,

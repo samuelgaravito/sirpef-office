@@ -206,12 +206,15 @@ function lineHeightSpacing(node: JSONContent): {
 function paragraphFrom(node: JSONContent, ctx: TextContext): Paragraph {
   const attrs = node.attrs ?? {};
   const runs = inlineRuns(node, ctx);
+  const keepTogether = attrs.keepTogether === true;
 
   return new Paragraph({
     children: runs.length > 0 ? runs : [new TextRun('')],
     alignment: alignment(attrs.textAlign),
     // El editor no añade espacio entre párrafos; solo el interlineado.
     spacing: { before: 0, after: 0, ...lineHeightSpacing(node) },
+    keepNext: keepTogether,
+    keepLines: keepTogether,
   });
 }
 
@@ -229,6 +232,7 @@ function headingFrom(
 ): Paragraph {
   const level = Number(node.attrs?.level ?? 1);
   const spacing = HEADING_SPACING_TWIPS[level] ?? HEADING_SPACING_TWIPS[1]!;
+  const keepTogether = node.attrs?.keepTogether === true;
   return new Paragraph({
     children: inlineRuns(node, ctx),
     heading: HEADINGS[level] ?? HeadingLevel.HEADING_1,
@@ -237,6 +241,8 @@ function headingFrom(
       ...(suppressBefore ? { ...spacing, before: 0 } : spacing),
       ...lineHeightSpacing(node),
     },
+    keepNext: keepTogether,
+    keepLines: keepTogether,
   });
 }
 
@@ -424,6 +430,8 @@ function listFrom(node: JSONContent, ctx: TextContext, level = 0): Paragraph[] {
             children: inlineRuns(child, ctx),
             numbering: { reference, level: Math.min(level, 8) },
             spacing: { after: 60, ...lineHeightSpacing(child) },
+            keepNext: child.attrs?.keepTogether === true,
+            keepLines: child.attrs?.keepTogether === true,
           }),
         );
       } else if (child.type === 'bulletList' || child.type === 'orderedList') {
