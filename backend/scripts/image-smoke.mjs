@@ -283,6 +283,17 @@ async function main() {
     console.log('→ Autoguardado y persistencia');
     await wait(3200);
     docId = new URL(page.url()).pathname.split('/').filter(Boolean).pop() ?? null;
+    if (!/^[0-9a-f-]{36}$/.test(docId ?? '')) {
+      // El flujo nuevo mantiene el borrador en el navegador hasta pulsar
+      // Guardar; hay que materializarlo para poder recargar y exportar.
+      await page.click('button[aria-label="Guardar"]');
+      await page.waitForFunction(
+        () => /\/documents\/[0-9a-f-]{36}/.test(location.pathname),
+        { timeout: 20000 },
+      );
+      await wait(1200);
+      docId = new URL(page.url()).pathname.split('/').filter(Boolean).pop() ?? null;
+    }
     await page.reload({ waitUntil: 'networkidle0' });
     await page.waitForSelector('.doc-paged-flow .wp-image img', { timeout: 20000 });
     await wait(1000);
@@ -338,6 +349,13 @@ async function main() {
     await shot(page, '99-error');
     process.exitCode = 1;
   } finally {
+    if (docId && /^[0-9a-f-]{36}$/.test(docId)) {
+      await page
+        .evaluate(async (id) => {
+          await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+        }, docId)
+        .catch(() => undefined);
+    }
     await browser.close();
   }
 

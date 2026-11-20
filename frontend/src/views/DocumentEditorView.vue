@@ -1098,7 +1098,8 @@ function markDirty(): void {
 
 async function save(checkpoint = false, targetId: string | null = documentId.value): Promise<void> {
   if (isNew.value) {
-    if (!dirty.value && !checkpoint) return;
+    // Un borrador local recién abierto desde una plantilla aún no está
+    // «sucio», pero el aviso pide guardarlo: debe poder materializarse tal cual.
     await materialize();
     return;
   }
@@ -1816,7 +1817,7 @@ onBeforeUnmount(() => {
         v-if="canEdit"
         type="button"
         class="btn btn-ghost btn-sm"
-        :disabled="saving || !dirty"
+        :disabled="saving || (!dirty && !isNew)"
         :title="saveButtonTitle"
         aria-label="Guardar"
         @click="save()"
