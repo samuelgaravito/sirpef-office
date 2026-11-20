@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Bell, BellOff, BellRing, Check, CheckCircle2, ClipboardCopy, ExternalLink, KeyRound, Loader2, RefreshCw, Save, Server, Sparkles, Trash2, UserRound, Users, XCircle, Zap } from 'lucide-vue-next';
-import { computed, onMounted, reactive, ref } from 'vue';
+import { Bell, BellOff, BellRing, Check, CheckCircle2, ClipboardCopy, ExternalLink, KeyRound, Laptop, Loader2, Plus, RefreshCw, Save, Server, Sparkles, Trash2, UserRound, Users, XCircle, Zap } from 'lucide-vue-next';
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
@@ -210,6 +210,96 @@ async function removeKey(): Promise<void> {
   }
 }
 
+/* ────────────────────── Mi equipo (IA local) ────────────────────── */
+
+interface NodeCapabilities {
+  ollamaVersion: string | null;
+  models: string[];
+  gpu: boolean;
+  vramGb: number | null;
+  tokensPerSecond: number | null;
+}
+
+interface LocalNode {
+  id: string;
+  name: string;
+  online: boolean;
+  busy: boolean;
+  capabilities: NodeCapabilities | null;
+  lastSeenAt: string | null;
+}
+
+const nodes = ref<LocalNode[]>([]);
+const loadingNodes = ref(true);
+const creatingNode = ref(false);
+const nodeName = ref('Mi equipo');
+const createdNode = ref<{ node: LocalNode; token: string } | null>(null);
+const revokingNode = ref<string | null>(null);
+let nodesTimer: ReturnType<typeof setInterval> | null = null;
+
+async function loadNodes(): Promise<void> {
+  try {
+    const data = await api.get<{ nodes: LocalNode[] }>('/ai/nodes');
+    nodes.value = data.nodes;
+  } catch {
+    // Un fallo puntual no debe romper la página.
+  } finally {
+    loadingNodes.value = false;
+  }
+}
+
+async function createNode(): Promise<void> {
+  const name = nodeName.value.trim();
+  if (!name || creatingNode.value) return;
+  creatingNode.value = true;
+  try {
+    const data = await api.post<{ node: LocalNode; token: string }>('/ai/nodes', { name });
+    createdNode.value = data;
+    nodes.value = [data.node, ...nodes.value];
+    toast.success('Equipo creado. Copia el token: no se volverá a mostrar.');
+  } catch (error) {
+    toast.failure(error, 'No se pudo crear el equipo');
+  } finally {
+    creatingNode.value = false;
+  }
+}
+
+async function copyNodeToken(): Promise<void> {
+  if (!createdNode.value) return;
+  try {
+    await navigator.clipboard.writeText(createdNode.value.token);
+    toast.success('Token copiado');
+  } catch {
+    toast.error('El navegador no permitió copiar el token');
+  }
+}
+
+async function revokeNode(node: LocalNode): Promise<void> {
+  if (revokingNode.value) return;
+  if (!window.confirm(`¿Revocar «${node.name}»? El agente dejará de conectarse.`)) return;
+  revokingNode.value = node.id;
+  try {
+    await api.del(`/ai/nodes/${node.id}`);
+    nodes.value = nodes.value.filter((item) => item.id !== node.id);
+    if (createdNode.value?.node.id === node.id) createdNode.value = null;
+    toast.success('Equipo revocado');
+  } catch (error) {
+    toast.failure(error, 'No se pudo revocar el equipo');
+  } finally {
+    revokingNode.value = null;
+  }
+}
+
+/** Dirección que el agente debe usar. En producción es el mismo dominio del sitio. */
+const nodeServerUrl = computed(
+  () => `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/ai/node`,
+);
+
+function nodeStatusLabel(node: LocalNode): string {
+  if (!node.online) return 'Desconectado';
+  return node.busy ? 'Redactando…' : 'Conectado';
+}
+
 interface DiagnosticCheck {
   key: string;
   label: string;
@@ -263,6 +353,14 @@ async function copyDiagnostics(): Promise<void> {
 onMounted(() => {
   profileName.value = auth.user?.name ?? '';
   void loadAi();
+  void loadNodes();
+  // El estado del agente cambia solo: se refresca mientras la página está abierta.
+  nodesTimer = setInterval(() => void loadNodes(), 20_000);
+});
+
+onUnmounted(() => {
+  if (nodesTimer) clearInterval(nodesTimer);
+  nodesTimer = null;
 });
 </script>
 
@@ -547,6 +645,94 @@ onMounted(() => {
             </div>
           </div>
         </template>
+      </section>
+
+      <!-- Mi equipo (IA local) -->
+      <section class="card mt-5 p-5">
+        <header class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <Laptop class="size-4 text-ink-muted" />
+            <h2 class="text-[14px] font-semibold">Mi equipo (IA local)</h2>
+          </div>
+          <div class="flex items-center gap-2">
+            <span v-if="nodes.some((node) => node.online)" class="chip !bg-success-soft !text-success">
+              <Check class="size-3" />
+              Conectado
+            </span>
+            <span v-else class="chip">Sin conexión</span>
+            <button type="button" class="btn btn-ghost !px-2" title="Actualizar" @click="loadNodes">
+              <component :is="loadingNodes ? Loader2 : RefreshCw" :class="['size-4', loadingNodes ? 'animate-spin' : '']" />
+            </button>
+          </div>
+        </header>
+
+        <p class="text-[12.5px] text-ink-muted">
+          Si este equipo tiene Ollama, la redacción se hace aquí con su tarjeta gráfica, sin pasar por el
+          servidor. El agente abre una conexión saliente: no hay que abrir ningún puerto.
+        </p>
+
+        <!-- Token recién creado: solo se muestra una vez -->
+        <div v-if="createdNode" class="mt-4 rounded-lg bg-warning-soft px-3 py-3 text-[12px] text-warning">
+          <p class="font-medium">Guarda el token ahora: no se vuelve a mostrar.</p>
+          <div class="mt-2 flex items-center gap-2">
+            <code class="flex-1 overflow-x-auto rounded bg-surface px-2 py-1 font-mono text-[11.5px]">{{ createdNode.token }}</code>
+            <button type="button" class="btn btn-outline !px-2" title="Copiar token" @click="copyNodeToken">
+              <ClipboardCopy class="size-4" />
+            </button>
+          </div>
+          <p class="mt-2">En la PC del equipo, dentro de <code class="font-mono">deploy/ai-node</code>, crea el <code class="font-mono">.env</code> con:</p>
+          <pre class="mt-1 overflow-x-auto rounded bg-surface px-2 py-1 font-mono text-[11px]">SD_SERVER={{ nodeServerUrl }}
+SD_TOKEN={{ createdNode.token }}</pre>
+          <button type="button" class="btn btn-outline mt-2" @click="createdNode = null">Ya lo he guardado</button>
+        </div>
+
+        <div v-if="loadingNodes && nodes.length === 0" class="py-4 text-center text-[12px] text-ink-muted">
+          Cargando equipos…
+        </div>
+        <div v-else-if="nodes.length === 0" class="mt-4 rounded-lg bg-surface-muted px-3 py-3 text-[12.5px] text-ink-muted">
+          Aún no hay equipos. Crea uno y configura el agente en la PC que tenga Ollama.
+        </div>
+        <ul v-else class="mt-4 space-y-2">
+          <li v-for="node in nodes" :key="node.id" class="rounded-lg border border-hairline px-3 py-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <span class="size-2 rounded-full" :class="node.online ? 'bg-success' : 'bg-ink-subtle'" />
+                <span class="text-[13px] font-medium">{{ node.name }}</span>
+                <span class="chip">{{ nodeStatusLabel(node) }}</span>
+              </div>
+              <button
+                type="button"
+                class="btn btn-ghost !px-2 text-danger"
+                title="Revocar equipo"
+                :disabled="revokingNode === node.id"
+                @click="revokeNode(node)"
+              >
+                <component :is="revokingNode === node.id ? Loader2 : Trash2" :class="['size-4', revokingNode === node.id ? 'animate-spin' : '']" />
+              </button>
+            </div>
+            <p class="mt-1 text-[11.5px] text-ink-muted">
+              <template v-if="node.capabilities">
+                {{ node.capabilities.gpu ? 'GPU' : 'CPU' }}
+                <template v-if="node.capabilities.vramGb"> · {{ node.capabilities.vramGb }} GB VRAM</template>
+                <template v-if="node.capabilities.tokensPerSecond"> · {{ node.capabilities.tokensPerSecond }} tok/s</template>
+                · Ollama {{ node.capabilities.ollamaVersion ?? '—' }}
+                · {{ node.capabilities.models.length }} modelo(s)
+              </template>
+              <template v-else>Sin datos del equipo todavía.</template>
+            </p>
+          </li>
+        </ul>
+
+        <div class="mt-4 flex flex-wrap items-end gap-2">
+          <div class="min-w-[180px] flex-1">
+            <label class="label">Nombre del equipo</label>
+            <input v-model="nodeName" class="field" maxlength="80" placeholder="PC de Ana" />
+          </div>
+          <button type="button" class="btn btn-outline" :disabled="creatingNode || !nodeName.trim()" @click="createNode">
+            <component :is="creatingNode ? Loader2 : Plus" :class="['size-4', creatingNode ? 'animate-spin' : '']" />
+            Crear equipo
+          </button>
+        </div>
       </section>
 
       <!-- Diagnóstico del sistema (solo administradores) -->

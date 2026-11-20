@@ -624,3 +624,63 @@ export interface SavedChart {
   createdAt: string;
   updatedAt: string;
 }
+
+/* ───────────────────────── Nodos de IA locales ───────────────────────── */
+
+/**
+ * Versión del protocolo del túnel.
+ *
+ * El agente la envía en `hello`; si el servidor no la entiende, cierra la
+ * conexión en vez de hablar idiomas distintos.
+ */
+export const AI_NODE_PROTOCOL_VERSION = 1;
+
+/** Rutas del API de Ollama que el agente puede reenviar. */
+export const AI_NODE_ALLOWED_PATHS = ['/api/chat', '/api/version', '/api/tags', '/api/ps'] as const;
+
+/** Tope del cuerpo de un trabajo y de la respuesta acumulada. */
+export const AI_NODE_MAX_BODY_BYTES = 2 * 1024 * 1024;
+export const AI_NODE_MAX_RESPONSE_CHARS = 2 * 1024 * 1024;
+
+/**
+ * Lo que el equipo sabe de su propio Ollama.
+ *
+ * `gpu` y `vramGb` salen de `/api/ps`: si el modelo está cargado en VRAM es
+ * que la tarjeta se está usando. Es un dato informativo, no una garantía.
+ */
+export interface AiNodeCapabilities {
+  ollamaVersion: string | null;
+  models: string[];
+  gpu: boolean;
+  vramGb: number | null;
+  /** Velocidad medida en el último trabajo, en tokens por segundo. */
+  tokensPerSecond: number | null;
+}
+
+/** Estado de un equipo tal como lo ve la interfaz. */
+export interface AiNodeSummary {
+  id: string;
+  name: string;
+  online: boolean;
+  busy: boolean;
+  capabilities: AiNodeCapabilities | null;
+  lastSeenAt: string | null;
+}
+
+/** Mensajes del agente hacia el servidor. */
+export type AiNodeClientMessage =
+  | { type: 'hello'; protocol: number; version: string; capabilities: AiNodeCapabilities }
+  | { type: 'chunk'; id: string; data: string }
+  | { type: 'done'; id: string }
+  | { type: 'error'; id: string; message: string };
+
+/** Mensajes del servidor hacia el agente. */
+export type AiNodeServerMessage =
+  | { type: 'job'; id: string; path: string; body: unknown }
+  | { type: 'abort'; id: string };
+
+/** Respuesta al crear un equipo: el token solo se muestra esta vez. */
+export interface AiNodeCreated {
+  node: AiNodeSummary;
+  token: string;
+}

@@ -1,0 +1,41 @@
+# SirpefOffice · nodo de IA local (equipo sin GPU)
+#
+# Mismo túnel que la variante con GPU, pero sin reserva de dispositivo.
+# Un equipo sin GPU redacta mucho más despacio: el servidor lo usa como
+# último recurso antes de caer al proveedor compartido.
+
+name: sirpef-ai
+
+services:
+  ollama:
+    image: ollama/ollama:0.20.0
+    container_name: sirpef-ai-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_CONTEXT_LENGTH: '8192'
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  agente:
+    image: ${AI_NODE_IMAGE:-sirpef-ai-node:1.0}
+    container_name: sirpef-ai-agent
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      OLLAMA_URL: http://ollama:11434
+
+volumes:
+  ollama_data:
+    name: ollama_data

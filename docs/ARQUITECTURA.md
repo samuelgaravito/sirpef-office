@@ -1023,6 +1023,33 @@ POST /api/ai/choose-template  { prompt }
 Todas las llamadas tienen *timeout* y errores normalizados (`AI_TIMEOUT`, `AI_PROVIDER_ERROR`,
 `AI_UNREACHABLE`, `AI_EMPTY`, `AI_BAD_RESPONSE`).
 
+#### Nodos de IA locales (túnel)
+
+Un usuario puede poner la GPU de su equipo en lugar de la del servidor. El registro está en
+`ai_nodes` (`user_id`, `name`, `token_hash`, capacidades y `revoked_at`); el token se muestra
+una sola vez y se guarda hasheado.
+
+```text
+Chrome → API → (WebSocket saliente) → agente en la PC → Ollama en Docker
+```
+
+- El agente se conecta a `GET /api/ai/node` con `Authorization: Bearer <token>` y solo deja
+  pasar `/api/chat` y las consultas de estado (`/api/version`, `/api/tags`, `/api/ps`).
+- El servidor le envía el **mismo cuerpo** que enviaría a Ollama y recibe el NDJSON: el parseo,
+  el saneado, las conversaciones y la auditoría no cambian.
+- `loadConfig(actor)` adjunta el nodo conectado del usuario y normaliza el proveedor a
+  `ollama`; si el modelo configurado no está instalado en ese equipo, elige el más capaz
+  (`14b` antes que `7b`).
+- El registro de conexiones vive en memoria del proceso (`modules/ai/nodes/registry.ts`) y
+  admite **un trabajo por equipo**. `AI_NODE_ENABLED=false` lo desactiva.
+- Si el equipo se apaga, la llamada falla con `AI_NODE_OFFLINE` y la interfaz ofrece el
+  proveedor del servidor o el modo manual.
+- Las capacidades (`gpu`, `vram_gb`, `tokens_per_second`) son un **auto-reporte**: sirven para
+  elegir equipo y mostrar estado, no como permiso.
+
+Con más de una instancia de API haría falta sticky routing o un registro compartido: el
+socket solo existe en la instancia que lo aceptó.
+
 ### 8.6 Modo consulta
 
 Preguntas en lenguaje natural sobre los documentos: «¿cuáles son mis últimos 5 documentos?»,

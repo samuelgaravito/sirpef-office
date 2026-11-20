@@ -2,6 +2,7 @@ import { Agent } from 'undici';
 
 import { env } from '../../env.js';
 import { AppError } from '../../lib/errors.js';
+import { chatViaNode } from './nodes/registry.js';
 
 export type AiProviderName = 'none' | 'openai' | 'anthropic' | 'gemini' | 'ollama';
 
@@ -12,6 +13,13 @@ export interface AiConfig {
   model: string;
   temperature: number;
   maxTokens: number;
+  /**
+   * Equipo local que debe atender la llamada.
+   *
+   * Es transitorio: no se guarda en `app_settings` ni se devuelve al navegador.
+   * Lo rellena `loadConfig(actor)` cuando el usuario tiene un agente conectado.
+   */
+  node?: { id: string; name: string };
 }
 
 export interface AiMessage {
@@ -357,6 +365,12 @@ export async function chat(
             : {}),
         messages,
       };
+
+      // El equipo del usuario tiene prioridad. El agente reenvía este mismo
+      // cuerpo a su Ollama y devuelve el NDJSON; el parseo sigue aquí.
+      if (config.node) {
+        return chatViaNode(config.node.id, body, options.onProgress);
+      }
 
       if (options.onProgress) {
         return ollamaStream(url, body, timeoutMs, timeoutMessage, options.onProgress);

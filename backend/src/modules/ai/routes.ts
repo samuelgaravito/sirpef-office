@@ -12,7 +12,7 @@ import type {
 } from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
-import { documents, templateShares, templates } from '../../db/schema.js';
+import { aiNodes, documents, templateShares, templates } from '../../db/schema.js';
 import { assertDocument, assertDocumentMutable, getTemplateAccess } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
@@ -30,6 +30,8 @@ import {
 } from './conversations.js';
 import { deriveStyle, draftDocument, type DraftInput } from './draft.js';
 import { inlineText } from './inline.js';
+import { connectedNodes } from './nodes/registry.js';
+import { toNodeSummary } from './nodes/summary.js';
 import type { AiConfig } from './providers.js';
 import {
   clearApiKey,
@@ -161,7 +163,7 @@ async function prepareTemplateDraft(
     throw badRequest('La plantilla está inactiva y no se puede usar para redactar');
   }
 
-  const config = await loadConfig();
+  const config = await loadConfig({ userId: user.sub });
   const examples =
     body.useExamples === false ? [] : await loadStyleExamples(user.sub, template.id);
 
@@ -211,7 +213,7 @@ async function prepareDocumentDraft(
         .limit(1)
     : [];
 
-  const config = await loadConfig();
+  const config = await loadConfig({ userId: user.sub });
   const examples =
     body.useExamples === false || !template
       ? []
@@ -318,13 +320,28 @@ async function streamDraft(
 export async function aiRoutes(app: FastifyInstance): Promise<void> {
   /** Estado del proveedor, visible para cualquier usuario autenticado. */
   app.get('/ai/status', async (request) => {
-    await authenticate(request);
-    const config = await loadConfig();
+    const user = await authenticate(request);
+    const config = await loadConfig({ userId: user.sub });
     const publicConfig = toPublicConfig(config);
+
+    // Equipos del usuario: la interfaz muestra el estado y permite saber si la
+    // redacción se está haciendo en su propia GPU.
+    const rows = await db
+      .select()
+      .from(aiNodes)
+      .where(and(eq(aiNodes.userId, user.sub), isNull(aiNodes.revokedAt)))
+      .orderBy(desc(aiNodes.createdAt));
+    const live = new Map(connectedNodes().map((node) => [node.id, node]));
+    const nodes = rows.map((row) => toNodeSummary(row, live.get(row.id)));
+
     return {
       configured: publicConfig.configured,
       provider: publicConfig.provider,
       model: publicConfig.model,
+      /** `node` = lo atiende el equipo del usuario; `server` = el proveedor. */
+      mode: config.node ? 'node' : publicConfig.configured ? 'server' : 'none',
+      node: config.node ? { id: config.node.id, name: config.node.name, model: config.model } : null,
+      nodes,
     };
   });
 
@@ -407,7 +424,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       .orderBy(desc(templates.updatedAt))
       .limit(MAX_TEMPLATE_CANDIDATES);
 
-    const config = await loadConfig();
+    const config = await loadConfig({ userId: user.sub });
     return chooseTemplate(config, body.prompt, candidates);
   });
 
@@ -422,7 +439,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.post('/ai/ask', async (request) => {
     const user = await authenticate(request);
     const body = askRequestSchema.parse(request.body ?? {});
-    const config = await loadConfig();
+    const config = await loadConfig({ userId: user.sub });
 
     if (body.conversationId) {
       await assertConversation(user.sub, body.conversationId);
@@ -475,7 +492,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
   app.post('/ai/inline', async (request) => {
     const user = await authenticate(request);
     const body = inlineSchema.parse(request.body ?? {});
-    const config = await loadConfig();
+    const config = await loadConfig({ userId: user.sub });
 
     let context: AiInlineContext = body.context ?? {};
 
@@ -530,7 +547,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
 
     if (!template) throw notFound('La plantilla del documento ya no existe');
 
-    const config = await loadConfig();
+    const config = await loadConfig({ userId: user.sub });
     const schema = (template.schema ?? []) as VariableDef[];
 
     const result = await generateVariables(config, {
@@ -607,7 +624,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    const config = await loadConfig();
+    const config = await loadConfig({ userId: user.sub });
     const style = await deriveStyle(config, {
       templateName: template.name,
       docType: template.docType,

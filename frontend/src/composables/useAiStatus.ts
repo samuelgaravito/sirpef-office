@@ -1,11 +1,17 @@
 import { ref } from 'vue';
 
+import type { AiNodeSummary } from '@sirpefoffice/shared';
+
 import { api } from '@/api/client';
 
 export interface AiStatus {
   configured: boolean;
   provider: string;
   model: string;
+  /** Quién atiende la IA: el equipo del usuario, el servidor o nadie. */
+  mode?: 'node' | 'server' | 'none';
+  node?: { id: string; name: string; model: string } | null;
+  nodes?: AiNodeSummary[];
 }
 
 /**

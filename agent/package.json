@@ -1,0 +1,16 @@
+{
+  "name": "sirpef-ai-node",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Agente que conecta el Ollama local del equipo con SirpefOffice por un túnel WebSocket.",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
