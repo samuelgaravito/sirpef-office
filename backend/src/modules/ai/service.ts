@@ -6,6 +6,7 @@ import { db } from '../../db/index.js';
 import { appSettings } from '../../db/schema.js';
 import { env } from '../../env.js';
 import { AppError } from '../../lib/errors.js';
+import { pickNodeForUser } from './nodes/registry.js';
 import { chat, type AiConfig, type AiProviderName } from './providers.js';
 import { coerce, describeVariable, extractJsonObject, isEmpty } from './values.js';
 
@@ -42,20 +43,59 @@ export function envConfig(): AiConfig {
 }
 
 /** Lee la configuración activa: primero la base de datos, luego el .env. */
-export async function loadConfig(): Promise<AiConfig> {
+export async function loadConfig(actor?: { userId: string }): Promise<AiConfig> {
   const base = envConfig();
   const [row] = await db.select().from(appSettings).where(eq(appSettings.key, SETTINGS_KEY)).limit(1);
-  if (!row) return base;
 
-  const stored = row.value as Partial<AiConfig>;
+  let config: AiConfig = base;
+  if (row) {
+    const stored = row.value as Partial<AiConfig>;
+    config = {
+      provider: (stored.provider as AiProviderName) ?? base.provider,
+      baseUrl: stored.baseUrl ?? base.baseUrl,
+      apiKey: stored.apiKey ?? base.apiKey,
+      model: stored.model ?? base.model,
+      temperature: typeof stored.temperature === 'number' ? stored.temperature : base.temperature,
+      maxTokens: typeof stored.maxTokens === 'number' ? stored.maxTokens : base.maxTokens,
+    };
+  }
+
+  // El equipo del usuario manda: si su agente está conectado, la redacción se
+  // hace en su GPU. El proveedor se normaliza a `ollama` porque el agente
+  // reenvía el API de Ollama; el modelo se ajusta al que tenga instalado.
+  if (!actor || !env.AI_NODE_ENABLED) return config;
+  const node = pickNodeForUser(actor.userId);
+  if (!node) return config;
+
+  const models = node.capabilities?.models ?? [];
+  const { node: _node, fallback: _fallback, ...serverConfig } = config;
   return {
-    provider: (stored.provider as AiProviderName) ?? base.provider,
-    baseUrl: stored.baseUrl ?? base.baseUrl,
-    apiKey: stored.apiKey ?? base.apiKey,
-    model: stored.model ?? base.model,
-    temperature: typeof stored.temperature === 'number' ? stored.temperature : base.temperature,
-    maxTokens: typeof stored.maxTokens === 'number' ? stored.maxTokens : base.maxTokens,
+    ...config,
+    provider: 'ollama',
+    baseUrl: '',
+    apiKey: '',
+    model: pickNodeModel(config.model, models),
+    node: { id: node.id, name: node.name },
+    // Si el equipo se cae a mitad de la petición, se reintenta en el servidor.
+    fallback: serverConfig,
   };
+}
+
+/**
+ * Modelo a pedir al equipo.
+ *
+ * Si el configurado no está instalado, se elige el más capaz por nombre
+ * (`14b` antes que `7b`) y, en último caso, el primero. Así no se falla con un
+ * 404 por un modelo que esa PC no descargó.
+ */
+function pickNodeModel(configured: string, models: string[]): string {
+  if (models.length === 0 || models.includes(configured)) return configured;
+  return (
+    models.find((name) => name.includes('14b')) ??
+    models.find((name) => name.includes('7b')) ??
+    models[0] ??
+    configured
+  );
 }
 
 export interface PublicAiConfig {

@@ -180,7 +180,28 @@ async function clickChromeButton(page, title) {
 async function openChromeMode(page, title) {
   // Las bandas pueden estar visibles en modo lectura; la barra solo aparece al editar.
   if (!(await page.$('.wp-chrome-band__bar'))) {
-    await clickChromeButton(page, title);
+    // La interfaz nueva agrupa la acción en «Más acciones»; se mantiene el
+    // botón directo como respaldo para versiones anteriores.
+    const menuOpened = await page.evaluate(() => {
+      const trigger = document.querySelector('button[aria-label="Más acciones"]');
+      if (!(trigger instanceof HTMLElement)) return false;
+      trigger.click();
+      return true;
+    });
+    if (menuOpened) {
+      await wait(200);
+      const clicked = await page.evaluate(() => {
+        const button = [...document.querySelectorAll('button')].find(
+          (item) => item.textContent?.trim() === 'Cabecera y pie',
+        );
+        if (!(button instanceof HTMLElement)) return false;
+        button.click();
+        return true;
+      });
+      if (!clicked) await clickChromeButton(page, title);
+    } else {
+      await clickChromeButton(page, title);
+    }
   }
   await page.waitForSelector('.wp-chrome-band--header', { timeout: 10000 });
   await page.waitForSelector('.wp-chrome-band--footer', { timeout: 10000 });
@@ -229,6 +250,7 @@ async function main() {
   let documentId = null;
   let templateId = null;
   let designId = null;
+  let originalDesignId = null;
 
   try {
     console.log('→ Login');
@@ -243,6 +265,17 @@ async function main() {
     await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 20000 });
     await wait(1200);
     documentId = page.url().match(/\/documents\/([0-9a-f-]{36})/)?.[1] ?? null;
+    if (!documentId) {
+      // El flujo nuevo abre `/documents/new` como borrador local. «Guardar»
+      // lo materializa y cambia la URL al documento real.
+      await page.click('button[aria-label="Guardar"]');
+      await page.waitForFunction(
+        () => /\/documents\/[0-9a-f-]{36}/.test(location.pathname),
+        { timeout: 20000 },
+      );
+      await wait(1200);
+      documentId = page.url().match(/\/documents\/([0-9a-f-]{36})/)?.[1] ?? null;
+    }
     assert(documentId, 'No se pudo obtener el id del documento desde la URL');
     const initial = await api.json(`/documents/${documentId}`);
     assert(initial.chrome.headerSource !== 'document', 'El documento nuevo no debería tener cabecera propia');
@@ -434,6 +467,7 @@ async function main() {
     console.log('→ Herencia y cambio de diseño en plantilla');
     const designs = await api.json('/designs');
     assert(designs.items.length > 0, 'No hay diseños para la prueba de plantilla');
+    originalDesignId = designs.items.find((item) => item.isCurrent)?.id ?? null;
     const baseDesign = await api.json(`/designs/${designs.items[0].id}`);
     const tokens = structuredClone(baseDesign.design.tokens);
     tokens.footer = {
@@ -451,6 +485,8 @@ async function main() {
       isShared: false,
     });
     designId = testDesign.design.id;
+    // El editor de plantillas dibuja con el diseño «en uso» de la cuenta.
+    await api.post(`/designs/${designId}/activate`, { isCurrent: true });
 
     const testTemplate = await api.post('/templates', {
       name: 'Plantilla chrome smoke',
@@ -555,8 +591,9 @@ async function main() {
     await page.goto(`${BASE}/templates/${templateId}`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('.doc-paged-flow .tiptap', { timeout: 20000 });
 
-    // Cambia el diseño de la plantilla a "sin diseño" y comprueba que la banda
-    // heredada se sincroniza con el pie por defecto.
+    // La interfaz nueva dibuja siempre con el diseño «en uso»: el selector
+    // por plantilla desapareció. Se comprueba que el aviso lo indica y que
+    // el pie heredado sigue siendo el del diseño activo.
     await page.evaluate(() => {
       const button = Array.from(document.querySelectorAll('aside button')).find(
         (item) => item.textContent?.trim() === 'Ajustes',
@@ -564,31 +601,23 @@ async function main() {
       button?.click();
     });
     await wait(400);
-    const changed = await page.evaluate(() => {
-      const selects = Array.from(document.querySelectorAll('select'));
-      const select = selects.find((item) =>
-        Array.from(item.options).some((option) => option.textContent?.includes('Sin diseño')),
-      );
-      if (!select) return false;
-      const option = Array.from(select.options).find((item) =>
-        item.textContent?.includes('Sin diseño'),
-      );
-      if (!option) return false;
-      select.selectedIndex = Array.from(select.options).indexOf(option);
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
+    const designInfo = await page.evaluate(() => {
+      const text = document.querySelector('aside')?.textContent ?? '';
+      return {
+        mentionsInUse: text.includes('diseño que está en uso'),
+        mentionsDesign: text.includes('Diseño chrome smoke'),
+      };
     });
-    assert(changed, 'No se encontró el selector de diseño');
-    await wait(700);
-    const changedFooter = await bandText(page, 'footer');
-    // Los tokens {page}/{total} se muestran resueltos en el editor (1 de 1).
     assert(
-      changedFooter.includes('Página') &&
-        changedFooter.includes('de') &&
-        !changedFooter.includes('PIE DE PLANTILLA UI'),
-      `La banda no se actualizó al cambiar de diseño: ${changedFooter}`,
+      designInfo.mentionsInUse && designInfo.mentionsDesign,
+      'La pestaña Ajustes no muestra el diseño en uso',
     );
-    await shot(page, '07-plantilla-sin-diseno');
+    const inheritedAfterSave = await bandText(page, 'footer');
+    assert(
+      inheritedAfterSave.includes('PIE DEL DISEÑO UI'),
+      `El pie heredado no se mantuvo tras guardar: ${inheritedAfterSave}`,
+    );
+    await shot(page, '07-plantilla-diseno-en-uso');
 
     console.log('\n✓ Cabecera y pie: UI, herencia, persistencia y exportación correctos');
   } catch (error) {
@@ -601,6 +630,13 @@ async function main() {
       if (templateId) await api.delete(`/templates/${templateId}`);
     } catch (error) {
       console.error('No se pudo borrar la plantilla temporal:', error.message);
+    }
+    try {
+      if (originalDesignId && originalDesignId !== designId) {
+        await api.post(`/designs/${originalDesignId}/activate`, { isCurrent: true });
+      }
+    } catch (error) {
+      console.error('No se pudo restaurar el diseño en uso:', error.message);
     }
     try {
       if (designId) await api.delete(`/designs/${designId}`);

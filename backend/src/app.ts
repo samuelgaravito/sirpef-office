@@ -11,6 +11,7 @@ import { applySpanishZodMessages } from './lib/validation.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { aiRoutes } from './modules/ai/routes.js';
 import { conversationRoutes } from './modules/ai/conversations.js';
+import { aiNodeRoutes } from './modules/ai/nodes/routes.js';
 import { designRoutes } from './modules/designs/routes.js';
 import { documentRoutes } from './modules/documents/routes.js';
 import { exportRoutes } from './modules/exports/routes.js';
@@ -84,6 +85,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(authRoutes, { prefix: '/api/auth' });
   await app.register(menuRoutes, { prefix: '/api/menus' });
   await app.register(aiRoutes, { prefix: '/api' });
+  await app.register(aiNodeRoutes, { prefix: '/api' });
   await app.register(conversationRoutes, { prefix: '/api' });
   await app.register(templateRoutes, { prefix: '/api/templates' });
   await app.register(numberingRoutes, { prefix: '/api/numbering' });

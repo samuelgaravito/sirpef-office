@@ -20,6 +20,7 @@ import {
   Minus,
   PanelLeft,
   PanelRight,
+  Pin,
   Quote,
   Redo2,
   SeparatorHorizontal,
@@ -275,6 +276,48 @@ function setLineHeight(value: string): void {
   applyToCurrentBlock((chain) =>
     value ? chain.setLineHeight(value) : chain.unsetLineHeight(),
   );
+}
+
+const keepTogetherActive = computed(() => {
+  void tick.value;
+  const parent = props.editor?.state.selection.$from.parent;
+  return (
+    (parent?.type.name === 'paragraph' || parent?.type.name === 'heading') &&
+    parent.attrs.keepTogether === true
+  );
+});
+
+/**
+ * Marca los bloques seleccionados para que no se partan entre páginas.
+ * Es útil para el bloque de firma de un certificado o un acta.
+ */
+function toggleKeepTogether(): void {
+  const editor = props.editor;
+  if (!editor) return;
+  const { state } = editor;
+  const { from, to, empty } = state.selection;
+  const targets: { pos: number; attrs: Record<string, unknown> }[] = [];
+
+  if (empty) {
+    const { $from } = state.selection;
+    const type = $from.parent.type.name;
+    if (type !== 'paragraph' && type !== 'heading') return;
+    targets.push({ pos: $from.before(), attrs: $from.parent.attrs });
+  } else {
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+        targets.push({ pos, attrs: node.attrs });
+      }
+    });
+  }
+
+  if (targets.length === 0) return;
+  const value = !targets.every((target) => target.attrs.keepTogether === true);
+  const tr = state.tr;
+  for (const target of targets) {
+    tr.setNodeMarkup(target.pos, undefined, { ...target.attrs, keepTogether: value });
+  }
+  editor.view.dispatch(tr);
 }
 
 function setColor(event: Event): void {
@@ -557,6 +600,15 @@ const lineHeightValue = computed(() => {
       @click="run((c) => c.insertPageBreak())"
     >
       <SeparatorHorizontal class="size-4" />
+    </button>
+    <button
+      type="button"
+      :class="['tool-btn', { 'is-active': keepTogetherActive }]"
+      title="Mantener el párrafo junto en la exportación"
+      :aria-pressed="keepTogetherActive"
+      @click="toggleKeepTogether"
+    >
+      <Pin class="size-4" />
     </button>
     <button type="button" class="tool-btn" title="Quitar formato" @click="run((c) => c.unsetAllMarks().clearNodes())">
       <Eraser class="size-4" />

@@ -93,7 +93,9 @@ try {
   );
 
   console.log('→ Insertar contenido de varias hojas');
-  await page.click('.doc-paged-flow .tiptap');
+  // La barra del asistente ocupa la parte inferior: enfocar un párrafo real
+  // evita que el clic central del editor caiga sobre el panel flotante.
+  await page.click('.doc-paged-flow .tiptap p');
   await pressCtrlEnd(page);
   for (let index = 0; index < 40; index += 1) {
     await page.keyboard.type(
@@ -373,6 +375,18 @@ try {
       `El interlineado no se aplicó al bloque: ${lineHeight}`,
     );
     console.log(`  · interlineado aplicado: ${lineHeight}`);
+
+    await page.click('button[title^="Mantener el párrafo junto"]');
+    await wait(300);
+    const keepTogether = await page.evaluate(() =>
+      Boolean(
+        document.querySelector(
+          '.doc-paged-flow .tiptap [data-keep-together="true"]',
+        ),
+      ),
+    );
+    assert(keepTogether, 'El bloque no se marcó como «mantener junto»');
+    console.log('  · bloque de firma marcado como indivisible');
   }
 
   await page.keyboard.down('Control');
