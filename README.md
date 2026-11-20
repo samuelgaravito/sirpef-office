@@ -201,6 +201,7 @@ producción añade `--profile tls` y define `SIRPEF_DOMAIN`.
 | `AI_TIMEOUT_MS` | `120000` | Espera máxima de las APIs alojadas (OpenAI, Anthropic, Gemini). |
 | `AI_LOCAL_TIMEOUT_MS` | `600000` | Espera máxima de los modelos locales (Ollama). Sin GPU un 7B tarda minutos en un documento. |
 | `AI_NUM_CTX` | `8192` | Contexto que se pide al proveedor local. Ollama usa 4 096 por defecto y **recorta el prompt por delante** (el modelo pierde las reglas y la plantilla). |
+| `AI_NODE_ENABLED` | `true` | Si un usuario tiene su equipo conectado por el túnel, la redacción se hace en su GPU. `false` desactiva los nodos y todo pasa por el proveedor del servidor. |
 
 El resto de variables (claves de IA, correo del admin del seed, Google Docs) está
 documentado en `backend/.env.example`. La URL de la API del frontend se configura en
@@ -625,6 +626,36 @@ exigen el driver NVIDIA **≥ 550** y, con el 535, caen a CPU sin más aviso que
 Para documentos completos conviene `qwen2.5:14b`: el 7B ignora el esquema y devuelve
 `data` vacío. El 14B entra en una GPU de 16 GB y rellena destinatario, remitente, asunto
 y fecha.
+
+### IA en el equipo del usuario (nodos)
+
+El servidor de producción no necesita GPU: cada equipo puede poner la suya. En
+**Ajustes → Asistente de IA → Mi equipo** se crea un nodo y se copia el token (se muestra
+una sola vez). En la PC con Ollama se despliega [`deploy/ai-node`](deploy/ai-node):
+
+```bash
+cd deploy/ai-node
+cp .env.example .env      # SD_SERVER y SD_TOKEN
+./install.sh
+```
+
+El agente abre una conexión **saliente** (WSS) hacia `/api/ai/node` y reenvía los trabajos
+a su Ollama en Docker. No se publica ningún puerto y Ollama no queda expuesto a la red.
+
+- Si el equipo está conectado, la IA se atiende **en su GPU**: el servidor arma el prompt y
+  sanea el resultado, igual que con cualquier proveedor. La interfaz lo muestra como
+  `IA · mi equipo` en la cabecera.
+- Si el equipo se apaga a mitad de una redacción, se reintenta una vez en el proveedor del
+  servidor; si tampoco hay, se usa el modo manual. La aplicación nunca se bloquea.
+- El administrador ve el **inventario de todos los equipos** en Ajustes y puede revocarlos.
+  El dueño puede **rotar el token** (el agente se desconecta hasta actualizar su `.env`).
+- El agente reporta versión de Ollama, modelos, VRAM y tokens/s. Es un **auto-reporte** para
+  elegir equipo y mostrar estado, no un permiso.
+- Un equipo atiende un trabajo a la vez; el resto se encola.
+- El registro de conexiones vive en memoria: con **una** instancia de API es suficiente. Si
+  se escala horizontalmente, hace falta sticky routing o un registro compartido.
+
+Regresión sin GPU ni Ollama: `npm run smoke:ai-node` (necesita PostgreSQL).
 
 ## Exportación
 

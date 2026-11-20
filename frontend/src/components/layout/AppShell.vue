@@ -14,6 +14,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { MENU_CATALOG } from '@sirpefoffice/shared';
 
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
+import AiModeBadge from '@/components/layout/AiModeBadge.vue';
 import CommandPalette from '@/components/layout/CommandPalette.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
@@ -206,6 +207,9 @@ async function signOut(): Promise<void> {
         >
           <Search class="size-4" />
         </button>
+
+        <!-- Modo de IA: mi equipo, servidor o manual -->
+        <AiModeBadge />
 
         <!-- Bandeja -->
         <button

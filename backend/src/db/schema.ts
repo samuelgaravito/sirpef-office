@@ -7,6 +7,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -528,6 +529,37 @@ export const appSettings = pgTable('app_settings', {
 });
 
 /**
+ * Equipos con Ollama local conectados por el túnel.
+ *
+ * Cada fila es una PC que ofrece su GPU. El token se guarda **solo hasheado**:
+ * se muestra una vez al crearlo y no se puede recuperar. `revoked_at` corta el
+ * acceso aunque el equipo siga encendido y con el agente en marcha.
+ *
+ * Las capacidades (`models`, `gpu`, `vram_gb`…) son un **auto-reporte** del
+ * agente: sirven para elegir equipo y mostrar estado, no como permiso.
+ */
+export const aiNodes = pgTable(
+  'ai_nodes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    tokenHash: text('token_hash').notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    ollamaVersion: text('ollama_version'),
+    models: jsonb('models').$type<string[]>().notNull().default([]),
+    gpu: boolean('gpu').notNull().default(false),
+    vramGb: real('vram_gb'),
+    tokensPerSecond: real('tokens_per_second'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('ai_nodes_token_unique_idx').on(t.tokenHash), index('ai_nodes_user_idx').on(t.userId)],
+);
+
+/**
  * Conversaciones del chat de consulta.
  *
  * El historial guarda el **plan** de cada respuesta, no las cifras: al abrirlo
@@ -700,3 +732,4 @@ export type DocumentMessageRecipientRow = typeof documentMessageRecipients.$infe
 export type AiConversationRow = typeof aiConversations.$inferSelect;
 export type AiConversationMessageRow = typeof aiConversationMessages.$inferSelect;
 export type SavedChartRow = typeof savedCharts.$inferSelect;
+export type AiNodeRow = typeof aiNodes.$inferSelect;

@@ -12,7 +12,9 @@ mensajes de usuario que añadas también.
 
 - **No es un workspace npm.** No hay `package.json` en la raíz. Hay **dos apps
   independientes** (`backend/` y `frontend/`), cada una con su `package.json`,
-  `package-lock.json` y `node_modules`. Ejecuta `npm` siempre desde una de las dos.
+  `package-lock.json` y `node_modules`, más **`agent/`**: el agente de IA local, un
+  proyecto mínimo aparte (solo depende de `ws`) que se despliega como contenedor por
+  equipo. Ejecuta `npm` siempre desde una de esas carpetas.
 - **`shared/src/` es la fuente única** de tipos, contratos y extensiones TipTap.
   `scripts/sync-shared.mjs` la **copia** a `backend/src/shared/` y `frontend/src/shared/`.
   Esas copias **están en `.gitignore` y se regeneran**: **nunca las edites**, edita
@@ -182,6 +184,6 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
   flujos, API y render (léelo antes de tocar render o numeración). `docs/SVA.md` = integración
   con SVA y sus modos de autenticación (`local` / `hybrid` / `sva`).
 - La tabla de variables del README y `docs/ARQUITECTURA.md` están **al día** con el código
-  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **19 tablas**), pero
+  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **20 tablas**), pero
   compruébalo: si vuelve a haber discrepancia, **manda el código ejecutable**.
 - Si el README y el código discrepan, **manda el código ejecutable**.

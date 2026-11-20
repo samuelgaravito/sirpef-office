@@ -33,6 +33,12 @@ const optionalBool = z
     return v === 'true' || v === '1';
   });
 
+/** Booleano que arranca en `true` cuando la variable no está definida. */
+const boolTrueByDefault = z
+  .string()
+  .optional()
+  .transform((v) => (v === undefined || v.trim() === '' ? true : v === 'true' || v === '1'));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3101),
@@ -107,6 +113,12 @@ const envSchema = z.object({
    * tardar varios minutos y no debe cortarse antes de tiempo.
    */
   AI_LOCAL_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
+  /**
+   * Si un usuario tiene un equipo conectado por el túnel, la IA se atiende en
+   * esa máquina en lugar del proveedor del servidor. Con `false` el túnel
+   * queda inerte y todo sigue yendo al proveedor configurado.
+   */
+  AI_NODE_ENABLED: boolTrueByDefault,
 
   CHROME_PATH: z.string().default('/usr/bin/google-chrome'),
   EXPORT_DIR: z.string().default('./data/exports'),

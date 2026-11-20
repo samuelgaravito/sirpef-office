@@ -593,9 +593,9 @@
     grid-template-rows: auto 1fr auto;
   }
 
-  /* Lienzo claro del editor: la hoja blanca se separa por su sombra. */
+  /* Escritorio de trabajo: imita el área gris de un lector de PDF. */
   .doc-desk {
-    background: #eef1f5;
+    background: #525659;
   }
 
   :is(.doc-sheet, .doc-paged-flow) .tiptap {
@@ -764,6 +764,10 @@
     user-select: none;
   }
 
+  .doc-desk .doc-page-card__label {
+    color: rgb(255 255 255 / 0.62);
+  }
+
   .doc-page-card > .doc-page-body {
     min-height: 0;
   }
@@ -842,6 +846,30 @@
   .doc-mode-toggle button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+
+  /* Contraste de la barra inferior sobre el escritorio oscuro. */
+  .doc-desk .doc-sheet-meta {
+    color: rgb(255 255 255 / 0.72);
+  }
+
+  .doc-desk .doc-sheet-meta__warn {
+    background: rgb(180 83 9 / 0.22);
+    color: #fde68a;
+  }
+
+  .doc-desk .doc-mode-toggle {
+    border-color: rgb(255 255 255 / 0.22);
+    background: rgb(0 0 0 / 0.22);
+  }
+
+  .doc-desk .doc-mode-toggle button {
+    color: rgb(255 255 255 / 0.72);
+  }
+
+  .doc-desk .doc-mode-toggle button.is-active {
+    background: rgb(255 255 255 / 0.16);
+    color: #fff;
   }
 
   .doc-sheet > .doc-body-editor {
