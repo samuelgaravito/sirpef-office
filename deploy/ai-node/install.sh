@@ -44,8 +44,23 @@ if [ -z "${SD_TOKEN:-}" ]; then
   exit 1
 fi
 if [ -z "${SD_SERVER:-}" ]; then
-  echo "✗ Falta SD_SERVER en .env (por ejemplo wss://sirpefoffice.mppef.gob.ve/api/ai/node)."
+  echo "✗ Falta SD_SERVER en .env (por ejemplo ws://sirpefoffice.mppef.gob.ve:8090/api/ai/node)."
   exit 1
+fi
+
+# Si el paquete trae la imagen del agente y aún no está cargada, se carga sola:
+# en la PC destino basta con ./install.sh.
+AGENT_IMAGE="${AI_NODE_IMAGE:-sirpef-ai-node:1.0}"
+if ! docker image inspect "$AGENT_IMAGE" >/dev/null 2>&1; then
+  TARBALL="$(ls -1 sirpef-ai-node-*.tar.gz 2>/dev/null | head -n 1 || true)"
+  if [ -n "$TARBALL" ]; then
+    echo "· Cargando la imagen del agente desde $TARBALL…"
+    gunzip -c "$TARBALL" | docker load
+  else
+    echo "✗ No está la imagen $AGENT_IMAGE y el paquete no incluye el .tar.gz."
+    echo "  Cópialo junto a este script o cárgalo con: gunzip -c <archivo>.tar.gz | docker load"
+    exit 1
+  fi
 fi
 
 COMPOSE="${COMPOSE:-}"
