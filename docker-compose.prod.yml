@@ -57,8 +57,10 @@ services:
       DATABASE_URL: "${DATABASE_URL:?define DATABASE_URL en .env.production}"
       CHROME_PATH: /usr/bin/chromium
       EXPORT_DIR: /data/exports
+      SIGNATURE_DIR: /data/signatures
     volumes:
       - exports:/data/exports
+      - signatures:/data/signatures
     expose:
       - "3101"
     healthcheck:
@@ -127,5 +129,6 @@ services:
 volumes:
   pgdata:
   exports:
+  signatures:
   caddy_data:
   caddy_config:

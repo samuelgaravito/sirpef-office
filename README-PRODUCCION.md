@@ -121,7 +121,7 @@ libres y el DNS debe apuntar al servidor.
 
 - En producción: `NODE_ENV=production`, `AUTH_MODE=sva` y las claves reales de SVA.
 - Las `VITE_*` se congelan al construir la imagen `web`: si cambian, reconstruye.
-- `pgdata` guarda PostgreSQL y `exports` los PDF temporales.
+- `pgdata` guarda PostgreSQL; `exports` los PDF temporales y `signatures` los PDF firmados y certificados. **Haz copia de `signatures`**: es el soporte de auditoría de las firmas.
 - El contenedor `db` no publica puertos; solo es accesible desde la red de Compose.
 - El seed es idempotente: puede ejecutarse varias veces sin duplicar datos.
 

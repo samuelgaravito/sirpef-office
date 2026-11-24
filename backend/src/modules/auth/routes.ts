@@ -41,6 +41,19 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+const mobileSvaSchema = z.object({
+  token: z.string().min(1).optional(),
+});
+
+const mobileRefreshSchema = z.object({
+  refreshToken: z.string().min(20, 'El token de sesión no es válido'),
+});
+
+const mobileLocalSchema = z.object({
+  email: z.email({ message: 'Correo inválido' }).max(200).transform((v) => v.trim().toLowerCase()),
+  password: z.string().min(1),
+});
+
 const updateMeSchema = z
   .object({
     name: z.string().trim().min(2).max(120).optional(),
@@ -92,6 +105,46 @@ async function issueSession(
 
   setAuthCookies(reply, accessToken, refresh.token, expiresAt.getTime() - Date.now());
   return { user: toPublicUser(user), accessToken };
+}
+
+/**
+ * Emite una sesión para clientes nativos. A diferencia de la web, no usa
+ * cookies: devuelve el refresh token en el cuerpo para que la app lo guarde
+ * cifrado en el Keystore.
+ */
+async function issueMobileSession(
+  request: FastifyRequest,
+  user: UserRow,
+  refreshDays = env.REFRESH_TOKEN_TTL_DAYS,
+): Promise<{
+  user: ReturnType<typeof toPublicUser>;
+  accessToken: string;
+  refreshToken: string;
+  refreshExpiresAt: string;
+}> {
+  const accessToken = await signAccessToken({
+    sub: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+  });
+  const refresh = generateRefreshToken();
+  const expiresAt = refreshTokenExpiry(refreshDays);
+
+  await db.insert(refreshTokens).values({
+    userId: user.id,
+    tokenHash: refresh.hash,
+    expiresAt,
+    userAgent: request.headers['user-agent'] ?? null,
+    ip: request.ip,
+  });
+
+  return {
+    user: toPublicUser(user),
+    accessToken,
+    refreshToken: refresh.token,
+    refreshExpiresAt: expiresAt.toISOString(),
+  };
 }
 
 function svaError(error: unknown): AppError {
@@ -208,6 +261,115 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // El conflicto de correo ya viene tipado desde `upsertSvaUser`.
       throw error;
     }
+  });
+
+  /**
+   * Login nativo local, solo para desarrollo y para el admin de emergencia.
+   * En `AUTH_MODE=sva` queda deshabilitado, igual que el login web local.
+   */
+  app.post(
+    '/mobile/local',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (request) => {
+      if (env.AUTH_MODE === 'sva') {
+        throw forbidden('El acceso local está deshabilitado: inicia sesión en SVA');
+      }
+
+      const body = mobileLocalSchema.parse(request.body);
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(sql`lower(${users.email}) = ${body.email}`)
+        .limit(1);
+
+      if (!user) throw unauthorized('Correo o contraseña incorrectos');
+      if (!user.isActive) throw unauthorized('Cuenta deshabilitada');
+      if (env.AUTH_MODE === 'hybrid' && user.authProvider !== 'local') {
+        throw unauthorized('Tu cuenta se administra en SVA; entra desde el portal SVA');
+      }
+      if (!user.passwordHash) throw unauthorized('Correo o contraseña incorrectos');
+
+      const valid = await verifyPassword(body.password, user.passwordHash);
+      if (!valid) throw unauthorized('Correo o contraseña incorrectos');
+
+      return await issueMobileSession(request, user, env.REFRESH_TOKEN_TTL_DAYS);
+    },
+  );
+
+  /**
+   * Login nativo: canjea un token de SVA por una sesión local sin cookies.
+   * La app envía `{ token }` o la cabecera `svatoken`.
+   */
+  app.post(
+    '/mobile/sva',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request) => {
+      if (env.AUTH_MODE === 'local') {
+        throw notFound('La autenticación con SVA no está habilitada');
+      }
+
+      const body = mobileSvaSchema.parse(request.body ?? {});
+      const token = body.token ?? svaTokenFrom(request);
+      if (!token) throw unauthorized('No hay sesión de SVA. Inicia sesión en el portal SVA.');
+
+      try {
+        const identity = await verifySvaSession(token);
+        const user = await upsertSvaUser(identity);
+        return await issueMobileSession(request, user, env.SVA_REFRESH_TOKEN_TTL_DAYS);
+      } catch (error) {
+        if (error instanceof SvaAccessError || error instanceof SvaUnavailableError) {
+          throw svaError(error);
+        }
+        throw error;
+      }
+    },
+  );
+
+  /** Renueva la sesión nativa rotando el refresh token. */
+  app.post('/mobile/refresh', async (request) => {
+    const body = mobileRefreshSchema.parse(request.body ?? {});
+    const tokenHash = hashToken(body.refreshToken);
+
+    const [stored] = await db
+      .select()
+      .from(refreshTokens)
+      .where(
+        and(
+          eq(refreshTokens.tokenHash, tokenHash),
+          isNull(refreshTokens.revokedAt),
+          gt(refreshTokens.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+
+    if (!stored) throw unauthorized('Sesión expirada, vuelve a iniciar sesión');
+
+    const [user] = await db.select().from(users).where(eq(users.id, stored.userId)).limit(1);
+    if (!user) throw unauthorized('Usuario no encontrado');
+    if (!user.isActive) throw unauthorized('Cuenta deshabilitada');
+
+    await db
+      .update(refreshTokens)
+      .set({ revokedAt: new Date() })
+      .where(eq(refreshTokens.id, stored.id));
+
+    const days =
+      user.authProvider === 'sva'
+        ? env.SVA_REFRESH_TOKEN_TTL_DAYS
+        : env.REFRESH_TOKEN_TTL_DAYS;
+    return await issueMobileSession(request, user, days);
+  });
+
+  /** Revoca la sesión nativa sin depender de cookies. */
+  app.post('/mobile/logout', async (request) => {
+    const body = mobileRefreshSchema.partial().parse(request.body ?? {});
+    if (body.refreshToken) {
+      await db
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(eq(refreshTokens.tokenHash, hashToken(body.refreshToken)));
+    }
+    return { ok: true };
   });
 
   /** Fuerza una sincronización manual con SVA (solo administradores). */

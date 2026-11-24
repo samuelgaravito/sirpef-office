@@ -17,6 +17,7 @@ import { documentRoutes } from './modules/documents/routes.js';
 import { exportRoutes } from './modules/exports/routes.js';
 import { inboxRoutes } from './modules/inbox/routes.js';
 import { menuRoutes } from './modules/menus/routes.js';
+import { mobileRoutes } from './modules/mobile/routes.js';
 import { numberingRoutes } from './modules/numbering/routes.js';
 import { realtimeRoutes } from './modules/realtime/routes.js';
 import { statsRoutes } from './modules/stats/routes.js';
@@ -93,6 +94,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(documentRoutes, { prefix: '/api/documents' });
   await app.register(exportRoutes, { prefix: '/api/documents' });
   await app.register(inboxRoutes, { prefix: '/api/inbox' });
+  await app.register(mobileRoutes, { prefix: '/api' });
   await app.register(statsRoutes, { prefix: '/api/stats' });
   await app.register(chartRoutes, { prefix: '/api/stats' });
   await app.register(realtimeRoutes, { prefix: '/api' });

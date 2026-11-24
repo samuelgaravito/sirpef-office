@@ -25,8 +25,10 @@ import { assertDocumentDataComplete } from '../../lib/document-data.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
 import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
-import { saveVersion, toSummary } from '../documents/routes.js';
+import { saveVersion } from '../../lib/versions.js';
+import { toSummary } from '../documents/routes.js';
 import { publishInboxEvent } from '../realtime/events.js';
+import { approveMessage } from './approve.js';
 
 /* ───────────────────────────── Esquemas ───────────────────────────── */
 
@@ -686,132 +688,22 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = approveSchema.parse(request.body);
 
-    const [message] = await db
-      .select()
-      .from(documentMessages)
-      .where(eq(documentMessages.id, id))
-      .limit(1);
-
-    if (!message) throw notFound('Mensaje no encontrado');
-    if (message.status !== 'pending_approval') {
-      throw conflict('Este envío ya fue procesado');
-    }
-
-    const [document] = await db
-      .select()
-      .from(documents)
-      .where(eq(documents.id, message.documentId))
-      .limit(1);
-
-    if (!document || document.deletedAt) throw notFound('Documento no encontrado');
-    assertDocumentMutable(document);
-    await assertDocumentDataComplete(document);
-
-    if (document.version !== body.expectedVersion) {
-      throw conflict('El documento cambió desde que lo abriste', {
-        currentVersion: document.version,
-      });
-    }
-
-    const recipientIds = body.recipientIds
-      ? await validateRecipients(body.recipientIds, null)
-      : null;
-
-    const now = new Date();
-    let assignedDocNumber: string | null = null;
-    let currentRecipients: string[] = [];
-
-    await db.transaction(async (tx) => {
-      if (recipientIds) {
-        await tx
-          .delete(documentMessageRecipients)
-          .where(eq(documentMessageRecipients.messageId, id));
-        await tx
-          .insert(documentMessageRecipients)
-          .values(recipientIds.map((userId) => ({ messageId: id, userId })));
-      }
-
-      currentRecipients = recipientIds
-        ? recipientIds
-        : (
-            await tx
-              .select({ userId: documentMessageRecipients.userId })
-              .from(documentMessageRecipients)
-              .where(eq(documentMessageRecipients.messageId, id))
-          ).map((row) => row.userId);
-
-      if (currentRecipients.length === 0) {
-        throw badRequest('El envío no tiene destinatarios');
-      }
-
-      await tx
-        .update(documentMessages)
-        .set({
-          status: 'sent',
-          subject: body.subject ?? message.subject,
-          body: body.body ?? message.body,
-          approvedById: user.sub,
-          approvedAt: now,
-          sentAt: now,
-          allowSenderExport: body.allowSenderExport,
-          documentVersion: document.version,
-          updatedAt: now,
-        })
-        .where(eq(documentMessages.id, id));
-
-      await tx
-        .update(documents)
-        .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
-        .where(eq(documents.id, document.id));
-
-      // Aprobación: el memo se sella y recibe su número correlativo de forma
-      // atómica con el cambio de estado. Si ya tenía número, es idempotente.
-      assignedDocNumber = await numberDocumentInTx(tx, document.id);
-
-      await tx
-        .insert(documentShares)
-        .values(
-          currentRecipients.map((userId) => ({
-            documentId: document.id,
-            userId,
-            permission: 'viewer' as const,
-          })),
-        )
-        .onConflictDoNothing();
+    const result = await approveMessage({
+      user,
+      messageId: id,
+      expectedVersion: body.expectedVersion,
+      subject: body.subject,
+      body: body.body,
+      allowSenderExport: body.allowSenderExport,
+      recipientIds: body.recipientIds,
     });
 
-    await saveVersion(document.id, user.sub, 'manual', 'Aprobado y enviado');
-    await logActivity(user.sub, 'document', document.id, 'approved', {
-      messageId: id,
-      version: document.version,
-    });
-    await logActivity(user.sub, 'document', document.id, 'sent', { messageId: id });
-
-    const subject = body.subject ?? message.subject;
-    // Los destinatarios reciben el documento ya oficializado.
-    await publishInboxEvent({
-      type: 'inbox.message.approved',
-      userIds: currentRecipients,
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject,
-      actorName: user.name,
+    return {
+      ok: true,
+      id,
       status: 'sent',
-    });
-    // El remitente recibe el resultado de su solicitud.
-    await publishInboxEvent({
-      type: 'inbox.result.approved',
-      userIds: [message.senderId],
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject,
-      actorName: user.name,
-      status: 'sent',
-    });
-
-    return { ok: true, id, status: 'sent', docNumber: assignedDocNumber };
+      docNumber: result.docNumber,
+    };
   });
 
   /** Devuelve el documento al asistente con un motivo. */

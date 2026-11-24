@@ -5,16 +5,18 @@ página, numeración correlativa, edición de escritorio (autoguardado + histori
 exportación a PDF/DOCX/HTML y flujo de aprobación por bandeja.
 
 Stack: **Fastify 5 + Drizzle + PostgreSQL 16** (backend) · **Vue 3 + Vite 6 + TipTap 3**
-(frontend). Todo el código, los mensajes de UI y la documentación están **en español**: los
-mensajes de usuario que añadas también.
+(frontend) · **Kotlin 2 + Jetpack Compose** (app Android `mobile/`). Todo el código, los
+mensajes de UI y la documentación están **en español**: los mensajes de usuario que añadas
+también.
 
 ## Forma del repo (lo que más confunde)
 
-- **No es un workspace npm.** No hay `package.json` en la raíz. Hay **dos apps
-  independientes** (`backend/` y `frontend/`), cada una con su `package.json`,
-  `package-lock.json` y `node_modules`, más **`agent/`**: el agente de IA local, un
-  proyecto mínimo aparte (solo depende de `ws`) que se despliega como contenedor por
-  equipo. Ejecuta `npm` siempre desde una de esas carpetas.
+- **No es un workspace npm.** No hay `package.json` en la raíz. Hay **tres apps
+  independientes**: `backend/` y `frontend/` (cada una con su `package.json`,
+  `package-lock.json` y `node_modules`) y **`mobile/`** (Gradle/Kotlin, sin npm). Además
+  está **`agent/`**: el agente de IA local, un proyecto mínimo aparte (solo depende de
+  `ws`) que se despliega como contenedor por equipo. Ejecuta `npm` siempre desde una de
+  las carpetas Node; la app Android se compila con Gradle.
 - **`shared/src/` es la fuente única** de tipos, contratos y extensiones TipTap.
   `scripts/sync-shared.mjs` la **copia** a `backend/src/shared/` y `frontend/src/shared/`.
   Esas copias **están en `.gitignore` y se regeneran**: **nunca las edites**, edita
@@ -42,6 +44,11 @@ cd frontend && npm run dev     # Vite en :5173 (proxy /api → :3101)
 cd backend  && npm run typecheck   # tsc --noEmit
 cd frontend && npm run typecheck   # vue-tsc --noEmit
 cd frontend && npm run build       # vue-tsc + bundle de Vite
+
+# App Android (requiere JDK 17 con jlink y Android SDK 35)
+cd mobile && ./gradlew :app:testDebugUnitTest
+cd mobile && ./gradlew :app:lintDebug
+cd mobile && ./gradlew :app:assembleDebug
 ```
 
 - **La API no se compila**: corre TypeScript directo con `tsx` (también en producción:
@@ -52,6 +59,9 @@ cd frontend && npm run build       # vue-tsc + bundle de Vite
   No subas Vite sin revisar ese `override`.
 - La API lee `.env` desde `process.cwd()` y, como respaldo, `../.env`; si arrancas desde
   otra carpeta puede cargar el entorno equivocado.
+- La app Android usa **JDK 17** (el `jlink` del JRE no basta) y Android SDK 35. Las URLs
+  de SVA y de la API se pasan con `-PsvaBaseUrl` y `-PsirpefBaseUrl`; por defecto apuntan
+  al emulador (`10.0.2.2`). Ver `docs/MOVIL.md`.
 
 ## Migraciones y datos
 
@@ -81,6 +91,11 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
 - `npm run smoke:ai-conversations` prueba el historial y los informes guardados contra la API y
   la base reales: crear, listar, reconstruir, renombrar, borrar, guardar/ejecutar/borrar un
   informe y comprobar el 404 de otro usuario.
+- `npm run smoke:mobile-auth` levanta un SVA simulado en un puerto efímero y prueba el
+  canje de sesión nativa y `/api/mobile/bootstrap`. **No necesita el SVA real.**
+- `npm run smoke:mobile-sign` prueba la firma móvil completa contra **PostgreSQL y Chrome
+  reales**: refresh/logout nativo, registro de clave EC, challenge, aprobación + firma,
+  PDF sellado, certificado y verificación pública. Limpia sus datos y archivos al final.
 - `npm run smoke:*` restantes (inbox, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean
