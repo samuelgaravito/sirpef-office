@@ -764,6 +764,33 @@
     user-select: none;
   }
 
+  /* Marca de agua de memos anulados, repetida por hoja en el editor. */
+  .doc-page-card > .doc-watermark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    z-index: 0;
+  }
+
+  .doc-page-card > .doc-watermark span {
+    transform: rotate(-45deg);
+    border: 4px solid currentColor;
+    border-radius: 4px;
+    padding: 0.06em 0.24em;
+    color: rgb(185 28 28 / 0.16);
+    font-size: 72pt;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
   .doc-desk .doc-page-card__label {
     color: rgb(255 255 255 / 0.62);
   }

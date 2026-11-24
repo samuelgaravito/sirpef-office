@@ -223,6 +223,14 @@ document_counters (series_id, year) → secuencia emitida al oficializar
      posibilidad de edición ni exportación por parte del asistente.
    Aparece en **Enviados** con el filtro «Rechazados» y el remitente recibe el
    aviso (badge, fila **Nuevo** y toast de rechazo).
+7. **Anulación.** Solo el administrador que aprobó un memo puede dejarlo sin
+   efecto (`POST /api/inbox/:id/annul`). El mensaje pasa a `cancelled` con
+   `annulled_at`/`annulled_reason` y el documento a `cancelled`, **conservando su
+   número correlativo** y el sellado (`locked_at`/`locked_by`): sigue en solo
+   lectura. Se guarda una versión «Anulado» y actividad `annulled`; el memo deja
+   de aparecer en la bandeja de los destinatarios y solo el aprobador y el
+   remitente conservan el registro, con el filtro «Anulados». El HTML, el PDF y
+   el DOCX de un memo anulado llevan la marca de agua **«ANULADO»**.
 
 ### Numeración
 
@@ -529,6 +537,10 @@ Genera un documento completo y autocontenido:
   cabecera y el pie permanezcan visibles aunque el contenido supere una página. Es un
   recorte exclusivo de miniaturas: el HTML completo, el editor, el PDF y el DOCX conservan
   todo el contenido.
+- `watermark` pinta la capa `.doc-watermark` en cada hoja física (texto «ANULADO» en
+  diagonal). Se activa cuando el documento está `cancelled`, así que aparece igual en la
+  vista previa, las miniaturas, el HTML descargado y el PDF. En DOCX se traduce a una
+  `TextWatermark` nativa de Word en la cabecera.
 
 ### 6.3 PDF
 
@@ -861,7 +873,7 @@ mensaje.
 
 Eventos (`shared/src/realtime.ts`): `connection.ready`, `inbox.message.created`,
 `inbox.message.pending`, `inbox.message.approved`, `inbox.result.approved`,
-`inbox.result.rejected` e `inbox.message.cancelled`.
+`inbox.result.rejected`, `inbox.message.cancelled` e `inbox.message.annulled`.
 
 **Proxy.** El canal viaja por `/api/`, así que el proxy de producción tiene que reenviar
 el *upgrade*: Nginx necesita `proxy_set_header Upgrade` y `proxy_set_header Connection`
@@ -1150,13 +1162,14 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `GET` | `/documents/:id/html?preview=1` | Vista previa dentro de la app (cualquier lector). |
 | `GET` | `/documents/:id/html` | Documento completo: exige permiso de exportación. |
 | `GET` | `/documents/:id/export/:format` | `pdf`, `docx`, `html`. Exige permiso de exportación: el administrador según las reglas del envío; el asistente solo con `allow_sender_export`. |
-| `GET` | `/inbox?scope=received\|sent\|approved\|rejected&filter=all\|pending\|sent&status=all\|pending_approval\|sent\|rejected\|cancelled` | Bandeja paginada. `sent` incluye los envíos propios y los memos aprobados/rechazados por el usuario. `filter` solo aplica a `received`; `status` solo a `sent`. `pending` requiere administrador. |
+| `GET` | `/inbox?scope=received\|sent\|approved\|rejected&filter=all\|pending\|sent&status=all\|pending_approval\|sent\|rejected\|cancelled` | Bandeja paginada. `sent` incluye los envíos propios, los memos aprobados/rechazados por el usuario y los que él mismo anuló. `filter` solo aplica a `received`; `status` solo a `sent`. `pending` requiere administrador. |
 | `GET` | `/inbox/unread-count` | Contadores de no leídos, pendientes de aprobación y resultados propios sin ver, con desglose `sections` (Recibidos, Enviados, Aprobados, Rechazados) y el último resultado. |
 | `GET` | `/inbox/:id` | Detalle del mensaje, destinatarios y memo adjunto. |
 | `POST` | `/inbox` | Crea el envío: `pending_approval` para `member`, envío directo para `admin`. |
 | `POST` | `/inbox/:id/approve` | El jefe aprueba, sella el memo y lo envía. |
 | `POST` | `/inbox/:id/reject` | Rechaza con motivo. Acepta `allowEdit` (por defecto `true`): con edición el memo vuelve a borrador; sin edición queda cerrado y bloqueado. |
 | `POST` | `/inbox/:id/cancel` | El remitente cancela un envío pendiente. |
+| `POST` | `/inbox/:id/annul` | El administrador que aprobó el memo lo anula: `expectedVersion` y `reason` opcional. Conserva el número y el bloqueo; el memo deja de verse en la bandeja de los destinatarios. |
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
 | `GET` | `/stats/overview?dateFrom=<ISO>&dateTo=<ISO>` | Resumen del espacio (propios + compartidos, mismo criterio que `/documents?scope=all`): totales, plantillas más usadas, actividad mensual y resultados de aprobación. El filtro limita por fecha de creación de documentos, plantillas y diseños; sin fechas abarca todo el histórico. |
 | `GET` | `/stats/panel?dateFrom=<ISO>&dateTo=<ISO>&docType=&status=&scope=&templateId=&q=&dateField=` | Panel de un conjunto de documentos: totales, desglose por tipo y estado, actividad mensual y plantillas más usadas. Es el mismo motor que alimenta el dashboard del chat de consulta. |

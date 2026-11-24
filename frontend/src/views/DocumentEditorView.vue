@@ -60,6 +60,7 @@ import { takeAiPrompt } from '@/lib/ai-prompt';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
 import {
+  ANNULED_WATERMARK,
   buildAutoDescription,
   clampChromeWidth,
   contentHasVariable,
@@ -841,7 +842,7 @@ async function load(): Promise<void> {
     status.value = response.document.status;
     permission.value = response.document.permission;
     version.value = response.document.version;
-    locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent';
+    locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent' || response.document.status === 'cancelled';
     canExport.value = response.canExport;
     pendingMessage.value = response.document.pendingMessage ?? null;
     lastRejection.value = response.document.lastRejection ?? null;
@@ -2288,6 +2289,7 @@ onBeforeUnmount(() => {
               }"
               :chrome-open="chromeOpen"
               :editable="canEdit"
+              :watermark="status === 'cancelled' ? ANNULED_WATERMARK : null"
               :active-chrome="activeChrome"
               @toggle="toggleChrome"
               @height="setChromeHeight"

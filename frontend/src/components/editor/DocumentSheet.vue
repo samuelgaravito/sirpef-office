@@ -31,6 +31,8 @@ const props = defineProps<{
   chromeOpen: boolean;
   editable: boolean;
   activeChrome?: 'body' | 'header' | 'footer';
+  /** Marca de agua que se repite en cada hoja (memos anulados). */
+  watermark?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -518,6 +520,10 @@ onBeforeUnmount(() => {
               @width="emit('width', 'footer', $event)"
               @reset="emit('reset', 'footer')"
             />
+          </div>
+
+          <div v-if="watermark" class="doc-watermark" aria-hidden="true">
+            <span>{{ watermark }}</span>
           </div>
         </div>
       </div>
