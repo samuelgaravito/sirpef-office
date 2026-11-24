@@ -58,6 +58,7 @@ import {
 import { badRequest, conflict, forbidden, internal, locked, notFound } from '../../lib/errors.js';
 import { resolveTemplateDesign } from '../../lib/active-design.js';
 import { sameJson } from '../../lib/json.js';
+import { saveVersion } from '../../lib/versions.js';
 import {
   chromeOverrideSchema,
   docTypeSchema,
@@ -134,66 +135,6 @@ const OFFICIAL_STATUSES: ReadonlyArray<(typeof DOCUMENT_STATUSES)[number]> = [
 ];
 
 /* ─────────────────────── Guardado de versiones ─────────────────────── */
-
-/**
- * Guarda un snapshot en el historial. Para no llenar la tabla con un registro
- * por cada autoguardado, si la última versión es 'auto' y tiene menos de
- * `AUTO_MERGE_MS`, se reemplaza en lugar de insertar otra.
- */
-const AUTO_MERGE_MS = 90_000;
-
-async function saveVersion(
-  documentId: string,
-  userId: string,
-  kind: 'auto' | 'manual' | 'ai' | 'export' | 'restore',
-  note = '',
-): Promise<void> {
-  const [doc] = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1);
-  if (!doc) return;
-
-  const [last] = await db
-    .select()
-    .from(documentVersions)
-    .where(eq(documentVersions.documentId, documentId))
-    .orderBy(desc(documentVersions.version))
-    .limit(1);
-
-  const snapshot = {
-    content: doc.content,
-    header: doc.header,
-    footer: doc.footer,
-    data: doc.data,
-    title: doc.title,
-    kind,
-    note,
-    createdBy: userId,
-  };
-
-  if (last && last.version === doc.version) {
-    await db.update(documentVersions).set(snapshot).where(eq(documentVersions.id, last.id));
-    return;
-  }
-
-  const canMerge =
-    kind === 'auto' &&
-    last?.kind === 'auto' &&
-    Date.now() - last.createdAt.getTime() < AUTO_MERGE_MS;
-
-  if (canMerge && last) {
-    // Reemplaza la versión auto reciente (misma fila, nuevo contenido)
-    await db
-      .update(documentVersions)
-      .set({ ...snapshot, version: doc.version })
-      .where(eq(documentVersions.id, last.id));
-    return;
-  }
-
-  await db.insert(documentVersions).values({
-    documentId,
-    version: doc.version,
-    ...snapshot,
-  });
-}
 
 /**
  * Un documento con una solicitud pendiente no puede borrarse ni cambiar sus
@@ -897,7 +838,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     const [row] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
     if (!row || !row.deletedAt) throw notFound('Documento no encontrado');
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede restaurar este documento');
-    if (row.lockedAt || row.status === 'sent') throw locked();
+    if (row.lockedAt || row.status === 'sent' || row.status === 'cancelled') throw locked();
 
     /**
      * Restaurar nunca falla por un número. Como el correlativo solo lo
@@ -1119,4 +1060,4 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
-export { saveVersion, defaultData };
+export { defaultData };

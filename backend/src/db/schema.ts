@@ -464,6 +464,9 @@ export const documentMessages = pgTable(
     allowSenderExport: boolean('allow_sender_export').notNull().default(false),
     /** Cuándo vio el remitente el resultado (aprobado o rechazado). */
     senderReadAt: timestamp('sender_read_at', { withTimezone: true }),
+    /** Anulación de un memo ya aprobado: el aprobador lo deja sin efecto. */
+    annulledAt: timestamp('annulled_at', { withTimezone: true }),
+    annulledReason: text('annulled_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -621,6 +624,138 @@ export const savedCharts = pgTable(
   (t) => [index('saved_charts_user_idx').on(t.userId, t.position)],
 );
 
+/* ───────────────────────── Firma electrónica móvil ──────────────────── */
+
+/**
+ * Dispositivo vinculado a un usuario. La clave pública es la mitad pública de
+ * un par EC P-256 generado en el Android Keystore; la privada nunca sale del
+ * teléfono y exige biometría para usarse.
+ */
+export const mobileDevices = pgTable(
+  'mobile_devices',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Identificador opaco generado por la app (no es un identificador de hardware). */
+    deviceId: text('device_id').notNull(),
+    publicKey: text('public_key').notNull(),
+    algorithm: text('algorithm').notNull().default('ES256'),
+    platform: text('platform').notNull().default('android'),
+    model: text('model').notNull().default(''),
+    appVersion: text('app_version').notNull().default(''),
+    /** active | revoked */
+    status: text('status').notNull().default('active'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('mobile_devices_user_device_idx').on(t.userId, t.deviceId),
+    index('mobile_devices_user_idx').on(t.userId),
+  ],
+);
+
+/**
+ * Desafío de un solo uso para firmar. Liga al usuario, al dispositivo, al
+ * documento y a la versión exacta que se está firmando.
+ */
+export const signatureChallenges = pgTable(
+  'signature_challenges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').references(() => documentMessages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    /** SHA-256 estable del contenido y metadatos que se firman. */
+    contentSha256: text('content_sha256').notNull(),
+    nonce: text('nonce').notNull(),
+    /** approval (ampliable a receipt/custom en el futuro). */
+    purpose: text('purpose').notNull().default('approval'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('signature_challenges_nonce_idx').on(t.nonce),
+    index('signature_challenges_document_idx').on(t.documentId),
+    index('signature_challenges_user_idx').on(t.userId),
+  ],
+);
+
+/** Rúbrica y prueba criptográfica de una firma. */
+export const documentSignatures = pgTable(
+  'document_signatures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').references(() => documentMessages.id, { onDelete: 'set null' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    challengeId: uuid('challenge_id').references(() => signatureChallenges.id, {
+      onDelete: 'set null',
+    }),
+    deviceId: uuid('device_id').references(() => mobileDevices.id, { onDelete: 'set null' }),
+    /** drawn | typed */
+    method: text('method').notNull().default('drawn'),
+    /** PNG transparente de la rúbrica, en base64 (sin prefijo data:). */
+    signaturePng: text('signature_png').notNull(),
+    /** Trazos originales para auditoría y futuras exportaciones vectoriales. */
+    strokes: jsonb('strokes').$type<unknown[]>().notNull().default([]),
+    contentSha256: text('content_sha256').notNull(),
+    signatureSha256: text('signature_sha256').notNull(),
+    sealedPdfSha256: text('sealed_pdf_sha256'),
+    /** pending | sealed | failed */
+    status: text('status').notNull().default('pending'),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('document_signatures_challenge_idx').on(t.challengeId),
+    index('document_signatures_document_idx').on(t.documentId),
+    index('document_signatures_user_idx').on(t.userId),
+  ],
+);
+
+/** Certificado verificable de una firma sellada. */
+export const signatureCertificates = pgTable(
+  'signature_certificates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    serial: text('serial').notNull(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    signatureId: uuid('signature_id')
+      .notNull()
+      .references(() => documentSignatures.id, { onDelete: 'cascade' }),
+    /** Solo se guarda el hash del token que viaja en el QR. */
+    verificationTokenHash: text('verification_token_hash').notNull(),
+    issuedAt: timestamp('issued_at', { withTimezone: true }).notNull().defaultNow(),
+    certJson: jsonb('cert_json').$type<Record<string, unknown>>().notNull(),
+    sealedPdfPath: text('sealed_pdf_path').notNull(),
+    certificatePdfPath: text('certificate_pdf_path').notNull(),
+    sealedPdfSha256: text('sealed_pdf_sha256').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('signature_certificates_serial_idx').on(t.serial),
+    uniqueIndex('signature_certificates_token_idx').on(t.verificationTokenHash),
+    index('signature_certificates_document_idx').on(t.documentId),
+  ],
+);
+
 /* ────────────────────────────── Relaciones ──────────────────────────── */
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -715,6 +850,49 @@ export const documentMessageRecipientsRelations = relations(
   }),
 );
 
+export const mobileDevicesRelations = relations(mobileDevices, ({ one }) => ({
+  user: one(users, { fields: [mobileDevices.userId], references: [users.id] }),
+}));
+
+export const signatureChallengesRelations = relations(signatureChallenges, ({ one }) => ({
+  document: one(documents, {
+    fields: [signatureChallenges.documentId],
+    references: [documents.id],
+  }),
+  message: one(documentMessages, {
+    fields: [signatureChallenges.messageId],
+    references: [documentMessages.id],
+  }),
+  user: one(users, { fields: [signatureChallenges.userId], references: [users.id] }),
+}));
+
+export const documentSignaturesRelations = relations(documentSignatures, ({ one }) => ({
+  document: one(documents, {
+    fields: [documentSignatures.documentId],
+    references: [documents.id],
+  }),
+  message: one(documentMessages, {
+    fields: [documentSignatures.messageId],
+    references: [documentMessages.id],
+  }),
+  user: one(users, { fields: [documentSignatures.userId], references: [users.id] }),
+  device: one(mobileDevices, {
+    fields: [documentSignatures.deviceId],
+    references: [mobileDevices.id],
+  }),
+}));
+
+export const signatureCertificatesRelations = relations(signatureCertificates, ({ one }) => ({
+  document: one(documents, {
+    fields: [signatureCertificates.documentId],
+    references: [documents.id],
+  }),
+  signature: one(documentSignatures, {
+    fields: [signatureCertificates.signatureId],
+    references: [documentSignatures.id],
+  }),
+}));
+
 /* ─────────────────────────────── Tipos ──────────────────────────────── */
 
 export type UserRow = typeof users.$inferSelect;
@@ -733,3 +911,11 @@ export type AiConversationRow = typeof aiConversations.$inferSelect;
 export type AiConversationMessageRow = typeof aiConversationMessages.$inferSelect;
 export type SavedChartRow = typeof savedCharts.$inferSelect;
 export type AiNodeRow = typeof aiNodes.$inferSelect;
+export type MobileDeviceRow = typeof mobileDevices.$inferSelect;
+export type NewMobileDevice = typeof mobileDevices.$inferInsert;
+export type SignatureChallengeRow = typeof signatureChallenges.$inferSelect;
+export type NewSignatureChallenge = typeof signatureChallenges.$inferInsert;
+export type DocumentSignatureRow = typeof documentSignatures.$inferSelect;
+export type NewDocumentSignature = typeof documentSignatures.$inferInsert;
+export type SignatureCertificateRow = typeof signatureCertificates.$inferSelect;
+export type NewSignatureCertificate = typeof signatureCertificates.$inferInsert;

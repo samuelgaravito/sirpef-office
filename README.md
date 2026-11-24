@@ -53,7 +53,7 @@ y conservar el **historial de versiones** de cada documento.
 | IA | OpenAI-compatible, Anthropic, Gemini y Ollama. **Asistente de redacción**: escribes el encargo («un memo para la jefa sobre…») y construye el documento completo sobre la plantilla; después lo corriges conversando. También rellena variables desde el panel de datos. Modo manual sin IA. |
 | Consulta y estadísticas | **Chat de consulta** (`/consulta`): la IA elige el plan y el servidor responde con documentos enlazados o con **el gráfico que mejor explique la cifra** (KPI, barras, líneas, dona o comparación), más insights como el peso del top o el delta frente al periodo anterior. Las barras refinan la consulta sin volver a llamar al modelo. **Historial de conversaciones** en el servidor (buscar, renombrar, borrar, `/consulta/:id`) y **informes guardados**: se almacena el plan, no las cifras, y al abrirlos se recalculan con los permisos actuales. Módulo **Estadísticas** con totales, tendencia, aprobaciones, salud y plantillas más usadas; **cada cifra abre la lista real de documentos** que hay detrás. |
 | Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
-| Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso **en tiempo real** en la bandeja: una **campana flotante** con el asunto (que agrupa los avisos seguidos y se va sola a los pocos segundos) y, si el usuario lo autoriza, un **aviso del sistema** cuando no está mirando la aplicación. Además suben el badge y la marca **Nuevo**. Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
+| Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso **en tiempo real** en la bandeja: una **campana flotante** con el asunto (que agrupa los avisos seguidos y se va sola a los pocos segundos) y, si el usuario lo autoriza, un **aviso del sistema** cuando no está mirando la aplicación. Además suben el badge y la marca **Nuevo**. Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. El **administrador que aprobó** puede **anular** el memo (con motivo opcional): conserva su número, sigue bloqueado y sus vistas y exportaciones llevan la marca de agua «ANULADO»; deja de aparecer en la bandeja de los destinatarios. |
 | Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo opcional de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia enumeración —la serie es la dueña del prefijo y del contador—, así que sus números nunca se intercalan con los de otra aunque repitan prefijo. Con el prefijo en blanco la serie numera sin etiqueta (`0001-2026`). Incluye campos automáticos (fecha, firmante, cargo). |
 
 ### Capturas
@@ -80,6 +80,7 @@ y conservar el **historial de versiones** de cada documento.
 | --- | --- |
 | Frontend | Vue 3.5 (Composition API + `<script setup>`), Vite 6, TypeScript 5.9, Pinia, Vue Router, Tailwind CSS 4, `lucide-vue-next`, `@fontsource/georama`. |
 | Editor | TipTap 3.32 (StarterKit, tablas, imágenes, text-style, alineación, tipografía, sub/superíndice, contador de caracteres, `UniqueID`). Extensiones propias: resaltado de variables, vista previa, diff. |
+| App móvil | Kotlin 2 + Jetpack Compose + Material 3, Retrofit/OkHttp, Android Keystore + BiometricPrompt, PdfRenderer, ZXing. Ver `docs/MOVIL.md`. |
 | Backend | Node 20 + Fastify 5, TypeScript, Zod, Drizzle ORM, JWT (`jose`), `node:crypto` (scrypt) para contraseñas. |
 | Base de datos | PostgreSQL 16 (Docker en el puerto **5433** o PostgreSQL local en **5432**). |
 | Exportación | `puppeteer-core` + Chrome para PDF, `docx` para Word, `@tiptap/static-renderer` para HTML. |
@@ -720,6 +721,8 @@ cd backend
 | `npm run db:purge-empty-drafts` | Elimina definitivamente los borradores nunca usados (simulación por defecto; `--apply` ejecuta y deja bitácora). |
 | `npm run smoke:numbering` | Con la API levantada, verifica la numeración diferida: el borrador no consume número, el previsto no reserva, la oficialización asigna, las aprobaciones simultáneas no repiten y la papelera no bloquea la oficialización de otro documento. |
 | `npm run smoke:errors` | Comprueba que cada tipo de fallo (validación, ruta inexistente, sin sesión, content-type inválido) devuelva el estado y el mensaje correctos, en español y nombrando los campos que fallan. |
+| `npm run smoke:mobile-auth` | Con un SVA simulado, canjea la sesión nativa y abre `/api/mobile/bootstrap`. No necesita el SVA real. |
+| `npm run smoke:mobile-sign` | Firma móvil completa contra PostgreSQL y Chrome: clave EC, challenge, aprobación + firma, PDF sellado, certificado y QR público. |
 | `npm run smoke:errors:db` | Comprueba los fallos que solo existen con PostgreSQL real: correo duplicado, clave foránea rota, uuid inválido y error inesperado (que no debe filtrar detalles internos). |
 | `npm run smoke:errors:ui` | Con la web de desarrollo levantada, comprueba en un navegador real que un 4xx sale como aviso ámbar, un 5xx como error rojo con su referencia y una caída de red con un mensaje en español (no «Failed to fetch»). |
 | `npm run smoke:campaign` | Con la API levantada, verifica el diseño en uso: encender uno apaga el anterior, las plantillas cargan el que está en uso sin tocar estructura ni variables, el documento creado guarda ese diseño y lo conserva tras cambiar el diseño en uso (limpia los datos de prueba). |
@@ -728,6 +731,7 @@ cd backend
 | `npm run dev:token -- <correo>` | Emite un access token para un usuario. Los miembros vienen de SVA y no tienen contraseña local: es la forma de abrir su sesión en las pruebas de interfaz. |
 | `npm run admin:reset` | Alinea el email y la contraseña del administrador con los valores del seed. |
 | `npm run smoke:inbox` | Con la API levantada, prueba el flujo de bandeja: solicitud de envío, aprobación, autorización de exportación, sellado, lectura, rechazo y bloqueo de edición/borrado/exportación (crea usuarios y documentos temporales y los elimina). |
+| `npm run smoke:annul` | Con la API levantada, prueba la anulación de un memo aprobado: solo el aprobador puede hacerlo, respeta `expectedVersion`, conserva número y sellado, el destinatario deja de verlo, remitente y aprobador lo conservan en «Anulados» y el HTML/PDF/DOCX llevan la marca de agua «ANULADO» (limpia sus datos). |
 | `npm run smoke:realtime` | Levanta la API y comprueba el canal de eventos: el handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar (necesita PostgreSQL). |
 | `npm run smoke:realtime:proxy` | Con la web de desarrollo levantada, comprueba el mismo canal a través del proxy: login → cookie → handshake por el mismo origen. Acepta `ADMIN_EMAIL` / `ADMIN_PASSWORD`. |
 | `npm run smoke:bell` | Con la web de desarrollo levantada, comprueba en Chrome la campana flotante: aparece con el asunto, agrupa los avisos con contador, se va sola, y Ajustes permite activar o silenciar los avisos del sistema. |
@@ -745,6 +749,22 @@ cd backend
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 | `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, prefijo opcional (en blanco la serie numera sin etiqueta), sin «código automático», aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |
+
+### App móvil
+
+```bash
+cd mobile
+export JAVA_HOME=/ruta/al/jdk17
+export ANDROID_HOME=/ruta/al/android-sdk
+```
+
+| Comando | Qué hace |
+| --- | --- |
+| `./gradlew :app:testDebugUnitTest` | Tests unitarios de los contratos de firma. |
+| `./gradlew :app:lintDebug` | Lint de Android. |
+| `./gradlew :app:assembleDebug` | Genera `app/build/outputs/apk/debug/app-debug.apk`. |
+
+La configuración de URLs y el flujo completo están en [`docs/MOVIL.md`](docs/MOVIL.md).
 
 ### Frontend
 
@@ -796,13 +816,17 @@ sirpefoffice/
 │       │                      # realtime (WebSocket), ai, exports
 │       ├── lib/               # render, docx, auth, acceso…
 │       └── index.ts           # Arranque y registro de rutas
+├── mobile/                    # app Android de firma (Kotlin + Compose)
+│   ├── app/                   # módulo Android, pantallas y Keystore
+│   ├── gradle/                # wrapper y catálogo de versiones
+│   └── README.md
 ├── shared/                    # fuente única, sin node_modules
 │   └── src/{index,types,defaults,chrome,editor-extensions,image-node-view,realtime}.ts
 ├── scripts/                   # sync-shared y publicación en Google Docs
 ├── deploy/                    # Nginx, Caddy, systemd y variables de producción
 ├── docker-compose.prod.yml    # stack Docker: db + api + web (+ caddy)
 ├── .env.production.example    # plantilla del entorno Docker
-├── docs/                      # Arquitectura, informe Eigent y capturas
+├── docs/                      # Arquitectura, SVA, móvil, informe Eigent y capturas
 ├── README.md
 └── LICENSE
 ```

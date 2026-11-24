@@ -1,0 +1,1464 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>SirpefOffice · Firma Electrónica</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&family=Caveat:wght@600&display=swap');
+        
+        body {
+            font-family: 'Source Sans 3', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+            background-color: #02152e;
+            margin: 0;
+            padding: 0;
+            height: 100dvh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .app-container {
+            width: 100%;
+            height: 100dvh;
+            background-color: #f7f9fc;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        @media (min-width: 640px) {
+            body {
+                background: radial-gradient(circle at top right, #041e42, #02152e);
+                padding: 1rem;
+            }
+            .app-container {
+                width: 400px;
+                height: 840px;
+                max-height: 94vh;
+                border-radius: 44px;
+                box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.6), 0 0 0 10px #041e42, 0 0 0 12px #1b3a66;
+            }
+        }
+
+        /* Cabecera estilo Fintech / Bóveda */
+        .vault-header {
+            background: linear-gradient(145deg, #02152e 0%, #041e42 60%, #1b3a66 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        .vault-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 240px;
+            height: 240px;
+            background: radial-gradient(circle, rgba(6, 227, 189, 0.18) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        #signature-pad { touch-action: none; cursor: crosshair; }
+
+        @keyframes pulseRing {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(60, 111, 176, 0.45); }
+            70% { transform: scale(1); box-shadow: 0 0 0 12px rgba(60, 111, 176, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(60, 111, 176, 0); }
+        }
+        .biometric-ring { animation: pulseRing 2s infinite; }
+
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .animate-sheet { animation: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1); }
+
+        /* Modo Horizontal (Landscape) maximizado con barra lateral compacta */
+        .landscape-sign-sheet {
+            position: fixed !important;
+            top: 50% !important;
+            left: 50% !important;
+            width: 94vh !important;
+            max-width: 760px !important;
+            height: 92vw !important;
+            max-height: 400px !important;
+            transform: translate(-50%, -50%) rotate(90deg) !important;
+            border-radius: 26px !important;
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: stretch !important;
+            gap: 10px !important;
+            padding: 10px !important;
+            overflow: hidden !important;
+            z-index: 60;
+        }
+        .landscape-sign-sheet #sign-canvas-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            height: 100%;
+        }
+        .landscape-sign-sheet #panel-draw,
+        .landscape-sign-sheet #panel-type {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        .landscape-sign-sheet #panel-draw.hidden,
+        .landscape-sign-sheet #panel-type.hidden {
+            display: none !important;
+        }
+        .landscape-sign-sheet #canvas-wrapper {
+            flex: 1;
+            margin-bottom: 0 !important;
+            height: 100% !important;
+        }
+        .landscape-sign-sheet #signature-pad {
+            height: 100% !important;
+        }
+        .landscape-sign-sheet #panel-type > div {
+            flex: 1;
+            height: 100% !important;
+            margin-bottom: 0 !important;
+        }
+        .landscape-sign-sheet #sign-sidebar-controls {
+            width: 116px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background: #f7f9fc;
+            border: 1px solid #e3e4e8;
+            border-radius: 18px;
+            padding: 8px;
+        }
+
+        .hidden-screen { display: none !important; }
+        .font-handwriting { font-family: 'Caveat', cursive; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        <!-- ==================== PANTALLA 1: DASHBOARD ==================== -->
+        <div id="screen-home" class="screen flex-1 flex flex-col overflow-hidden">
+            
+            <!-- Top Section Oscura Elegante -->
+            <div class="vault-header px-5 pt-6 pb-7 rounded-b-[32px] shadow-xl shadow-[#02152E]/10 shrink-0 text-white z-10">
+                <div class="flex justify-between items-center mb-5">
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#3c6fb0] to-[#1b3a66] p-[1px] shadow-lg shadow-[#02152e]/40">
+                            <div class="relative w-full h-full bg-[#02152e] rounded-[15px] flex items-center justify-center font-extrabold text-white">
+                                S
+                                <span class="absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#06e3bd]"></span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-xs font-semibold text-[#B5B6BB]">Hola, Carlos</span>
+                                <span class="px-1.5 py-0.5 text-[9px] font-bold bg-[#06e3bd]/15 text-[#06e3bd] border border-[#06e3bd]/30 rounded-md">SIRPEF</span>
+                            </div>
+                            <h1 class="text-base font-bold tracking-tight text-white">Bóveda de Firmas</h1>
+                            <p class="text-[8px] font-semibold tracking-[0.18em] text-[#9db9d8]">SIRPEF · GESTIÓN DOCUMENTAL</p>
+                        </div>
+                    </div>
+                    
+                    <button onclick="showToast('Certificado Digital Activo • Nivel 3')" class="w-10 h-10 rounded-2xl bg-white/10 hover:bg-white/15 backdrop-blur-md border border-white/10 flex items-center justify-center text-[#D7DEE8] relative transition active:scale-90">
+                        <i class="far fa-bell text-sm"></i>
+                        <span class="absolute top-2.5 right-2.5 w-2 h-2 bg-[#C81E00] rounded-full ring-2 ring-[#02152e]"></span>
+                    </button>
+                </div>
+
+                <!-- Buscador Glassmorphism -->
+                <div class="relative mb-5">
+                    <i class="fas fa-search absolute left-4 top-3.5 text-[#9DB9D8] text-xs"></i>
+                    <input type="text" id="search-input" onkeyup="filterDocs()" placeholder="Buscar contrato, empresa o hash..." class="w-full bg-white/10 border border-white/10 text-xs rounded-2xl pl-10 pr-4 py-3 text-white placeholder-[#9DB9D8] focus:outline-none focus:bg-white/15 focus:border-[#3C6FB0] transition">
+                </div>
+
+                <!-- Tarjetas Bento de Métricas -->
+                <div class="grid grid-cols-2 gap-3">
+                    <div onclick="filterByStatus('pending')" class="bg-gradient-to-br from-[#3C6FB0] to-[#1B3A66] rounded-2xl p-3.5 border border-[#3C6FB0]/30 shadow-lg shadow-[#02152E]/50 cursor-pointer active:scale-95 transition">
+                        <div class="flex justify-between items-center mb-1.5">
+                            <span class="text-[11px] font-medium text-[#D7E6F5]">Acción requerida</span>
+                            <div class="w-7 h-7 rounded-xl bg-white/20 flex items-center justify-center">
+                                <i class="fas fa-pen-nib text-xs text-white"></i>
+                            </div>
+                        </div>
+                        <div class="flex items-baseline gap-2">
+                            <span id="count-pending" class="text-2xl font-extrabold text-white">2</span>
+                            <span class="text-[11px] text-[#B7CFE6]">pendientes</span>
+                        </div>
+                    </div>
+
+                    <div onclick="filterByStatus('signed')" class="bg-white/10 backdrop-blur-md rounded-2xl p-3.5 border border-white/10 cursor-pointer active:scale-95 transition">
+                        <div class="flex justify-between items-center mb-1.5">
+                            <span class="text-[11px] font-medium text-[#B5B6BB]">Completados</span>
+                            <div class="w-7 h-7 rounded-xl bg-[#06E3BD]/15 text-[#06E3BD] flex items-center justify-center">
+                                <i class="fas fa-shield-check fas fa-check text-xs"></i>
+                            </div>
+                        </div>
+                        <div class="flex items-baseline gap-2">
+                            <span id="count-signed" class="text-2xl font-extrabold text-white">1</span>
+                            <span class="text-[11px] text-[#9DB9D8]">verificados</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lista Scrolleable -->
+            <div class="flex-1 overflow-y-auto no-scrollbar px-5 pt-5 pb-24">
+                <!-- Tabs de Filtro -->
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex gap-1.5 bg-[#E3E4E8]/70 p-1 rounded-xl">
+                        <button onclick="filterByStatus('all')" id="tab-all" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-[#041E42] shadow-xs transition">Todos</button>
+                        <button onclick="filterByStatus('pending')" id="tab-pending" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-[#55606C] transition">Por firmar</button>
+                        <button onclick="filterByStatus('signed')" id="tab-signed" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-[#55606C] transition">Listos</button>
+                    </div>
+                </div>
+
+                <!-- Contenedor de Documentos -->
+                <div id="documents-list" class="space-y-3">
+                    <!-- Renderizado por JS -->
+                </div>
+            </div>
+
+            <!-- Dock Inferior Flotante -->
+            <div class="absolute bottom-4 left-5 right-5 h-16 bg-[#02152e]/95 backdrop-blur-xl rounded-2xl px-6 flex justify-between items-center shadow-2xl shadow-[#02152E]/30 border border-white/10 z-20">
+                <button onclick="filterByStatus('all')" class="flex flex-col items-center text-[#06E3BD]">
+                    <i class="fas fa-layer-group text-base mb-0.5"></i>
+                    <span class="text-[10px] font-semibold">Documentos</span>
+                </button>
+                
+                <!-- Botón Central Acción -->
+                <button onclick="openUploadModal()" class="w-12 h-12 -mt-6 rounded-2xl bg-gradient-to-tr from-[#3C6FB0] to-[#1B3A66] text-white shadow-lg shadow-[#02152E]/40 flex items-center justify-center text-lg active:scale-90 transition border-2 border-[#f7f9fc]">
+                    <i class="fas fa-plus"></i>
+                </button>
+
+                <button onclick="showToast('Identidad biométrica vinculada')" class="flex flex-col items-center text-[#9DB9D8] hover:text-white transition">
+                    <i class="fas fa-fingerprint text-base mb-0.5"></i>
+                    <span class="text-[10px] font-medium">Identidad</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== PANTALLA 2: VISOR DE DOCUMENTO ==================== -->
+        <div id="screen-viewer" class="screen hidden-screen flex-1 flex flex-col bg-[#f7f9fc] overflow-hidden">
+            <!-- Header Visor -->
+            <div class="bg-white/90 backdrop-blur-md px-4 py-3.5 flex items-center justify-between border-b border-[#E3E4E8]/80 shrink-0 z-10">
+                <button onclick="navigateTo('screen-home')" class="w-9 h-9 rounded-xl bg-[#F6F5F7] active:bg-[#E3E4E8] flex items-center justify-center text-[#1B3A66] transition">
+                    <i class="fas fa-chevron-left text-xs"></i>
+                </button>
+                <div class="text-center flex-1 px-3 min-w-0">
+                    <h2 id="viewer-title" class="text-xs font-extrabold text-[#041E42] truncate">Contrato.pdf</h2>
+                    <div class="flex items-center justify-center gap-1 text-[10px] text-[#028D05] font-semibold">
+                        <i class="fas fa-lock text-[9px]"></i>
+                        <span id="viewer-subtitle" class="truncate">Encriptación E2E</span>
+                    </div>
+                </div>
+                <button onclick="toggleDocSummary()" class="w-9 h-9 rounded-xl bg-[#F6F5F7] hover:bg-[#E3E4E8] text-[#55606C] flex items-center justify-center transition" title="Detalles de verificación">
+                    <i class="fas fa-shield-check fas fa-circle-info text-sm"></i>
+                </button>
+            </div>
+
+                    <!-- Hoja de Papel Realista -->
+            <div class="flex-1 overflow-y-auto p-4 no-scrollbar space-y-3">
+                
+                <!-- BARRA MINIMALISTA DE VERIFICACIÓN DE CONTENIDO -->
+                <div id="doc-summary-card" class="bg-white/95 backdrop-blur-xs rounded-2xl px-3.5 py-2.5 border border-[#E3E4E8]/80 shadow-2xs transition-all">
+                    <div onclick="toggleSummaryDetails()" class="flex items-center justify-between cursor-pointer select-none">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="w-2 h-2 rounded-full bg-[#028D05] shrink-0"></span>
+                            <span id="summary-status-line" class="text-[11px] font-semibold text-[#1B3A66] truncate">
+                                Contenido verificado • Sin cláusulas atípicas
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-1 text-[11px] font-bold text-[#3C6FB0] shrink-0 ml-2">
+                            <span id="summary-toggle-label">Resumen</span>
+                            <i id="summary-chevron" class="fas fa-chevron-down text-[9px] transition-transform duration-200"></i>
+                        </div>
+                    </div>
+
+                    <!-- Detalle Desplegable Minimalista (Oculto por defecto) -->
+                    <div id="summary-details" class="hidden pt-2.5 mt-2.5 border-t border-[#EFF1F4] space-y-2">
+                        <p id="summary-overview" class="text-[11px] text-[#55606C] leading-relaxed">
+                            Acuerdo de servicios cloud por 12 meses con renovación opcional y confidencialidad mutua.
+                        </p>
+                        <div id="summary-points" class="flex flex-wrap gap-1.5 pt-0.5">
+                            <!-- Etiquetas minimalistas por JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <div id="document-sheet" class="relative bg-white rounded-2xl shadow-md shadow-[#041E42]/50 border border-[#E3E4E8]/60 p-6 text-[#1B3A66] text-xs leading-relaxed space-y-4 select-none">
+                    <div class="flex justify-between items-start border-b border-[#EFF1F4] pb-4">
+                        <div>
+                            <span class="px-2 py-0.5 rounded-md bg-[#E9F1FA] text-[#3C6FB0] font-bold text-[10px] uppercase tracking-wider">Documento Oficial</span>
+                            <h3 class="font-extrabold text-[#041E42] text-sm mt-1.5">ACUERDO DE PRESTACIÓN</h3>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-[10px] text-[#667085] block">Referencia</span>
+                            <span class="text-[11px] font-mono font-bold text-[#1B3A66]">#SO-9042</span>
+                        </div>
+                    </div>
+                    
+                    <p>En la ciudad de Caracas, a <strong>19 de Noviembre de 2026</strong>, las partes intervinientes acuerdan suscribir el presente instrumento legal con plena validez electrónica.</p>
+                    
+                    <div class="bg-[#F7F9FC] p-3.5 rounded-xl border border-[#EFF1F4] space-y-2">
+                        <p class="font-bold text-[#041E42] text-[11px] uppercase tracking-wide">1. Objeto y Alcance</p>
+                        <p class="text-[11px] text-[#55606C]">El firmante acepta los términos operativos, confidencialidad y cumplimiento estipulados en las cláusulas anexas.</p>
+                    </div>
+                    
+                    <div class="bg-[#F7F9FC] p-3.5 rounded-xl border border-[#EFF1F4] space-y-2">
+                        <p class="font-bold text-[#041E42] text-[11px] uppercase tracking-wide">2. Validez Criptográfica</p>
+                        <p class="text-[11px] text-[#55606C]">La rúbrica estampada queda vinculada mediante algoritmo SHA-256, fecha UTC y validación de identidad del dispositivo.</p>
+                    </div>
+
+                    <!-- Caja de Firma -->
+                    <div class="pt-4 mt-4 border-t border-[#E3E4E8]">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-[10px] font-bold text-[#667085] uppercase tracking-wider">Firma del Titular</span>
+                            <span class="text-[10px] font-semibold text-[#3C6FB0]">Carlos Mendoza</span>
+                        </div>
+                        
+                        <div id="signature-placeholder" onclick="openSignatureModal()" class="group border-2 border-dashed border-[#3C6FB0] bg-[#E9F1FA]/60 hover:bg-[#E9F1FA] active:scale-[0.99] rounded-2xl p-5 flex flex-col items-center justify-center cursor-pointer transition">
+                            <div class="w-10 h-10 rounded-full bg-[#3C6FB0] text-white flex items-center justify-center shadow-md shadow-[#02152E]/20 mb-2">
+                                <i class="fas fa-signature text-sm"></i>
+                            </div>
+                            <span class="text-xs font-extrabold text-[#041E42]">Toca para firmar aquí</span>
+                            <span class="text-[10px] text-[#3C6FB0] mt-0.5">Trazo táctil o firma automática</span>
+                        </div>
+
+                        <!-- Firma Integrada Directamente en su Espacio -->
+                        <div id="applied-signature-box" class="hidden border border-[#B7E0BA] bg-[#E7F4E8]/30 rounded-2xl p-3.5 transition-all">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-[10px] font-bold text-[#026B04] flex items-center gap-1">
+                                    <i class="fas fa-check-circle text-[#028D05]"></i> Firma estampada
+                                </span>
+                                <button id="btn-change-signature" type="button" onclick="openSignatureModal()" class="text-[10px] font-bold text-[#3C6FB0] hover:underline">
+                                    Cambiar firma
+                                </button>
+                            </div>
+
+                            <img id="applied-signature-img" src="" alt="Firma" class="w-full h-16 object-contain my-1">
+                            
+                            <div class="pt-1.5 border-t border-[#E3E4E8]/70 flex justify-between items-center text-[9px] text-[#55606C] font-mono">
+                                <span>ID: #SO-9042-VE</span>
+                                <span id="signature-timestamp">15:12 UTC</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Barra Inferior de Acción -->
+            <div class="bg-white p-4 border-t border-[#E3E4E8]/80 shrink-0">
+                <button id="btn-finish-doc" onclick="openBiometricModal()" disabled class="w-full py-3.5 rounded-2xl font-bold text-xs bg-[#F6F5F7] text-[#667085] transition flex items-center justify-center gap-2">
+                    <span>Completa el recuadro de firma arriba</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL DE FIRMA (DIBUJAR O ESCRIBIR) ==================== -->
+        <div id="signature-modal" class="hidden-screen absolute inset-0 bg-[#02152E]/60 backdrop-blur-xs z-50 flex flex-col justify-end">
+            <div id="signature-sheet-box" class="bg-white rounded-t-[32px] p-5 shadow-2xl animate-sheet transition-all duration-300">
+                <div id="signature-drag-pill" class="w-10 h-1 bg-[#E3E4E8] rounded-full mx-auto mb-4"></div>
+                
+                <!-- Cabecera Vertical (se oculta en horizontal) -->
+                <div id="sign-vertical-header" class="flex justify-between items-center mb-3">
+                    <div>
+                        <h3 class="text-base font-extrabold text-[#041E42]">Crear Firma</h3>
+                        <p id="sign-modal-subtitle" class="text-[11px] text-[#55606C]">Elige cómo deseas firmar este documento</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="toggleLandscapeSign(true)" class="px-2.5 py-1.5 rounded-xl bg-[#E9F1FA] hover:bg-[#E9F1FA] text-[#3C6FB0] text-[11px] font-bold flex items-center gap-1.5 transition active:scale-95" title="Girar lienzo en horizontal">
+                            <i class="fas fa-rotate"></i>
+                            <span>Horizontal</span>
+                        </button>
+                        <button onclick="closeSignatureModal()" class="w-8 h-8 rounded-full bg-[#F6F5F7] text-[#55606C] flex items-center justify-center">
+                            <i class="fas fa-times text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Selector Modo Vertical -->
+                <div id="sign-vertical-tabs" class="grid grid-cols-2 gap-1.5 bg-[#F6F5F7] p-1 rounded-xl mb-4">
+                    <button id="mode-draw-btn" onclick="switchSignMode('draw')" class="py-2 rounded-lg text-xs font-bold bg-white text-[#041E42] shadow-xs transition">
+                        <i class="fas fa-pen-nib mr-1 text-[#3C6FB0]"></i> Dibujar
+                    </button>
+                    <button id="mode-type-btn" onclick="switchSignMode('type')" class="py-2 rounded-lg text-xs font-semibold text-[#55606C] transition">
+                        <i class="fas fa-font mr-1"></i> Automática
+                    </button>
+                </div>
+
+                <!-- Área Principal del Lienzo -->
+                <div id="sign-canvas-area">
+                    <!-- Panel 1: Lienzo Táctil -->
+                    <div id="panel-draw">
+                        <div id="canvas-wrapper" class="relative bg-[#F7F9FC] border-2 border-[#E3E4E8] rounded-2xl overflow-hidden mb-3">
+                            <canvas id="signature-pad" width="340" height="170" class="w-full h-40 block"></canvas>
+                            <div class="absolute bottom-3 left-6 right-6 border-b border-dashed border-[#B5B6BB] pointer-events-none flex justify-between items-end pb-0.5">
+                                <span class="text-[9px] text-[#667085] font-medium">Firma dentro del recuadro</span>
+                                <span class="text-[10px] text-[#B5B6BB] font-bold">X</span>
+                            </div>
+                        </div>
+
+                        <!-- Controles inferiores en modo Vertical -->
+                        <div id="sign-vertical-tools" class="flex justify-between items-center mb-4">
+                            <div class="flex items-center gap-2.5">
+                                <span class="text-[11px] font-semibold text-[#667085]">Tinta:</span>
+                                <button onclick="setPenColor('#041e42', this)" class="color-btn w-6 h-6 rounded-full bg-[#041E42] ring-2 ring-offset-2 ring-[#3C6FB0]"></button>
+                                <button onclick="setPenColor('#3c6fb0', this)" class="color-btn w-6 h-6 rounded-full bg-[#3C6FB0]"></button>
+                                <button onclick="setPenColor('#1b3a66', this)" class="color-btn w-6 h-6 rounded-full bg-[#1B3A66]"></button>
+                            </div>
+                            <button onclick="clearCanvas()" class="text-xs font-bold text-[#C81E00] bg-[#FDECEB] px-3 py-1.5 rounded-lg active:bg-[#FAD7D5]">
+                                <i class="fas fa-eraser mr-1"></i> Limpiar
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Panel 2: Firma Caligráfica Automática -->
+                    <div id="panel-type" class="hidden">
+                        <div class="bg-[#F7F9FC] border-2 border-[#B7CFE6] rounded-2xl h-40 flex flex-col items-center justify-center p-4 mb-4">
+                            <span class="font-handwriting text-4xl text-[#041E42] select-none">Carlos Mendoza</span>
+                            <span class="text-[10px] text-[#3C6FB0] font-semibold mt-2">Firma caligráfica verificada</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Botón Estampar en modo Vertical -->
+                <button id="sign-vertical-submit" onclick="saveSignature()" class="w-full py-3.5 bg-gradient-to-r from-[#3C6FB0] to-[#1B3A66] text-white font-bold rounded-2xl text-xs shadow-lg shadow-[#02152E]/30 active:scale-[0.98] transition">
+                    Estampar Firma en Documento
+                </button>
+
+                <!-- BARRA LATERAL COMPACTA (Solo visible en modo Horizontal) -->
+                <div id="sign-sidebar-controls" class="hidden">
+                    <!-- Top: Orientación y Cerrar -->
+                    <div class="flex items-center justify-between gap-1">
+                        <button type="button" onclick="toggleLandscapeSign(false)" class="flex-1 py-1.5 px-2 rounded-xl bg-[#E9F1FA] text-[#1B3A66] text-[10px] font-bold flex items-center justify-center gap-1 active:scale-95">
+                            <i class="fas fa-rotate"></i> Vertical
+                        </button>
+                        <button type="button" onclick="closeSignatureModal()" class="w-7 h-7 rounded-xl bg-[#E3E4E8]/80 text-[#55606C] flex items-center justify-center active:scale-95">
+                            <i class="fas fa-times text-[11px]"></i>
+                        </button>
+                    </div>
+
+                    <!-- Medio: Menú desplegable de Modo + Tinta + Limpiar -->
+                    <div class="space-y-1.5 my-1">
+                        <!-- Selector desplegable Modo -->
+                        <select id="landscape-mode-select" onchange="switchSignMode(this.value)" class="w-full bg-white border border-[#E3E4E8] rounded-xl px-2 py-1.5 text-[10px] font-bold text-[#1B3A66] focus:outline-none">
+                            <option value="draw">✏️ Dibujar</option>
+                            <option value="type">✒️ Automática</option>
+                        </select>
+
+                        <!-- Botón desplegable de Tinta -->
+                        <div class="relative">
+                            <button type="button" onclick="toggleInkPopover()" class="w-full bg-white border border-[#E3E4E8] rounded-xl px-2 py-1.5 text-[10px] font-bold text-[#1B3A66] flex items-center justify-between active:scale-95">
+                                <span class="flex items-center gap-1.5">
+                                    <span id="active-ink-dot" class="w-3 h-3 rounded-full bg-[#041E42] inline-block"></span>
+                                    Tinta
+                                </span>
+                                <i class="fas fa-chevron-down text-[8px] text-[#667085]"></i>
+                            </button>
+                            <div id="ink-popover" class="hidden absolute left-0 right-0 top-full mt-1 bg-white border border-[#E3E4E8] rounded-xl p-1.5 shadow-lg flex justify-around z-30">
+                                <button type="button" onclick="setPenColor('#041e42', this); toggleInkPopover(false)" class="w-5 h-5 rounded-full bg-[#041E42]"></button>
+                                <button type="button" onclick="setPenColor('#3c6fb0', this); toggleInkPopover(false)" class="w-5 h-5 rounded-full bg-[#3C6FB0]"></button>
+                                <button type="button" onclick="setPenColor('#1b3a66', this); toggleInkPopover(false)" class="w-5 h-5 rounded-full bg-[#1B3A66]"></button>
+                            </div>
+                        </div>
+
+                        <button type="button" onclick="clearCanvas()" class="w-full py-1.5 rounded-xl bg-[#FDECEB] text-[#C81E00] text-[10px] font-bold flex items-center justify-center gap-1 active:scale-95">
+                            <i class="fas fa-eraser"></i> Limpiar
+                        </button>
+                    </div>
+
+                    <!-- Bottom: Confirmar / Estampar -->
+                    <button type="button" onclick="saveSignature()" class="w-full py-2.5 px-2 bg-gradient-to-r from-[#3C6FB0] to-[#1B3A66] text-white font-bold rounded-xl text-[10px] shadow-md shadow-[#02152E]/30 active:scale-95 transition flex items-center justify-center gap-1">
+                        <i class="fas fa-check"></i>
+                        <span>Estampar</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL DOBLE FACTOR DE AUTENTICACIÓN (2FA) ==================== -->
+        <div id="biometric-modal" class="hidden-screen absolute inset-0 bg-[#02152E]/75 backdrop-blur-sm z-50 flex items-center justify-center p-5">
+            <div class="bg-white rounded-3xl p-6 w-full max-w-[340px] text-center shadow-2xl relative overflow-hidden">
+                
+                <!-- Indicador de Pasos 2FA -->
+                <div class="flex items-center justify-center gap-2 mb-5">
+                    <span id="step-dot-1" class="h-1.5 w-8 rounded-full bg-[#3C6FB0] transition-all"></span>
+                    <span id="step-dot-2" class="h-1.5 w-8 rounded-full bg-[#E3E4E8] transition-all"></span>
+                </div>
+
+                <!-- PASO 1: BIOMETRÍA -->
+                <div id="auth-step-1">
+                    <div id="fingerprint-icon-box" onclick="verifyStep1Biometric()" class="relative w-16 h-16 mx-auto mb-4 rounded-full bg-[#E9F1FA] text-[#3C6FB0] flex items-center justify-center text-3xl biometric-ring cursor-pointer active:scale-95 transition">
+                        <i class="fas fa-fingerprint"></i>
+                    </div>
+                    <span class="px-2.5 py-0.5 rounded-full bg-[#E9F1FA] text-[#3C6FB0] text-[10px] font-bold uppercase tracking-wider">Factor 1 de 2 • Biometría</span>
+                    <h3 class="text-base font-extrabold text-[#041E42] mt-2 mb-1">Verificación Biométrica</h3>
+                    <p class="text-xs text-[#55606C] mb-5 leading-relaxed">Confirma tu identidad física para desbloquear el código de seguridad.</p>
+                    
+                    <button id="btn-step-1" onclick="verifyStep1Biometric()" class="w-full py-3.5 bg-[#041E42] hover:bg-[#1B3A66] text-white font-bold rounded-xl text-xs mb-2 transition active:scale-95 flex items-center justify-center gap-2">
+                        <i class="fas fa-fingerprint text-sm"></i>
+                        <span>Escanear Huella</span>
+                    </button>
+                </div>
+
+                <!-- PASO 2: CÓDIGO OTP (SMS / AUTHENTICATOR) -->
+                <div id="auth-step-2" class="hidden">
+                    <div class="w-14 h-14 mx-auto mb-3 rounded-2xl bg-[#E9F1FA] text-[#3C6FB0] flex items-center justify-center text-2xl relative">
+                        <i class="fas fa-key"></i>
+                        <span class="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#028D05] border-2 border-white rounded-full"></span>
+                    </div>
+                    <span class="px-2.5 py-0.5 rounded-full bg-[#E9F1FA] text-[#1B3A66] text-[10px] font-bold uppercase tracking-wider">Factor 2 de 2 • Token Móvil</span>
+                    <h3 class="text-base font-extrabold text-[#041E42] mt-2 mb-1">Código Generado</h3>
+                    <p class="text-[11px] text-[#55606C] mb-4 leading-relaxed">Ingresa este token dinámico en tu <strong class="text-[#1B3A66]">Sistema Web SirpefOffice</strong> para autorizar el sellado.</p>
+                    
+                    <!-- Tarjeta de Token Dinámico Generado por la App -->
+                    <div class="bg-[#041E42] rounded-2xl p-4 mb-3 text-white relative overflow-hidden shadow-inner">
+                        <div class="flex justify-between items-center text-[10px] text-[#9DB9D8] mb-1.5">
+                            <span class="flex items-center gap-1.5 font-semibold">
+                                <span class="w-1.5 h-1.5 rounded-full bg-[#06E3BD] animate-pulse"></span>
+                                Sesión Web: Chrome • Windows
+                            </span>
+                            <span id="otp-timer-text" class="font-mono font-bold text-[#06E3BD]">30s</span>
+                        </div>
+
+                        <div class="flex items-center justify-between gap-2 my-1">
+                            <div id="generated-otp-display" class="font-mono text-2xl font-extrabold tracking-[0.22em] text-white select-all">
+                                849 201
+                            </div>
+                            <button type="button" onclick="copyGeneratedToken()" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-xs font-bold text-[#06E3BD] flex items-center gap-1.5 transition">
+                                <i class="far fa-copy"></i>
+                                <span>Copiar</span>
+                            </button>
+                        </div>
+
+                        <!-- Barra de tiempo restante -->
+                        <div class="w-full h-1 bg-white/10 rounded-full overflow-hidden mt-3">
+                            <div id="otp-progress-bar" class="h-full bg-gradient-to-r from-[#3C6FB0] to-[#06E3BD] transition-all duration-1000 ease-linear" style="width: 100%;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Estado de sincronización con Web -->
+                    <div id="web-sync-status" class="flex items-center justify-center gap-2 text-[11px] text-[#55606C] bg-[#F7F9FC] border border-[#E3E4E8]/80 rounded-xl py-2 px-3 mb-4">
+                        <i class="fas fa-circle-notch fa-spin text-[#3C6FB0] text-xs"></i>
+                        <span>Esperando ingreso en portal web...</span>
+                    </div>
+
+                    <button id="btn-verify-otp" onclick="simulateWebTokenEntered()" class="w-full py-3.5 bg-gradient-to-r from-[#3C6FB0] to-[#1B3A66] text-white font-bold rounded-xl text-xs mb-2 shadow-lg shadow-[#02152E]/30 transition active:scale-95 flex items-center justify-center gap-2">
+                        <i class="fas fa-desktop text-xs"></i>
+                        <span>Simular Ingreso en Sistema Web</span>
+                    </button>
+                </div>
+
+                <button onclick="closeBiometricModal()" class="w-full py-2 text-[#667085] hover:text-[#55606C] font-semibold text-xs transition">
+                    Cancelar
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL AÑADIR DOCUMENTO ==================== -->
+        <div id="upload-modal" class="hidden-screen absolute inset-0 bg-[#02152E]/60 backdrop-blur-xs z-50 flex flex-col justify-end">
+            <div class="bg-white rounded-t-[32px] p-6 shadow-2xl animate-sheet">
+                <div class="w-10 h-1 bg-[#E3E4E8] rounded-full mx-auto mb-4"></div>
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-base font-extrabold text-[#041E42]">Nuevo Documento</h3>
+                    <button onclick="closeUploadModal()" class="w-8 h-8 rounded-full bg-[#F6F5F7] text-[#55606C] flex items-center justify-center">
+                        <i class="fas fa-times text-xs"></i>
+                    </button>
+                </div>
+                <div class="space-y-3">
+                    <button onclick="addSimulatedDoc('Contrato Arrendamiento 2026.pdf', 'Inmobiliaria Élite')" class="w-full p-4 bg-[#F7F9FC] hover:bg-[#E9F1FA]/70 border border-[#E3E4E8]/80 rounded-2xl flex items-center gap-3.5 transition text-left active:scale-[0.98]">
+                        <div class="w-11 h-11 rounded-xl bg-[#FAD7D5] text-[#C81E00] flex items-center justify-center text-lg shrink-0">
+                            <i class="fas fa-file-pdf"></i>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-xs font-extrabold text-[#041E42]">Importar archivo PDF</p>
+                            <p class="text-[11px] text-[#55606C]">Cargar contrato de ejemplo listo para firmar</p>
+                        </div>
+                        <i class="fas fa-chevron-right text-[#B5B6BB] text-xs"></i>
+                    </button>
+
+                    <button onclick="addSimulatedDoc('Acuerdo Confidencialidad NDA.pdf', 'Nexus Capital')" class="w-full p-4 bg-[#F7F9FC] hover:bg-[#E9F1FA]/70 border border-[#E3E4E8]/80 rounded-2xl flex items-center gap-3.5 transition text-left active:scale-[0.98]">
+                        <div class="w-11 h-11 rounded-xl bg-[#E9F1FA] text-[#3C6FB0] flex items-center justify-center text-lg shrink-0">
+                            <i class="fas fa-expand"></i>
+                        </div>
+                        <div class="flex-1">
+                            <p class="text-xs font-extrabold text-[#041E42]">Escanear con Cámara</p>
+                            <p class="text-[11px] text-[#55606C]">Digitalización inteligente de papel</p>
+                        </div>
+                        <i class="fas fa-chevron-right text-[#B5B6BB] text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== PANTALLA 3: ÉXITO Y CERTIFICADO ==================== -->
+        <div id="screen-success" class="screen hidden-screen flex-1 flex flex-col items-center justify-center p-6 bg-white text-center">
+            <div class="w-20 h-20 rounded-3xl bg-gradient-to-tr from-[#028D05] to-[#06E3BD] text-white flex items-center justify-center text-3xl mb-5 shadow-xl shadow-[#028D05]/30 rotate-3">
+                <i class="fas fa-check"></i>
+            </div>
+            <h2 class="text-xl font-extrabold text-[#041E42] mb-1.5">¡Firma Certificada!</h2>
+            <p class="text-xs text-[#55606C] mb-6 px-3 leading-relaxed">
+                El documento ha sido sellado criptográficamente y enviado con respaldo legal.
+            </p>
+
+            <!-- Ticket de Auditoría -->
+            <div class="w-full bg-[#F7F9FC] border border-[#E3E4E8]/80 rounded-2xl p-4 mb-5 text-left space-y-3">
+                <div class="flex justify-between items-center border-b border-[#E3E4E8]/70 pb-2.5">
+                    <span class="text-[10px] font-bold uppercase text-[#667085]">Certificado de Auditoría</span>
+                    <span class="px-2 py-0.5 bg-[#D7EED9] text-[#026B04] rounded-md text-[10px] font-bold">VÁLIDO</span>
+                </div>
+                <div class="flex justify-between text-xs">
+                    <span class="text-[#667085]">Archivo:</span>
+                    <span id="success-doc-name" class="font-bold text-[#1B3A66] truncate max-w-[170px]">Contrato.pdf</span>
+                </div>
+                <div class="flex justify-between text-xs">
+                    <span class="text-[#667085]">Huella SHA-256:</span>
+                    <span class="font-mono text-[10px] text-[#3C6FB0] bg-[#E9F1FA] px-1.5 py-0.5 rounded">9f86d081884c7d65...</span>
+                </div>
+                <div class="flex justify-between text-xs">
+                    <span class="text-[#667085]">Firmante:</span>
+                    <span class="font-semibold text-[#1B3A66]">Carlos Mendoza (ID Verificado)</span>
+                </div>
+            </div>
+
+            <div class="w-full space-y-2.5">
+                <button onclick="openCertificateModal()" class="w-full py-3.5 bg-gradient-to-r from-[#3C6FB0] to-[#1B3A66] text-white font-bold rounded-2xl text-xs shadow-lg shadow-[#02152E]/30 active:scale-95 transition flex items-center justify-center gap-2">
+                    <i class="fas fa-qrcode text-sm"></i>
+                    <span>Ver y Exportar Certificado con QR</span>
+                </button>
+
+                <button onclick="navigateTo('screen-home')" class="w-full py-3.5 bg-[#F6F5F7] hover:bg-[#E3E4E8] text-[#1B3A66] font-bold rounded-2xl text-xs active:scale-95 transition">
+                    Volver a mi Bóveda
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL VISOR Y EXPORTACIÓN DE CERTIFICADO QR ==================== -->
+        <div id="certificate-modal" class="hidden-screen absolute inset-0 bg-[#02152E]/80 backdrop-blur-sm z-50 flex flex-col justify-end sm:justify-center p-0 sm:p-4">
+            <div class="bg-white rounded-t-[32px] sm:rounded-3xl p-5 shadow-2xl animate-sheet max-h-[92vh] flex flex-col">
+                <div class="w-10 h-1 bg-[#E3E4E8] rounded-full mx-auto mb-3 sm:hidden"></div>
+                
+                <div class="flex justify-between items-center mb-3 shrink-0">
+                    <div>
+                        <h3 class="text-base font-extrabold text-[#041E42]">Certificado Digital</h3>
+                        <p class="text-[11px] text-[#55606C]">Comprobante criptográfico verificable</p>
+                    </div>
+                    <button onclick="closeCertificateModal()" class="w-8 h-8 rounded-full bg-[#F6F5F7] text-[#55606C] flex items-center justify-center">
+                        <i class="fas fa-times text-xs"></i>
+                    </button>
+                </div>
+
+                <!-- Vista Previa del Certificado Exportable -->
+                <div class="flex-1 overflow-y-auto no-scrollbar mb-4">
+                    <div id="certificate-card" class="bg-gradient-to-b from-[#F7F9FC] to-white border-2 border-[#E3E4E8] rounded-2xl p-4 relative overflow-hidden shadow-xs">
+                        <!-- Marca de agua decorativa -->
+                        <div class="flex justify-between items-center border-b border-[#E3E4E8] pb-3 mb-3">
+                            <div class="flex items-center gap-2">
+                                <div class="relative w-7 h-7 rounded-lg bg-[#3C6FB0] text-white flex items-center justify-center text-[11px] font-extrabold">
+                                    S
+                                    <span class="absolute bottom-0.5 right-0.5 w-1 h-1 rounded-full bg-[#06E3BD]"></span>
+                                </div>
+                                <div>
+                                    <p class="text-[11px] font-extrabold text-[#041E42] leading-none">SIRPEFOFFICE</p>
+                                    <p class="text-[9px] text-[#667085] font-semibold mt-0.5">Autoridad de Sellado Digital</p>
+                                </div>
+                            </div>
+                            <span class="px-2 py-0.5 rounded-md bg-[#D7EED9] text-[#026B04] text-[9px] font-extrabold tracking-wide">VERIFICADO</span>
+                        </div>
+
+                        <!-- Datos del Documento -->
+                        <div class="space-y-2 text-[11px] mb-4">
+                            <div>
+                                <span class="text-[9px] font-bold uppercase text-[#667085] block">Documento Firmado</span>
+                                <span id="cert-doc-title" class="font-extrabold text-[#041E42] text-xs">Contrato Servicios Cloud.pdf</span>
+                            </div>
+                            <div class="grid grid-cols-2 gap-2 pt-1">
+                                <div class="bg-[#F6F5F7]/80 p-2 rounded-xl">
+                                    <span class="text-[9px] text-[#667085] block">Titular Firmante</span>
+                                    <span class="font-bold text-[#1B3A66]">Carlos Mendoza</span>
+                                    <span class="text-[9px] text-[#55606C] block">V-19.482.910</span>
+                                </div>
+                                <div class="bg-[#F6F5F7]/80 p-2 rounded-xl">
+                                    <span class="text-[9px] text-[#667085] block">Fecha y Hora UTC</span>
+                                    <span id="cert-timestamp" class="font-bold text-[#1B3A66]">19 Nov 2026</span>
+                                    <span class="text-[9px] text-[#028D05] font-semibold block">2FA + Biometría OK</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Firma Estampada + Código QR -->
+                        <div class="grid grid-cols-5 gap-3 items-center bg-white border border-[#E3E4E8]/90 rounded-2xl p-3">
+                            <div class="col-span-3 border-r border-[#EFF1F4] pr-2 text-center">
+                                <span class="text-[9px] font-bold uppercase text-[#667085] block mb-1">Rúbrica Registrada</span>
+                                <img id="cert-signature-img" src="" alt="Firma" class="h-14 mx-auto object-contain">
+                                <span class="text-[9px] font-mono text-[#667085] block mt-1 truncate">ID: #SO-9042-VE</span>
+                            </div>
+                            <div class="col-span-2 flex flex-col items-center justify-center">
+                                <canvas id="cert-qr-canvas" width="96" height="96" class="w-20 h-20 rounded-lg border border-[#E3E4E8] p-1 bg-white"></canvas>
+                                <span class="text-[8px] font-bold text-[#3C6FB0] mt-1 text-center leading-tight">Escanear para validar</span>
+                            </div>
+                        </div>
+
+                        <!-- Hash SHA-256 -->
+                        <div class="mt-3 bg-[#041E42] text-[#B5B6BB] rounded-xl p-2.5 font-mono text-[9px] break-all">
+                            <span class="text-[#06E3BD] font-bold block mb-0.5">SHA-256 DIGEST:</span>
+                            <span id="cert-hash">9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Botones de Exportación -->
+                <div class="grid grid-cols-2 gap-2.5 shrink-0">
+                    <button onclick="copyVerificationLink()" class="py-3 px-3 bg-[#F6F5F7] hover:bg-[#E3E4E8] text-[#1B3A66] font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 active:scale-95">
+                        <i class="fas fa-link text-[#3C6FB0]"></i>
+                        <span>Copiar Enlace</span>
+                    </button>
+                    <button onclick="downloadCertificateImage()" class="py-3 px-3 bg-gradient-to-r from-[#3C6FB0] to-[#1B3A66] text-white font-bold rounded-xl text-xs shadow-lg shadow-[#02152E]/25 transition flex items-center justify-center gap-1.5 active:scale-95">
+                        <i class="fas fa-download"></i>
+                        <span>Descargar PNG</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Flotante -->
+        <div id="toast" class="hidden absolute top-5 left-1/2 transform -translate-x-1/2 bg-[#041E42]/95 backdrop-blur-md text-white text-[11px] font-semibold px-4 py-2.5 rounded-full shadow-xl border border-white/10 z-50 whitespace-nowrap flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-[#06E3BD]"></span>
+            <span id="toast-text">Mensaje</span>
+        </div>
+    </div>
+
+    <script>
+        let documents = [
+            { 
+                id: 1, 
+                title: 'Contrato Servicios Cloud.pdf', 
+                sender: 'LegalCorp S.A.', 
+                date: 'Hoy, 14:20', 
+                status: 'pending', 
+                tag: 'Urgente', 
+                signatureImg: null,
+                summary: 'Acuerdo de infraestructura cloud por 12 meses con SLA garantizado del 99.9% y facturación mensual.',
+                keyPoints: [
+                    { label: 'Contraparte', value: 'LegalCorp S.A. (RIF Verificado)', ok: true },
+                    { label: 'Vigencia y Monto', value: '12 meses • $450/mes sin penalidad', ok: true },
+                    { label: 'Protección de Datos', value: 'Cumple cláusula estándar E2E', ok: true }
+                ]
+            },
+            { 
+                id: 2, 
+                title: 'Anexo Modificatorio N° 4.pdf', 
+                sender: 'Talento Humano', 
+                date: 'Ayer', 
+                status: 'pending', 
+                tag: 'RRHH', 
+                signatureImg: null,
+                summary: 'Actualización de esquema híbrido de trabajo y ajuste de beneficios corporativos vigentes desde diciembre.',
+                keyPoints: [
+                    { label: 'Emisor', value: 'Dirección de Talento Humano', ok: true },
+                    { label: 'Modalidad', value: 'Híbrida (3 días remotos / semana)', ok: true },
+                    { label: 'Cláusulas Ocultas', value: 'Ninguna modificación salarial negativa', ok: true }
+                ]
+            },
+            { 
+                id: 3, 
+                title: 'Acuerdo Confidencialidad.pdf', 
+                sender: 'GlobalTech', 
+                date: '15 Nov 2026', 
+                status: 'signed', 
+                tag: 'Legal', 
+                signatureImg: null,
+                summary: 'Compromiso bilateral de no divulgación (NDA) sobre propiedad intelectual y código fuente compartido.',
+                keyPoints: [
+                    { label: 'Alcance', value: 'Bilateral • Protección mutua', ok: true },
+                    { label: 'Duración NDA', value: '24 meses tras cierre de proyecto', ok: true },
+                    { label: 'Integridad', value: 'Documento sellado sin alteraciones', ok: true }
+                ]
+            }
+        ];
+
+        let currentFilter = 'all';
+        let activeDocId = null;
+        let isDrawing = false;
+        let hasDrawn = false;
+        let penColor = '#041e42';
+        let signMode = 'draw';
+        let isLandscapeSign = false;
+
+        const canvas = document.getElementById('signature-pad');
+        const ctx = canvas.getContext('2d');
+        ctx.lineWidth = 3.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = penColor;
+
+        function getCoords(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            // Si el modal está rotado 90 grados en horizontal, mapear ejes X/Y
+            if (isLandscapeSign) {
+                const relX = (clientY - rect.top) / rect.height;
+                const relY = 1 - ((clientX - rect.left) / rect.width);
+                return {
+                    x: relX * canvas.width,
+                    y: relY * canvas.height
+                };
+            }
+
+            return {
+                x: (clientX - rect.left) * (canvas.width / rect.width),
+                y: (clientY - rect.top) * (canvas.height / rect.height)
+            };
+        }
+
+        function startDraw(e) {
+            isDrawing = true;
+            hasDrawn = true;
+            const pos = getCoords(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+            if(e.cancelable) e.preventDefault();
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            const pos = getCoords(e);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+            if(e.cancelable) e.preventDefault();
+        }
+
+        function stopDraw() { isDrawing = false; }
+
+        canvas.addEventListener('mousedown', startDraw);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDraw);
+        canvas.addEventListener('mouseout', stopDraw);
+        canvas.addEventListener('touchstart', startDraw, { passive: false });
+        canvas.addEventListener('touchmove', draw, { passive: false });
+        canvas.addEventListener('touchend', stopDraw);
+
+        function setPenColor(color, btnElement) {
+            penColor = color;
+            ctx.strokeStyle = color;
+            const activeDot = document.getElementById('active-ink-dot');
+            if (activeDot) activeDot.style.backgroundColor = color;
+            document.querySelectorAll('.color-btn').forEach(btn => {
+                btn.classList.remove('ring-2', 'ring-offset-2', 'ring-[#3C6FB0]');
+            });
+            if (btnElement && btnElement.classList.contains('color-btn')) {
+                btnElement.classList.add('ring-2', 'ring-offset-2', 'ring-[#3C6FB0]');
+            }
+        }
+
+        function toggleInkPopover(forceState) {
+            const pop = document.getElementById('ink-popover');
+            if (!pop) return;
+            if (typeof forceState === 'boolean') {
+                pop.classList.toggle('hidden', !forceState);
+            } else {
+                pop.classList.toggle('hidden');
+            }
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            hasDrawn = false;
+        }
+
+        function switchSignMode(mode) {
+            signMode = mode;
+            const drawBtn = document.getElementById('mode-draw-btn');
+            const typeBtn = document.getElementById('mode-type-btn');
+            const panelDraw = document.getElementById('panel-draw');
+            const panelType = document.getElementById('panel-type');
+            const landscapeSelect = document.getElementById('landscape-mode-select');
+            if (landscapeSelect) landscapeSelect.value = mode;
+
+            if (mode === 'draw') {
+                drawBtn.className = 'py-2 rounded-lg text-xs font-bold bg-white text-[#041E42] shadow-xs transition';
+                typeBtn.className = 'py-2 rounded-lg text-xs font-semibold text-[#55606C] transition';
+                panelDraw.classList.remove('hidden');
+                panelType.classList.add('hidden');
+            } else {
+                typeBtn.className = 'py-2 rounded-lg text-xs font-bold bg-white text-[#041E42] shadow-xs transition';
+                drawBtn.className = 'py-2 rounded-lg text-xs font-semibold text-[#55606C] transition';
+                panelType.classList.remove('hidden');
+                panelDraw.classList.add('hidden');
+            }
+        }
+
+        function renderDocuments() {
+            const listEl = document.getElementById('documents-list');
+            const searchTerm = document.getElementById('search-input').value.toLowerCase();
+            
+            document.getElementById('count-pending').innerText = documents.filter(d => d.status === 'pending').length;
+            document.getElementById('count-signed').innerText = documents.filter(d => d.status === 'signed').length;
+
+            const filtered = documents.filter(doc => {
+                const matchesStatus = currentFilter === 'all' || doc.status === currentFilter;
+                const matchesSearch = doc.title.toLowerCase().includes(searchTerm) || doc.sender.toLowerCase().includes(searchTerm);
+                return matchesStatus && matchesSearch;
+            });
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = `
+                    <div class="text-center py-10 bg-white rounded-2xl border border-[#E3E4E8]/60">
+                        <i class="far fa-folder-open text-2xl text-[#B5B6BB] mb-2"></i>
+                        <p class="text-xs font-semibold text-[#667085]">No se encontraron documentos</p>
+                    </div>`;
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(doc => {
+                const isPending = doc.status === 'pending';
+                return `
+                <div onclick="openDocument(${doc.id})" class="bg-white p-3.5 rounded-2xl border border-[#E3E4E8]/70 shadow-xs hover:shadow-md flex items-center gap-3.5 cursor-pointer active:scale-[0.98] transition">
+                    <div class="w-11 h-11 rounded-2xl ${isPending ? 'bg-[#E9F1FA] text-[#3C6FB0]' : 'bg-[#E7F4E8] text-[#028D05]'} flex items-center justify-center text-base shrink-0">
+                        <i class="fas ${isPending ? 'fa-file-signature' : 'fa-file-circle-check fas fa-check-double'}"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-1.5 mb-0.5">
+                            <span class="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${isPending ? 'bg-[#FEF4E6]/80 text-[#B45309]' : 'bg-[#F6F5F7] text-[#55606C]'}">${doc.tag || 'Doc'}</span>
+                            <span class="text-[10px] text-[#667085] truncate">${doc.date}</span>
+                        </div>
+                        <h3 class="text-xs font-extrabold text-[#041E42] truncate">${doc.title}</h3>
+                        <p class="text-[11px] text-[#55606C] truncate">${doc.sender}</p>
+                    </div>
+                    <div class="shrink-0">
+                        ${isPending 
+                            ? `<span class="px-3 py-1.5 rounded-xl text-[11px] font-bold bg-[#041E42] text-white shadow-xs">Firmar</span>`
+                            : `<span class="w-8 h-8 rounded-xl bg-[#E7F4E8] text-[#028D05] flex items-center justify-center"><i class="fas fa-check text-xs"></i></span>`
+                        }
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function filterByStatus(status) {
+            currentFilter = status;
+            ['all', 'pending', 'signed'].forEach(tab => {
+                const el = document.getElementById(`tab-${tab}`);
+                el.className = (tab === status)
+                    ? 'px-3.5 py-1.5 rounded-lg text-xs font-bold bg-white text-[#041E42] shadow-xs transition'
+                    : 'px-3.5 py-1.5 rounded-lg text-xs font-semibold text-[#55606C] transition';
+            });
+            renderDocuments();
+        }
+
+        function filterDocs() { renderDocuments(); }
+
+        function navigateTo(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden-screen'));
+            document.getElementById(screenId).classList.remove('hidden-screen');
+            if (screenId === 'screen-home') renderDocuments();
+        }
+
+        function openDocument(id) {
+            activeDocId = id;
+            const doc = documents.find(d => d.id === id);
+            if (!doc) return;
+
+            document.getElementById('viewer-title').innerText = doc.title;
+            document.getElementById('viewer-subtitle').innerText = `Enviado por ${doc.sender}`;
+
+            // Poblar tarjeta minimalista de resumen y verificación de contenido
+            document.getElementById('summary-overview').innerText = doc.summary || 'Documento verificado criptográficamente. Sin modificaciones detectadas desde su emisión.';
+            document.getElementById('summary-details').classList.add('hidden');
+            document.getElementById('summary-toggle-label').innerText = 'Resumen';
+            document.getElementById('summary-chevron').style.transform = 'rotate(0deg)';
+
+            const pointsContainer = document.getElementById('summary-points');
+            const points = doc.keyPoints || [
+                { label: 'Emisor', value: doc.sender },
+                { label: 'Integridad', value: 'PDF Íntegro' }
+            ];
+            pointsContainer.innerHTML = points.map(p => `
+                <span class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#F7F9FC] border border-[#E3E4E8]/70 text-[10px] text-[#55606C]">
+                    <i class="fas fa-check text-[#028D05] text-[9px]"></i>
+                    <strong class="font-semibold text-[#1B3A66]">${p.label}:</strong> ${p.value}
+                </span>
+            `).join('');
+
+            const placeholder = document.getElementById('signature-placeholder');
+            const appliedBox = document.getElementById('applied-signature-box');
+            const btnChangeSig = document.getElementById('btn-change-signature');
+            const btnFinish = document.getElementById('btn-finish-doc');
+
+            if (doc.status === 'signed') {
+                placeholder.classList.add('hidden');
+                appliedBox.classList.remove('hidden');
+                if (btnChangeSig) btnChangeSig.classList.add('hidden');
+
+                document.getElementById('applied-signature-img').src = doc.signatureImg || generateDefaultSignature();
+                btnFinish.disabled = false;
+                btnFinish.onclick = () => openCertificateModal();
+                btnFinish.className = 'w-full py-3.5 rounded-2xl font-bold text-xs bg-[#3C6FB0] text-white shadow-lg shadow-[#02152E]/25 flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition';
+                btnFinish.innerHTML = '<i class="fas fa-qrcode text-sm"></i> <span>Ver y Exportar Certificado QR</span>';
+            } else {
+                placeholder.classList.remove('hidden');
+                appliedBox.classList.add('hidden');
+                if (btnChangeSig) btnChangeSig.classList.remove('hidden');
+                btnFinish.disabled = true;
+                btnFinish.onclick = () => openBiometricModal();
+                btnFinish.className = 'w-full py-3.5 rounded-2xl font-bold text-xs bg-[#F6F5F7] text-[#667085] transition flex items-center justify-center gap-2';
+                btnFinish.innerHTML = '<span>Completa el recuadro de firma arriba</span>';
+            }
+
+            navigateTo('screen-viewer');
+        }
+
+        function openSignatureModal() {
+            clearCanvas();
+            switchSignMode('draw');
+            if (isLandscapeSign) toggleLandscapeSign(false);
+            document.getElementById('signature-modal').classList.remove('hidden-screen');
+        }
+
+        function closeSignatureModal() {
+            if (isLandscapeSign) toggleLandscapeSign(false);
+            document.getElementById('signature-modal').classList.add('hidden-screen');
+        }
+
+        function toggleLandscapeSign(forceState) {
+            isLandscapeSign = typeof forceState === 'boolean' ? forceState : !isLandscapeSign;
+            const sheetBox = document.getElementById('signature-sheet-box');
+            const dragPill = document.getElementById('signature-drag-pill');
+            const vHeader = document.getElementById('sign-vertical-header');
+            const vTabs = document.getElementById('sign-vertical-tabs');
+            const vTools = document.getElementById('sign-vertical-tools');
+            const vSubmit = document.getElementById('sign-vertical-submit');
+            const sidebar = document.getElementById('sign-sidebar-controls');
+
+            clearCanvas();
+            toggleInkPopover(false);
+
+            if (isLandscapeSign) {
+                canvas.width = 620;
+                canvas.height = 320;
+                sheetBox.classList.remove('animate-sheet', 'rounded-t-[32px]', 'p-5');
+                sheetBox.classList.add('landscape-sign-sheet');
+                dragPill.classList.add('hidden');
+                vHeader.classList.add('hidden');
+                vTabs.classList.add('hidden');
+                vTools.classList.add('hidden');
+                vSubmit.classList.add('hidden');
+                sidebar.classList.remove('hidden');
+                showToast('Modo amplio activado');
+            } else {
+                canvas.width = 340;
+                canvas.height = 170;
+                sheetBox.classList.remove('landscape-sign-sheet');
+                sheetBox.classList.add('rounded-t-[32px]', 'p-5');
+                dragPill.classList.remove('hidden');
+                vHeader.classList.remove('hidden');
+                vTabs.classList.remove('hidden');
+                vTools.classList.remove('hidden');
+                vSubmit.classList.remove('hidden');
+                sidebar.classList.add('hidden');
+            }
+
+            // Restaurar propiedades del contexto tras cambiar dimensiones del canvas
+            ctx.lineWidth = 3.2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.strokeStyle = penColor;
+        }
+
+        function saveSignature() {
+            let dataUrl = '';
+            if (signMode === 'draw') {
+                if (!hasDrawn) {
+                    showToast('Dibuja tu firma o cambia a modo Automática');
+                    return;
+                }
+                dataUrl = canvas.toDataURL();
+            } else {
+                dataUrl = generateDefaultSignature();
+            }
+
+            document.getElementById('signature-placeholder').classList.add('hidden');
+            const appliedBox = document.getElementById('applied-signature-box');
+            appliedBox.classList.remove('hidden');
+            
+            document.getElementById('applied-signature-img').src = dataUrl;
+            
+            const now = new Date();
+            document.getElementById('signature-timestamp').innerText = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')} UTC`;
+
+            const btnFinish = document.getElementById('btn-finish-doc');
+            btnFinish.disabled = false;
+            btnFinish.className = 'w-full py-3.5 rounded-2xl font-bold text-xs bg-gradient-to-r from-[#028D05] to-[#06E3BD] text-white shadow-lg shadow-[#028D05]/30 transition flex items-center justify-center gap-2 cursor-pointer active:scale-[0.99]';
+            btnFinish.innerHTML = '<i class="fas fa-fingerprint text-sm"></i> <span>Confirmar y Sellar Firma</span>';
+
+            const doc = documents.find(d => d.id === activeDocId);
+            if (doc) doc.tempSignature = dataUrl;
+
+            closeSignatureModal();
+            showToast('Firma aplicada en el documento');
+        }
+
+        function openBiometricModal() {
+            // Reiniciar flujo 2FA al Paso 1
+            clearInterval(otpInterval);
+            document.getElementById('auth-step-1').classList.remove('hidden');
+            document.getElementById('auth-step-2').classList.add('hidden');
+            document.getElementById('step-dot-1').className = 'h-1.5 w-8 rounded-full bg-[#3C6FB0] transition-all';
+            document.getElementById('step-dot-2').className = 'h-1.5 w-8 rounded-full bg-[#E3E4E8] transition-all';
+            
+            const btn1 = document.getElementById('btn-step-1');
+            btn1.disabled = false;
+            btn1.innerHTML = '<i class="fas fa-fingerprint text-sm"></i><span>Escanear Huella</span>';
+            
+            const syncBox = document.getElementById('web-sync-status');
+            syncBox.className = 'flex items-center justify-center gap-2 text-[11px] text-[#55606C] bg-[#F7F9FC] border border-[#E3E4E8]/80 rounded-xl py-2 px-3 mb-4';
+            syncBox.innerHTML = '<i class="fas fa-circle-notch fa-spin text-[#3C6FB0] text-xs"></i><span>Esperando ingreso en portal web...</span>';
+
+            const btnVerify = document.getElementById('btn-verify-otp');
+            btnVerify.disabled = false;
+            btnVerify.innerHTML = '<i class="fas fa-desktop text-xs"></i><span>Simular Ingreso en Sistema Web</span>';
+
+            document.getElementById('biometric-modal').classList.remove('hidden-screen');
+        }
+
+        function closeBiometricModal() {
+            clearInterval(otpInterval);
+            document.getElementById('biometric-modal').classList.add('hidden-screen');
+        }
+
+        let otpInterval = null;
+        let currentGeneratedOTP = '849201';
+
+        function generateNewToken() {
+            const p1 = Math.floor(100 + Math.random() * 900);
+            const p2 = Math.floor(100 + Math.random() * 900);
+            currentGeneratedOTP = `${p1}${p2}`;
+            document.getElementById('generated-otp-display').innerText = `${p1} ${p2}`;
+        }
+
+        function startTokenCountdown() {
+            clearInterval(otpInterval);
+            generateNewToken();
+            let secondsLeft = 30;
+            const timerText = document.getElementById('otp-timer-text');
+            const progressBar = document.getElementById('otp-progress-bar');
+
+            timerText.innerText = `${secondsLeft}s`;
+            progressBar.style.width = '100%';
+
+            otpInterval = setInterval(() => {
+                secondsLeft--;
+                if (secondsLeft <= 0) {
+                    secondsLeft = 30;
+                    generateNewToken();
+                    showToast('Nuevo token dinámico generado');
+                }
+                timerText.innerText = `${secondsLeft}s`;
+                progressBar.style.width = `${(secondsLeft / 30) * 100}%`;
+            }, 1000);
+        }
+
+        function copyGeneratedToken() {
+            const tempInput = document.createElement('input');
+            tempInput.value = currentGeneratedOTP;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            showToast(`Token ${currentGeneratedOTP} copiado al portapapeles`);
+        }
+
+        function verifyStep1Biometric() {
+            const btn1 = document.getElementById('btn-step-1');
+            const iconBox = document.getElementById('fingerprint-icon-box');
+            
+            btn1.disabled = true;
+            btn1.innerHTML = '<i class="fas fa-circle-notch fa-spin text-sm"></i><span>Validando biometría...</span>';
+            iconBox.classList.add('bg-[#E7F4E8]', 'text-[#028D05]');
+
+            setTimeout(() => {
+                // Pasar al Factor 2 (Generador de Token para Web)
+                document.getElementById('auth-step-1').classList.add('hidden');
+                document.getElementById('auth-step-2').classList.remove('hidden');
+                document.getElementById('step-dot-1').className = 'h-1.5 w-8 rounded-full bg-[#028D05] transition-all';
+                document.getElementById('step-dot-2').className = 'h-1.5 w-8 rounded-full bg-[#3C6FB0] transition-all';
+                
+                iconBox.classList.remove('bg-[#E7F4E8]', 'text-[#028D05]');
+                startTokenCountdown();
+            }, 850);
+        }
+
+        function simulateWebTokenEntered() {
+            clearInterval(otpInterval);
+            const syncBox = document.getElementById('web-sync-status');
+            const btnVerify = document.getElementById('btn-verify-otp');
+
+            btnVerify.disabled = true;
+            btnVerify.innerHTML = '<i class="fas fa-circle-notch fa-spin text-xs"></i><span>Sincronizando con Web...</span>';
+            
+            syncBox.className = 'flex items-center justify-center gap-2 text-[11px] font-bold text-[#026B04] bg-[#E7F4E8] border border-[#B7E0BA] rounded-xl py-2 px-3 mb-4';
+            syncBox.innerHTML = `<i class="fas fa-check-circle text-[#028D05]"></i><span>Token ${currentGeneratedOTP} validado en Portal Web</span>`;
+
+            setTimeout(() => {
+                confirmBiometricAndFinish();
+            }, 900);
+        }
+
+        function confirmBiometricAndFinish() {
+            closeBiometricModal();
+            const doc = documents.find(d => d.id === activeDocId);
+            if (doc) {
+                doc.status = 'signed';
+                doc.signatureImg = doc.tempSignature;
+                doc.date = 'Firmado hoy';
+                document.getElementById('success-doc-name').innerText = doc.title;
+            }
+            navigateTo('screen-success');
+        }
+
+        function openUploadModal() { document.getElementById('upload-modal').classList.remove('hidden-screen'); }
+        function closeUploadModal() { document.getElementById('upload-modal').classList.add('hidden-screen'); }
+
+        function addSimulatedDoc(title, sender) {
+            documents.unshift({
+                id: Date.now(),
+                title: title,
+                sender: sender,
+                date: 'Ahora',
+                status: 'pending',
+                tag: 'Nuevo',
+                signatureImg: null,
+                summary: `Documento importado (${title}) emitido por ${sender}. Estructura y metadatos analizados automáticamente.`,
+                keyPoints: [
+                    { label: 'Origen', value: sender, ok: true },
+                    { label: 'Formato', value: 'PDF/A-1b apto para firma legal', ok: true },
+                    { label: 'Riesgo detectado', value: 'Bajo • Cláusulas estándar', ok: true }
+                ]
+            });
+            closeUploadModal();
+            renderDocuments();
+            showToast('Documento añadido y analizado');
+        }
+
+        function toggleDocSummary() {
+            toggleSummaryDetails();
+        }
+
+        function toggleSummaryDetails() {
+            const details = document.getElementById('summary-details');
+            const label = document.getElementById('summary-toggle-label');
+            const chevron = document.getElementById('summary-chevron');
+            const isHidden = details.classList.contains('hidden');
+
+            if (isHidden) {
+                details.classList.remove('hidden');
+                label.innerText = 'Ocultar';
+                chevron.style.transform = 'rotate(180deg)';
+            } else {
+                details.classList.add('hidden');
+                label.innerText = 'Resumen';
+                chevron.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function generateDefaultSignature() {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 280;
+            tempCanvas.height = 80;
+            const tCtx = tempCanvas.getContext('2d');
+            tCtx.font = '600 38px Caveat, cursive';
+            tCtx.fillStyle = '#041e42';
+            tCtx.fillText('Carlos Mendoza', 15, 52);
+            return tempCanvas.toDataURL();
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-text').innerText = msg;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 2600);
+        }
+
+        function drawRealisticQR(canvasEl, seedText) {
+            const qCtx = canvasEl.getContext('2d');
+            const size = canvasEl.width;
+            const cells = 21;
+            const cellSize = size / cells;
+
+            qCtx.fillStyle = '#ffffff';
+            qCtx.fillRect(0, 0, size, size);
+            qCtx.fillStyle = '#041e42';
+
+            // Generar matriz determinística según el texto del documento
+            let hash = 0;
+            for (let i = 0; i < seedText.length; i++) {
+                hash = ((hash << 5) - hash) + seedText.charCodeAt(i);
+                hash |= 0;
+            }
+
+            const isFinderZone = (r, c) => {
+                return (r < 8 && c < 8) || (r < 8 && c >= cells - 8) || (r >= cells - 8 && c < 8);
+            };
+
+            for (let r = 0; r < cells; r++) {
+                for (let c = 0; c < cells; c++) {
+                    if (isFinderZone(r, c)) continue;
+                    const val = Math.abs(Math.sin(hash + r * 31 + c * 17));
+                    if (val > 0.48) {
+                        qCtx.fillRect(c * cellSize, r * cellSize, cellSize - 0.4, cellSize - 0.4);
+                    }
+                }
+            }
+
+            // Patrones de posición (las 3 esquinas clásicas del QR)
+            const drawFinder = (startR, startC) => {
+                qCtx.fillStyle = '#041e42';
+                qCtx.fillRect(startC * cellSize, startR * cellSize, 7 * cellSize, 7 * cellSize);
+                qCtx.fillStyle = '#ffffff';
+                qCtx.fillRect((startC + 1) * cellSize, (startR + 1) * cellSize, 5 * cellSize, 5 * cellSize);
+                qCtx.fillStyle = '#3c6fb0';
+                qCtx.fillRect((startC + 2) * cellSize, (startR + 2) * cellSize, 3 * cellSize, 3 * cellSize);
+            };
+
+            drawFinder(0, 0);
+            drawFinder(0, cells - 7);
+            drawFinder(cells - 7, 0);
+        }
+
+        function openCertificateModal() {
+            const doc = documents.find(d => d.id === activeDocId) || documents[0];
+            document.getElementById('cert-doc-title').innerText = doc.title;
+            
+            const now = new Date();
+            document.getElementById('cert-timestamp').innerText = `19 Nov 2026 • ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')} UTC`;
+            document.getElementById('cert-signature-img').src = doc.signatureImg || generateDefaultSignature();
+
+            const qrCanvas = document.getElementById('cert-qr-canvas');
+            drawRealisticQR(qrCanvas, doc.title + doc.id);
+
+            document.getElementById('certificate-modal').classList.remove('hidden-screen');
+        }
+
+        function closeCertificateModal() {
+            document.getElementById('certificate-modal').classList.add('hidden-screen');
+        }
+
+        function copyVerificationLink() {
+            const doc = documents.find(d => d.id === activeDocId) || documents[0];
+            const verifyUrl = `https://sirpefoffice.mppef.gob.ve/verificar/SO-9042-${doc.id}`;
+            const tempInput = document.createElement('input');
+            tempInput.value = verifyUrl;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            showToast('Enlace de verificación QR copiado');
+        }
+
+        function downloadCertificateImage() {
+            const doc = documents.find(d => d.id === activeDocId) || documents[0];
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = 720;
+            exportCanvas.height = 960;
+            const eCtx = exportCanvas.getContext('2d');
+
+            // Fondo blanco y marco
+            eCtx.fillStyle = '#ffffff';
+            eCtx.fillRect(0, 0, 720, 960);
+            eCtx.strokeStyle = '#e3e4e8';
+            eCtx.lineWidth = 4;
+            eCtx.strokeRect(24, 24, 672, 912);
+
+            // Cabecera oscura
+            eCtx.fillStyle = '#041e42';
+            eCtx.fillRect(24, 24, 672, 130);
+            eCtx.fillStyle = '#ffffff';
+            eCtx.font = 'bold 28px sans-serif';
+            eCtx.fillText('SIRPEFOFFICE • CERTIFICADO DIGITAL', 56, 82);
+            eCtx.fillStyle = '#667085';
+            eCtx.font = '18px sans-serif';
+            eCtx.fillText('Comprobante de Firma Electrónica y Sellado de Tiempo', 56, 118);
+
+            // Sello Verificado
+            eCtx.fillStyle = '#e7f4e8';
+            eCtx.fillRect(56, 185, 220, 38);
+            eCtx.fillStyle = '#028d05';
+            eCtx.font = 'bold 16px sans-serif';
+            eCtx.fillText('✓ DOCUMENTO VERIFICADO', 72, 210);
+
+            // Metadatos
+            eCtx.fillStyle = '#55606c';
+            eCtx.font = 'bold 16px sans-serif';
+            eCtx.fillText('ARCHIVO FIRMADO:', 56, 275);
+            eCtx.fillStyle = '#041e42';
+            eCtx.font = 'bold 24px sans-serif';
+            eCtx.fillText(doc.title, 56, 308);
+
+            eCtx.fillStyle = '#55606c';
+            eCtx.font = 'bold 16px sans-serif';
+            eCtx.fillText('TITULAR Y AUTENTICACIÓN:', 56, 370);
+            eCtx.fillStyle = '#041e42';
+            eCtx.font = '20px sans-serif';
+            eCtx.fillText('Carlos Mendoza (V-19.482.910) • Biometría + Token 2FA', 56, 400);
+
+            // Caja Firma + QR
+            eCtx.strokeStyle = '#b5b6bb';
+            eCtx.lineWidth = 2;
+            eCtx.strokeRect(56, 450, 608, 250);
+
+            const sigImg = document.getElementById('cert-signature-img');
+            if (sigImg && sigImg.complete) {
+                eCtx.drawImage(sigImg, 85, 495, 260, 120);
+            }
+            eCtx.fillStyle = '#55606c';
+            eCtx.font = '15px monospace';
+            eCtx.fillText('Rúbrica Digital Estampada', 110, 655);
+
+            // Copiar QR al certificado exportado
+            const qrCanvas = document.getElementById('cert-qr-canvas');
+            eCtx.drawImage(qrCanvas, 455, 475, 175, 175);
+            eCtx.fillStyle = '#3c6fb0';
+            eCtx.font = 'bold 14px sans-serif';
+            eCtx.fillText('Validación QR Pública', 468, 675);
+
+            // Hash SHA-256 inferior
+            eCtx.fillStyle = '#f7f9fc';
+            eCtx.fillRect(56, 735, 608, 110);
+            eCtx.fillStyle = '#3c6fb0';
+            eCtx.font = 'bold 15px monospace';
+            eCtx.fillText('HUELLA CRIPTOGRÁFICA SHA-256:', 76, 770);
+            eCtx.fillStyle = '#1b3a66';
+            eCtx.font = '14px monospace';
+            eCtx.fillText('9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822c', 76, 800);
+            eCtx.fillText('d15d6c15b0f00a08 • ID: #SO-9042-VE', 76, 822);
+
+            // Descargar archivo PNG
+            const link = document.createElement('a');
+            link.download = `Certificado_${doc.title.replace('.pdf', '')}.png`;
+            link.href = exportCanvas.toDataURL('image/png');
+            link.click();
+
+            showToast('Certificado descargado con éxito');
+        }
+
+        renderDocuments();
+    </script>
+</body>
+</html>

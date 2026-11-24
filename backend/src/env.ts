@@ -123,6 +123,18 @@ const envSchema = z.object({
   CHROME_PATH: z.string().default('/usr/bin/google-chrome'),
   EXPORT_DIR: z.string().default('./data/exports'),
 
+  /* ── Firma electrónica móvil ───────────────────────────────────────── */
+  /** Base pública para los enlaces de verificación del certificado. */
+  PUBLIC_APP_URL: z.string().default('http://localhost:5173'),
+  /** Vida de un desafío de firma: debe dar tiempo a dibujar y autenticarse. */
+  SIGNATURE_CHALLENGE_TTL_SECONDS: z.coerce.number().int().positive().default(180),
+  /** Tamaño máximo del PNG de la rúbrica. */
+  SIGNATURE_MAX_PNG_BYTES: z.coerce.number().int().positive().default(524_288),
+  /** Carpeta de PDFs sellados y certificados. */
+  SIGNATURE_DIR: z.string().default('./data/signatures'),
+  /** Prefijo legible de la serie del certificado. */
+  SIGNATURE_CERT_SERIAL_PREFIX: z.string().default('SF'),
+
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
   GOOGLE_REDIRECT_URI: z.string().default('http://localhost:3101/auth/google/callback'),

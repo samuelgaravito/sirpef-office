@@ -302,6 +302,35 @@ function designCss(design: DesignTokens, forPdf = false, embed = false): string 
     grid-template-rows: auto 1fr auto;
   }
 
+  /* Marca de agua de los memos anulados: se repite en cada hoja, también en
+     la impresión y en el PDF. Va sobre el contenido pero no recibe clics. */
+  .doc-watermark {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 2;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .doc-watermark span {
+    transform: rotate(-45deg);
+    border: 4px solid currentColor;
+    border-radius: 4px;
+    padding: .06em .24em;
+    color: rgba(185, 28, 28, .16);
+    font-family: var(--doc-font);
+    font-size: 72pt;
+    font-weight: 800;
+    letter-spacing: .18em;
+    line-height: 1;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
   .doc-page-top {
     min-height: var(--m-top);
     padding-bottom: 4mm;
@@ -525,6 +554,12 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Capa de marca de agua que se repite en cada hoja física. */
+function watermarkHtml(text: string | null | undefined): string {
+  if (!text) return '';
+  return `<div class="doc-watermark" aria-hidden="true"><span>${escapeHtml(text)}</span></div>`;
+}
+
 /**
  * HTML de una imagen de banda. Se usan milímetros tanto en la hoja de preview
  * como en la plantilla de cabecera/pie de Chrome para conservar la posición.
@@ -588,6 +623,8 @@ export interface RenderOptions {
   embed?: boolean;
   /** Cabecera y pie efectivos (documento → plantilla → diseño). */
   chrome?: ResolvedChrome | null;
+  /** Texto de la marca de agua (p. ej. «ANULADO»); `null` = sin marca. */
+  watermark?: string | null;
 }
 
 /**
@@ -738,6 +775,7 @@ export function buildDocumentHtml(options: RenderOptions): string {
 </head>
 <body${options.mode === 'print' ? ' class="print"' : ''}>
   <div class="doc-page" data-page="1">
+    ${watermarkHtml(options.watermark)}
     ${pageContent}
   </div>
 </body>
@@ -789,6 +827,7 @@ export function buildPaginatedDocumentHtml(options: PaginatedRenderOptions): str
 
     const height = pageLayout.pageHeightsPx[pageIndex] ?? pageLayout.pageHeightPx;
     return `      <section class="doc-page" data-page="${pageNumber}" style="height:${height}px">
+        ${watermarkHtml(options.watermark)}
         <div class="doc-page-top">
           ${head}
           ${headerBand}

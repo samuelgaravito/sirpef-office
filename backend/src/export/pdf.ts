@@ -18,6 +18,8 @@ export interface PdfOptions {
   title?: string;
   includeLetterhead?: boolean;
   chrome?: ResolvedChrome | null;
+  /** Texto de la marca de agua (p. ej. «ANULADO»); `null` = sin marca. */
+  watermark?: string | null;
 }
 
 /**
@@ -52,6 +54,7 @@ export async function renderPdf(options: PdfOptions): Promise<Buffer> {
     title: options.title,
     includeLetterhead: options.includeLetterhead !== false,
     mode: 'print',
+    watermark: options.watermark ?? null,
   });
 
   return withPage(async (page) => {

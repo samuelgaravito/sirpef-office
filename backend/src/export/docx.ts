@@ -23,6 +23,7 @@ import {
   WidthType,
   convertMillimetersToTwip,
 } from 'docx';
+import { TextWatermark } from 'docx/watermarks';
 
 import type {
   ChromeConfig,
@@ -748,6 +749,8 @@ export interface DocxOptions {
   interpolated?: JSONContent;
   /** Cabecera y pie efectivos (documento → plantilla → diseño). */
   chrome?: ResolvedChrome | null;
+  /** Texto de la marca de agua (p. ej. «ANULADO»); `null` = sin marca. */
+  watermark?: string | null;
 }
 
 /** Bloques de una banda con variables y campos de página ya resueltos. */
@@ -924,6 +927,23 @@ export async function renderDocx(options: DocxOptions): Promise<Buffer> {
       ...chromeBlocksWithWidth(chrome.header, values, design, contentWidthTwips),
     );
     headerNodes.push(...bandImageParagraphs(chrome.header, design, 'header', pageHeightCm));
+  }
+
+  // Marca de agua nativa de Word: se dibuja en la cabecera y se repite en
+  // todas las páginas del memo anulado.
+  if (options.watermark) {
+    headerNodes.push(
+      new Paragraph({
+        children: [
+          new TextWatermark({
+            text: options.watermark,
+            font: design.fontFamily.split(',')[0]?.trim() ?? 'Arial',
+            color: 'B91C1C',
+            opacity: 0.2,
+          }),
+        ],
+      }),
+    );
   }
 
   const header = headerNodes.length > 0 ? new Header({ children: headerNodes }) : undefined;
