@@ -2,8 +2,8 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import type { ChromeConfig, DesignTokens, ResolvedChrome } from '@sirpefoffice/shared';
 import {
-  ANNULED_WATERMARK,
   DEFAULT_DESIGN_TOKENS,
+  documentWatermark,
   resolveChrome,
   withDocumentNumber,
 } from '@sirpefoffice/shared';
@@ -63,6 +63,6 @@ export async function renderDocumentPdf(document: DocumentRow): Promise<Buffer> 
     values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
     title: document.title,
     includeLetterhead: true,
-    watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
+    watermark: documentWatermark(document.status),
   });
 }

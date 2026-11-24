@@ -241,10 +241,21 @@ export const DOCUMENT_STATUSES = [
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
 /**
- * Texto de la marca de agua que llevan las vistas y exportaciones de un
- * documento anulado. Se usa igual en HTML/PDF y en el DOCX (WordArt).
+ * Texto de la marca de agua que llevan las vistas y exportaciones según el
+ * estado del documento. Los estados que no aparecen aquí no llevan marca.
+ *
+ * - `cancelled`: memo aprobado que el administrador dejó sin efecto.
+ * - `rejected`: rechazo definitivo, cerrado y en solo lectura.
  */
-export const ANNULED_WATERMARK = 'ANULADO';
+export const DOCUMENT_WATERMARKS: Partial<Record<DocumentStatus, string>> = {
+  cancelled: 'ANULADO',
+  rejected: 'RECHAZADO',
+};
+
+/** Marca de agua del documento, o `null` si su estado no lleva ninguna. */
+export function documentWatermark(status: DocumentStatus): string | null {
+  return DOCUMENT_WATERMARKS[status] ?? null;
+}
 
 export type VersionKind = 'auto' | 'manual' | 'ai' | 'export' | 'restore';
 

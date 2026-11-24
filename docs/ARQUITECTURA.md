@@ -220,7 +220,8 @@ document_counters (series_id, year) → secuencia emitida al oficializar
    - **con edición** (por defecto): el memo vuelve a `draft` y puede corregirse y
      reenviarse. Como nunca se emitió, **no consume número**;
    - **sin edición**: el memo queda `rejected` con `locked_at`, cerrado y sin
-     posibilidad de edición ni exportación por parte del asistente.
+     posibilidad de edición ni exportación por parte del asistente. Todas sus
+     vistas y exportaciones llevan la marca de agua **«RECHAZADO»**.
    Aparece en **Enviados** con el filtro «Rechazados» y el remitente recibe el
    aviso (badge, fila **Nuevo** y toast de rechazo).
 7. **Anulación.** Solo el administrador que aprobó un memo puede dejarlo sin
@@ -537,10 +538,11 @@ Genera un documento completo y autocontenido:
   cabecera y el pie permanezcan visibles aunque el contenido supere una página. Es un
   recorte exclusivo de miniaturas: el HTML completo, el editor, el PDF y el DOCX conservan
   todo el contenido.
-- `watermark` pinta la capa `.doc-watermark` en cada hoja física (texto «ANULADO» en
-  diagonal). Se activa cuando el documento está `cancelled`, así que aparece igual en la
-  vista previa, las miniaturas, el HTML descargado y el PDF. En DOCX se traduce a una
-  `TextWatermark` nativa de Word en la cabecera.
+- `watermark` pinta la capa `.doc-watermark` en cada hoja física (texto en
+  diagonal). Se activa según el estado del documento: **«ANULADO»** para
+  `cancelled` y **«RECHAZADO»** para un rechazo definitivo (`rejected`). Aparece
+  igual en la vista previa, las miniaturas, el HTML descargado y el PDF. En DOCX
+  se traduce a una `TextWatermark` nativa de Word en la cabecera.
 
 ### 6.3 PDF
 
