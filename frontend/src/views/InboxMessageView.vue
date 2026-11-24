@@ -494,7 +494,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
               <!-- Remitente con rechazo -->
               <template v-else-if="message.status === 'rejected'">
                 <p class="text-[12px] font-semibold uppercase tracking-wide text-danger">
-                  Devuelto para corrección
+                  {{ message.allowSenderEdit ? 'Devuelto para corrección' : 'Rechazado definitivamente' }}
                 </p>
                 <p class="mt-1 text-[13px] text-ink-muted">
                   <template v-if="message.approvedByName">por {{ message.approvedByName }}</template>
@@ -510,7 +510,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   v-if="!message.allowSenderEdit"
                   class="mt-2 text-[13px] leading-snug text-ink-muted"
                 >
-                  El documento quedó cerrado y no se puede editar.
+                  El documento quedó cerrado con la marca «RECHAZADO» y no se puede editar.
                 </p>
                 <button
                   v-if="message.isSender && message.allowSenderEdit"
@@ -520,6 +520,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                 >
                   <Pencil class="size-4" />
                   Corregir y reenviar
+                </button>
+                <button
+                  v-else-if="message.isSender"
+                  type="button"
+                  class="btn btn-outline mt-3 w-full"
+                  @click="openDocument"
+                >
+                  <FileText class="size-4" />
+                  Ver documento
                 </button>
                 <button
                   v-if="auth.isAdmin && nextPending"

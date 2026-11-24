@@ -4,8 +4,8 @@ import { z } from 'zod';
 
 import type { ChromeConfig, DesignTokens, ResolvedChrome } from '@sirpefoffice/shared';
 import {
-  ANNULED_WATERMARK,
   DEFAULT_DESIGN_TOKENS,
+  documentWatermark,
   resolveChrome,
   withDocumentNumber,
 } from '@sirpefoffice/shared';
@@ -102,8 +102,8 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       chrome,
       values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
       title: document.title,
-      // Un memo anulado se exporta con la marca de agua en todas sus hojas.
-      watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
+      // Los memos anulados y los rechazos definitivos llevan su marca de agua.
+      watermark: documentWatermark(document.status),
     };
 
     switch (format) {
@@ -199,7 +199,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
       title: document.title,
       includeLetterhead: true,
-      watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
+      watermark: documentWatermark(document.status),
     };
 
     let html: string;
@@ -273,8 +273,8 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
     });
 
     const pendingNumber = await pendingNumberForDocument(document);
-    // El historial de un memo anulado conserva la marca de agua.
-    const watermark = document.status === 'cancelled' ? ANNULED_WATERMARK : null;
+    // El historial de un memo anulado o rechazado conserva la marca de agua.
+    const watermark = documentWatermark(document.status);
 
     const html =
       embed === '1'

@@ -533,6 +533,32 @@ async function main(): Promise<void> {
     assert(finalDoc.body.document.status === 'rejected', 'El documento queda como rechazado');
     assert(Boolean(finalDoc.body.document.lockedAt), 'El documento rechazado queda sellado');
 
+    const rejectedFinalHtml = await call<string>(
+      `/documents/${documentId3}/html?preview=1`,
+      memberToken,
+    );
+    assert(
+      rejectedFinalHtml.status === 200,
+      'La vista previa del rechazo definitivo sigue disponible',
+    );
+    assert(
+      typeof rejectedFinalHtml.body === 'string' &&
+        rejectedFinalHtml.body.includes('<div class="doc-watermark"') &&
+        rejectedFinalHtml.body.includes('RECHAZADO'),
+      'El rechazo definitivo lleva la marca de agua «RECHAZADO»',
+    );
+
+    const editableRejectionHtml = await call<string>(
+      `/documents/${documentId2}/html?preview=1`,
+      memberToken,
+    );
+    assert(
+      editableRejectionHtml.status === 200 &&
+        typeof editableRejectionHtml.body === 'string' &&
+        !editableRejectionHtml.body.includes('<div class="doc-watermark"'),
+      'El memo devuelto para corrección no lleva marca de agua',
+    );
+
     const editFinal = await call(`/documents/${documentId3}/content`, memberToken, 'PUT', {
       content: { type: 'doc', content: [{ type: 'paragraph' }] },
       expectedVersion: created3.body.document.version,
