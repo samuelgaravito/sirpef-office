@@ -288,7 +288,7 @@ async function main(): Promise<void> {
     assert(previewHtml.status === 200, 'La vista previa sigue disponible para quien conserva acceso');
     assert(
       typeof previewHtml.body === 'string' &&
-        previewHtml.body.includes('doc-watermark') &&
+        previewHtml.body.includes('<div class="doc-watermark"') &&
         previewHtml.body.includes('ANULADO'),
       'La vista previa lleva la marca de agua «ANULADO»',
     );
@@ -297,7 +297,7 @@ async function main(): Promise<void> {
     assert(fullHtml.status === 200, 'El aprobador exporta el memo anulado');
     assert(
       typeof fullHtml.body === 'string' &&
-        fullHtml.body.includes('doc-watermark') &&
+        fullHtml.body.includes('<div class="doc-watermark"') &&
         fullHtml.body.includes('ANULADO'),
       'El HTML exportado lleva la marca de agua',
     );
