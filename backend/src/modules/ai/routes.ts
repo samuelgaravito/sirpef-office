@@ -19,7 +19,8 @@ import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
 import { AppError, badRequest, conflict, forbidden, internal, newReference, notFound } from '../../lib/errors.js';
 import { compactZodIssues, summarizeZodIssues } from '../../lib/validation.js';
 import { docTypeSchema, jsonContentSchema } from '../../lib/validators.js';
-import { defaultData, saveVersion } from '../documents/routes.js';
+import { saveVersion } from '../../lib/versions.js';
+import { defaultData } from '../documents/routes.js';
 import { askDocuments, askPlanSchema, askRequestSchema, loadAskTemplates, runWithPlan } from './ask.js';
 import {
   appendTurn,

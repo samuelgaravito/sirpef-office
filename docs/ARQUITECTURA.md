@@ -1220,6 +1220,35 @@ explícitamente tienen prioridad sobre ese mapa.
 
 ---
 
+## 9.1 Firma electrónica móvil
+
+La app Android (`mobile/`) permite al administrador aprobar y firmar un memo
+desde el teléfono. La firma se sella **en el servidor**; la app solo aporta la
+rúbrica y una aserción ECDSA de una clave EC P-256 del Android Keystore.
+
+```text
+SVA /auth/login/mobile → /api/auth/mobile/sva
+  → POST /api/mobile/devices (clave pública)
+  → POST /api/documents/:id/sign-challenge
+  → BiometricPrompt + SHA256withECDSA
+  → POST /api/inbox/:id/approve-and-sign
+```
+
+- `signature_challenges` liga usuario, dispositivo, documento, versión y hash
+  canónico del contenido. Es de un solo uso y caduca en 180 s.
+- `document_signatures` guarda la rúbrica PNG, los trazos, los hashes y la
+  aserción verificada.
+- `signature_certificates` guarda la serie, el token del QR (solo su SHA-256),
+  el PDF sellado y el certificado PDF.
+- El PDF se renderiza de nuevo con el número ya asignado, se le añade una
+  **hoja de firmas** y se calcula su SHA-256. El PDF original no se altera.
+- La verificación pública (`GET /api/verify/:token`) devuelve solo datos del
+  certificado, sin contenido del memo ni IP del firmante.
+- El detalle operativo, las variables y la compilación están en
+  [`docs/MOVIL.md`](MOVIL.md).
+
+---
+
 ## 10. Seguridad
 
 | Riesgo | Mitigación |

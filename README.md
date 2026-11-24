@@ -80,6 +80,7 @@ y conservar el **historial de versiones** de cada documento.
 | --- | --- |
 | Frontend | Vue 3.5 (Composition API + `<script setup>`), Vite 6, TypeScript 5.9, Pinia, Vue Router, Tailwind CSS 4, `lucide-vue-next`, `@fontsource/georama`. |
 | Editor | TipTap 3.32 (StarterKit, tablas, imágenes, text-style, alineación, tipografía, sub/superíndice, contador de caracteres, `UniqueID`). Extensiones propias: resaltado de variables, vista previa, diff. |
+| App móvil | Kotlin 2 + Jetpack Compose + Material 3, Retrofit/OkHttp, Android Keystore + BiometricPrompt, PdfRenderer, ZXing. Ver `docs/MOVIL.md`. |
 | Backend | Node 20 + Fastify 5, TypeScript, Zod, Drizzle ORM, JWT (`jose`), `node:crypto` (scrypt) para contraseñas. |
 | Base de datos | PostgreSQL 16 (Docker en el puerto **5433** o PostgreSQL local en **5432**). |
 | Exportación | `puppeteer-core` + Chrome para PDF, `docx` para Word, `@tiptap/static-renderer` para HTML. |
@@ -720,6 +721,8 @@ cd backend
 | `npm run db:purge-empty-drafts` | Elimina definitivamente los borradores nunca usados (simulación por defecto; `--apply` ejecuta y deja bitácora). |
 | `npm run smoke:numbering` | Con la API levantada, verifica la numeración diferida: el borrador no consume número, el previsto no reserva, la oficialización asigna, las aprobaciones simultáneas no repiten y la papelera no bloquea la oficialización de otro documento. |
 | `npm run smoke:errors` | Comprueba que cada tipo de fallo (validación, ruta inexistente, sin sesión, content-type inválido) devuelva el estado y el mensaje correctos, en español y nombrando los campos que fallan. |
+| `npm run smoke:mobile-auth` | Con un SVA simulado, canjea la sesión nativa y abre `/api/mobile/bootstrap`. No necesita el SVA real. |
+| `npm run smoke:mobile-sign` | Firma móvil completa contra PostgreSQL y Chrome: clave EC, challenge, aprobación + firma, PDF sellado, certificado y QR público. |
 | `npm run smoke:errors:db` | Comprueba los fallos que solo existen con PostgreSQL real: correo duplicado, clave foránea rota, uuid inválido y error inesperado (que no debe filtrar detalles internos). |
 | `npm run smoke:errors:ui` | Con la web de desarrollo levantada, comprueba en un navegador real que un 4xx sale como aviso ámbar, un 5xx como error rojo con su referencia y una caída de red con un mensaje en español (no «Failed to fetch»). |
 | `npm run smoke:campaign` | Con la API levantada, verifica el diseño en uso: encender uno apaga el anterior, las plantillas cargan el que está en uso sin tocar estructura ni variables, el documento creado guarda ese diseño y lo conserva tras cambiar el diseño en uso (limpia los datos de prueba). |
@@ -745,6 +748,22 @@ cd backend
 | `node scripts/pagination-smoke.mjs` | Prueba de paginación visual: hojas del tamaño del diseño, separación entre hojas, contenido sin invadir huecos, toggle a hoja continua, salto manual y limpieza del documento temporal. |
 | `node scripts/pagination-parity-smoke.mjs` | Paridad entre editor, HTML, impresión, PDF y DOCX: mismo número de hojas, numeración por página, saltos explícitos y, si está disponible, conversión del DOCX con LibreOffice. |
 | `node scripts/numbering-ui-smoke.mjs` | Verificación visual del panel de numeración de una plantilla: prefijo de hasta 20 caracteres, prefijo opcional (en blanco la serie numera sin etiqueta), sin «código automático», aviso en el acto cuando otra plantilla usa el mismo prefijo (explicando que cada una lleva su propia enumeración) y guardado permitido (capturas en `/tmp/sirpefoffice-shots-numbering`). |
+
+### App móvil
+
+```bash
+cd mobile
+export JAVA_HOME=/ruta/al/jdk17
+export ANDROID_HOME=/ruta/al/android-sdk
+```
+
+| Comando | Qué hace |
+| --- | --- |
+| `./gradlew :app:testDebugUnitTest` | Tests unitarios de los contratos de firma. |
+| `./gradlew :app:lintDebug` | Lint de Android. |
+| `./gradlew :app:assembleDebug` | Genera `app/build/outputs/apk/debug/app-debug.apk`. |
+
+La configuración de URLs y el flujo completo están en [`docs/MOVIL.md`](docs/MOVIL.md).
 
 ### Frontend
 
@@ -796,13 +815,17 @@ sirpefoffice/
 │       │                      # realtime (WebSocket), ai, exports
 │       ├── lib/               # render, docx, auth, acceso…
 │       └── index.ts           # Arranque y registro de rutas
+├── mobile/                    # app Android de firma (Kotlin + Compose)
+│   ├── app/                   # módulo Android, pantallas y Keystore
+│   ├── gradle/                # wrapper y catálogo de versiones
+│   └── README.md
 ├── shared/                    # fuente única, sin node_modules
 │   └── src/{index,types,defaults,chrome,editor-extensions,image-node-view,realtime}.ts
 ├── scripts/                   # sync-shared y publicación en Google Docs
 ├── deploy/                    # Nginx, Caddy, systemd y variables de producción
 ├── docker-compose.prod.yml    # stack Docker: db + api + web (+ caddy)
 ├── .env.production.example    # plantilla del entorno Docker
-├── docs/                      # Arquitectura, informe Eigent y capturas
+├── docs/                      # Arquitectura, SVA, móvil, informe Eigent y capturas
 ├── README.md
 └── LICENSE
 ```
