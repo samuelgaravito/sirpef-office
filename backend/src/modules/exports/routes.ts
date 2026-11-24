@@ -3,7 +3,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 import type { ChromeConfig, DesignTokens, ResolvedChrome } from '@sirpefoffice/shared';
-import { DEFAULT_DESIGN_TOKENS, resolveChrome, withDocumentNumber } from '@sirpefoffice/shared';
+import {
+  ANNULED_WATERMARK,
+  DEFAULT_DESIGN_TOKENS,
+  resolveChrome,
+  withDocumentNumber,
+} from '@sirpefoffice/shared';
 
 import { db } from '../../db/index.js';
 import { designs, documentVersions, documents, templates } from '../../db/schema.js';
@@ -97,6 +102,8 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       chrome,
       values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
       title: document.title,
+      // Un memo anulado se exporta con la marca de agua en todas sus hojas.
+      watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
     };
 
     switch (format) {
@@ -192,6 +199,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
       values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
       title: document.title,
       includeLetterhead: true,
+      watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
     };
 
     let html: string;
@@ -265,6 +273,8 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
     });
 
     const pendingNumber = await pendingNumberForDocument(document);
+    // El historial de un memo anulado conserva la marca de agua.
+    const watermark = document.status === 'cancelled' ? ANNULED_WATERMARK : null;
 
     const html =
       embed === '1'
@@ -276,6 +286,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
             title: snapshot.title || document.title,
             includeLetterhead: true,
             embed: true,
+            watermark,
           })
         : await renderDocumentHtml({
             content: snapshot.content,
@@ -284,6 +295,7 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
             values: withDocumentNumber(snapshot.data, document.docNumber, pendingNumber),
             title: snapshot.title || document.title,
             includeLetterhead: true,
+            watermark,
           });
 
     return reply.header('Content-Type', 'text/html; charset=utf-8').send(html);

@@ -838,7 +838,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     const [row] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
     if (!row || !row.deletedAt) throw notFound('Documento no encontrado');
     if (row.ownerId !== user.sub) throw forbidden('Solo el propietario puede restaurar este documento');
-    if (row.lockedAt || row.status === 'sent') throw locked();
+    if (row.lockedAt || row.status === 'sent' || row.status === 'cancelled') throw locked();
 
     /**
      * Restaurar nunca falla por un número. Como el correlativo solo lo

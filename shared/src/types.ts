@@ -240,6 +240,12 @@ export const DOCUMENT_STATUSES = [
 
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
+/**
+ * Texto de la marca de agua que llevan las vistas y exportaciones de un
+ * documento anulado. Se usa igual en HTML/PDF y en el DOCX (WordArt).
+ */
+export const ANNULED_WATERMARK = 'ANULADO';
+
 export type VersionKind = 'auto' | 'manual' | 'ai' | 'export' | 'restore';
 
 export interface DocumentSummary {
@@ -513,12 +519,18 @@ export interface InboxMessageDetail extends InboxMessageSummary {
   /** Si el usuario actual puede exportar el documento. */
   canExport: boolean;
   canApprove: boolean;
+  /** El aprobador del memo puede anularlo si sigue aprobado y enviado. */
+  canAnnul: boolean;
   isRecipient: boolean;
   isSender: boolean;
   readAt: string | null;
-  /** Cuándo vio el remitente la aprobación o el rechazo. */
+  /** Cuándo vio el remitente la aprobación, el rechazo o la anulación. */
   senderReadAt: string | null;
   archivedAt: string | null;
+  /** Datos de la anulación; `null` mientras el memo siga vigente. */
+  annulledAt: string | null;
+  annulledByName: string | null;
+  annulledReason: string | null;
   document: DocumentSummary;
   /** Mensaje pendiente actual del documento, si existe. */
   pendingMessage: PendingMessageSummary | null;

@@ -24,6 +24,8 @@ export const REALTIME_EVENT_TYPES = [
   'inbox.result.rejected',
   /** Un envío pendiente se cancela. */
   'inbox.message.cancelled',
+  /** El administrador que aprobó un memo lo deja sin efecto. */
+  'inbox.message.annulled',
 ] as const;
 
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];

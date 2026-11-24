@@ -140,6 +140,12 @@ function describe(message: RealtimeMessage): BellCopy | null {
         detail: payload.subject,
         tone: 'info',
       };
+    case 'inbox.message.annulled':
+      return {
+        title: `Documento anulado por ${payload.actorName}`,
+        detail: payload.subject,
+        tone: 'warning',
+      };
     default:
       return null;
   }

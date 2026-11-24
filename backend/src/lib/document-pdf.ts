@@ -1,7 +1,12 @@
 import { and, eq, isNull } from 'drizzle-orm';
 
 import type { ChromeConfig, DesignTokens, ResolvedChrome } from '@sirpefoffice/shared';
-import { DEFAULT_DESIGN_TOKENS, resolveChrome, withDocumentNumber } from '@sirpefoffice/shared';
+import {
+  ANNULED_WATERMARK,
+  DEFAULT_DESIGN_TOKENS,
+  resolveChrome,
+  withDocumentNumber,
+} from '@sirpefoffice/shared';
 
 import { db } from '../db/index.js';
 import { designs, templates, type DocumentRow } from '../db/schema.js';
@@ -58,5 +63,6 @@ export async function renderDocumentPdf(document: DocumentRow): Promise<Buffer> 
     values: withDocumentNumber(document.data, document.docNumber, pendingNumber),
     title: document.title,
     includeLetterhead: true,
+    watermark: document.status === 'cancelled' ? ANNULED_WATERMARK : null,
   });
 }
