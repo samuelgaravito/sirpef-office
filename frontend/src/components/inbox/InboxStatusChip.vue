@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, Clock, MinusCircle, Send, XCircle } from 'lucide-vue-next';
+import { Ban, CheckCircle2, Clock, Send, XCircle } from 'lucide-vue-next';
 import { computed, type Component } from 'vue';
 
 import type { InboxMessageStatus } from '@sirpefoffice/shared';
@@ -26,7 +26,7 @@ const icon = computed<Component>(() => {
   if (props.status === 'pending_approval') return Clock;
   if (props.status === 'sent') return props.context === 'recipient' ? Send : CheckCircle2;
   if (props.status === 'rejected') return XCircle;
-  return MinusCircle;
+  return Ban;
 });
 
 const sizeClass = computed(() =>

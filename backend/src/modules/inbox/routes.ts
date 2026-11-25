@@ -70,6 +70,12 @@ const rejectSchema = z.object({
   allowEdit: z.boolean().default(true),
 });
 
+const annulSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  /** Motivo opcional para dejar constancia de la anulación. */
+  reason: z.string().trim().max(1000).optional(),
+});
+
 const patchSchema = z
   .object({
     read: z.boolean().optional(),
@@ -286,12 +292,13 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       }
     } else if (query.scope === 'sent') {
       // "Enviados" reúne lo que envié y los memos que aprobé o rechacé,
-      // para que el jefe conserve el seguimiento de sus decisiones.
+      // para que el jefe conserve el seguimiento de sus decisiones. Los memos
+      // que él mismo anuló siguen aquí para poder consultarlos.
       const sentOrDecided = or(
         eq(documentMessages.senderId, user.sub),
         and(
           eq(documentMessages.approvedById, user.sub),
-          inArray(documentMessages.status, ['sent', 'rejected']),
+          inArray(documentMessages.status, ['sent', 'rejected', 'cancelled']),
         ),
       );
       where =
@@ -394,8 +401,17 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     const isSender = message.senderId === user.sub;
     const isRecipient = Boolean(row.recipientMessageId);
     const canApprove = user.role === 'admin' && message.status === 'pending_approval';
+    const isApprover = message.approvedById !== null && message.approvedById === user.sub;
+    const isAnnulled = message.status === 'cancelled' && message.annulledAt !== null;
+    const canAnnul = isApprover && message.status === 'sent' && message.annulledAt === null;
 
-    if (!isSender && !isRecipient && !canApprove) {
+    if (!isSender && !isRecipient && !canApprove && !isApprover) {
+      throw notFound('Mensaje no encontrado');
+    }
+
+    // Un memo anulado se retira de la bandeja de los destinatarios: solo el
+    // remitente y el aprobador conservan el registro.
+    if (isAnnulled && isRecipient && !isSender && !isApprover) {
       throw notFound('Mensaje no encontrado');
     }
 
@@ -440,7 +456,9 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
     try {
       permission = (await getDocumentAccess(user.sub, message.documentId)).permission;
     } catch (error) {
-      if (!canApprove) throw error;
+      // El revisor puede abrir la solicitud aunque no tuviera el documento
+      // compartido; el aprobador conserva el acceso para poder anularlo.
+      if (!canApprove && !isApprover) throw error;
       await db
         .insert(documentShares)
         .values({
@@ -461,6 +479,8 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         .limit(1);
       approvedByName = approver?.name ?? null;
     }
+
+    const annulledByName = isAnnulled ? approvedByName : null;
 
     const [pending] = await db
       .select({
@@ -543,11 +563,15 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       allowSenderExport: message.allowSenderExport,
       canExport: await canExportDocument(user.sub, user.role, docRow.doc),
       canApprove,
+      canAnnul,
       isRecipient,
       isSender,
       readAt: row.readAt?.toISOString() ?? null,
       senderReadAt: message.senderReadAt?.toISOString() ?? null,
       archivedAt: row.archivedAt?.toISOString() ?? null,
+      annulledAt: message.annulledAt?.toISOString() ?? null,
+      annulledByName,
+      annulledReason: message.annulledReason,
       document: toSummary(
         docRow.doc,
         docRow.ownerName,
@@ -923,6 +947,106 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       updatedAt: now.toISOString(),
       change: 'status',
       status: 'draft',
+    });
+
+    return { ok: true, id, status: 'cancelled' };
+  });
+
+  /**
+   * Anula un memo ya aprobado y enviado.
+   *
+   * Solo puede hacerlo el administrador que lo aprobó. El memo queda
+   * «Anulado», conserva su número correlativo y sigue bloqueado en solo
+   * lectura; deja de aparecer en la bandeja de los destinatarios.
+   */
+  app.post('/:id/annul', async (request) => {
+    const admin = await requireAdmin(request);
+    const { id } = z.object({ id: z.uuid() }).parse(request.params);
+    const body = annulSchema.parse(request.body);
+
+    const [message] = await db
+      .select()
+      .from(documentMessages)
+      .where(eq(documentMessages.id, id))
+      .limit(1);
+
+    if (!message) throw notFound('Mensaje no encontrado');
+    if (message.status !== 'sent' || !message.sentAt) {
+      throw conflict('Solo se puede anular un memo aprobado y enviado');
+    }
+    if (message.approvedById !== admin.sub) {
+      throw forbidden(
+        'Solo el administrador que aprobó este documento puede anularlo',
+      );
+    }
+    if (message.annulledAt) {
+      throw conflict('Este memo ya fue anulado');
+    }
+
+    const [document] = await db
+      .select()
+      .from(documents)
+      .where(eq(documents.id, message.documentId))
+      .limit(1);
+
+    if (!document || document.deletedAt) throw notFound('Documento no encontrado');
+    if (document.version !== body.expectedVersion) {
+      throw conflict('El documento cambió desde que lo abriste', {
+        currentVersion: document.version,
+      });
+    }
+
+    const now = new Date();
+    const reason = body.reason && body.reason.length > 0 ? body.reason : null;
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(documentMessages)
+        .set({
+          status: 'cancelled',
+          annulledAt: now,
+          annulledReason: reason,
+          updatedAt: now,
+        })
+        .where(eq(documentMessages.id, id));
+
+      // El memo sigue sellado (locked_at/locked_by) y conserva su número:
+      // lo único que cambia es que queda marcado como anulado.
+      await tx
+        .update(documents)
+        .set({ status: 'cancelled', updatedAt: now })
+        .where(eq(documents.id, document.id));
+    });
+
+    await saveVersion(document.id, admin.sub, 'manual', 'Anulado');
+    await logActivity(admin.sub, 'document', document.id, 'annulled', {
+      messageId: id,
+      reason,
+    });
+
+    // El remitente y el aprobador conservan el registro de la anulación.
+    await publishInboxEvent({
+      type: 'inbox.message.annulled',
+      userIds: [message.senderId, admin.sub],
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject: message.subject,
+      actorId: admin.sub,
+      actorName: admin.name,
+      status: 'cancelled',
+    });
+
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: document.id,
+      documentTitle: document.title,
+      actorId: admin.sub,
+      actorName: admin.name,
+      version: document.version,
+      updatedAt: now.toISOString(),
+      change: 'status',
+      status: 'cancelled',
     });
 
     return { ok: true, id, status: 'cancelled' };

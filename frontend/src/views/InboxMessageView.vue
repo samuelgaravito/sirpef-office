@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   ArrowLeft,
+  Ban,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -22,6 +23,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
 import DocumentViewer from '@/components/documents/DocumentViewer.vue';
+import AnnulDocumentDialog from '@/components/inbox/AnnulDocumentDialog.vue';
 import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
 import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import InboxStatusChip from '@/components/inbox/InboxStatusChip.vue';
@@ -52,6 +54,7 @@ const message = ref<InboxMessageDetail | null>(null);
 const loading = ref(true);
 const errorMessage = ref('');
 const cancelling = ref(false);
+const annulOpen = ref(false);
 const sendOpen = ref(false);
 const rejectOpen = ref(false);
 const viewerExpanded = ref(false);
@@ -63,7 +66,7 @@ let unsubscribeRealtime: (() => void) | undefined;
 
 const messageId = computed(() => normalizeRouteId(route.params.id));
 
-const locked = computed(() => Boolean(message.value?.document.lockedAt) || message.value?.document.status === 'sent');
+const locked = computed(() => Boolean(message.value?.document.lockedAt) || message.value?.document.status === 'sent' || message.value?.document.status === 'cancelled');
 const canExport = computed(() => message.value?.canExport ?? false);
 const canApprove = computed(() => Boolean(message.value?.canApprove && message.value.status === 'pending_approval'));
 const canCancel = computed(
@@ -72,6 +75,7 @@ const canCancel = computed(
     Boolean(message.value.isSender) &&
     !locked.value,
 );
+const canAnnul = computed(() => Boolean(message.value?.canAnnul));
 const recipientNames = computed(() => message.value?.recipients.map((recipient) => recipient.name).join(', ') ?? '');
 const recipientCount = computed(() => message.value?.recipients.length ?? 0);
 const pendingPosition = computed(() => {
@@ -109,6 +113,7 @@ const showDecisionBlock = computed(() => {
   if (!message.value) return false;
   if (canApprove.value) return true;
   if (message.value.status === 'rejected') return true;
+  if (message.value.annulledAt) return true;
   if (message.value.status === 'pending_approval' && message.value.isSender) return true;
   if (message.value.status === 'sent' && (message.value.isSender || auth.isAdmin)) return true;
   return false;
@@ -240,8 +245,18 @@ function openReject(): void {
   rejectOpen.value = true;
 }
 
+function openAnnul(): void {
+  viewerExpanded.value = false;
+  annulOpen.value = true;
+}
+
 async function onRejected(): Promise<void> {
   rejectOpen.value = false;
+  await load();
+}
+
+async function onAnnulled(): Promise<void> {
+  annulOpen.value = false;
   await load();
 }
 
@@ -288,6 +303,7 @@ function onKeydown(event: KeyboardEvent): void {
 watch(messageId, () => {
   sendOpen.value = false;
   rejectOpen.value = false;
+  annulOpen.value = false;
   viewerExpanded.value = false;
   void load();
 });
@@ -311,6 +327,7 @@ function handleRealtime(event: import('@sirpefoffice/shared').RealtimeMessage): 
     const wasPending = message.value?.status === 'pending_approval';
     sendOpen.value = false;
     rejectOpen.value = false;
+    annulOpen.value = false;
     await load();
     if (wasPending && message.value?.status !== 'pending_approval') {
       toast.info('Este envío ya fue procesado desde otra sesión.');
@@ -514,7 +531,7 @@ onBeforeUnmount(() => {
               <!-- Remitente con rechazo -->
               <template v-else-if="message.status === 'rejected'">
                 <p class="text-[12px] font-semibold uppercase tracking-wide text-danger">
-                  Devuelto para corrección
+                  {{ message.allowSenderEdit ? 'Devuelto para corrección' : 'Rechazado definitivamente' }}
                 </p>
                 <p class="mt-1 text-[13px] text-ink-muted">
                   <template v-if="message.approvedByName">por {{ message.approvedByName }}</template>
@@ -530,7 +547,7 @@ onBeforeUnmount(() => {
                   v-if="!message.allowSenderEdit"
                   class="mt-2 text-[13px] leading-snug text-ink-muted"
                 >
-                  El documento quedó cerrado y no se puede editar.
+                  El documento quedó cerrado con la marca «RECHAZADO» y no se puede editar.
                 </p>
                 <button
                   v-if="message.isSender && message.allowSenderEdit"
@@ -542,6 +559,15 @@ onBeforeUnmount(() => {
                   Corregir y reenviar
                 </button>
                 <button
+                  v-else-if="message.isSender"
+                  type="button"
+                  class="btn btn-outline mt-3 w-full"
+                  @click="openDocument"
+                >
+                  <FileText class="size-4" />
+                  Ver documento
+                </button>
+                <button
                   v-if="auth.isAdmin && nextPending"
                   type="button"
                   class="btn btn-outline mt-2 w-full"
@@ -549,6 +575,37 @@ onBeforeUnmount(() => {
                 >
                   Siguiente pendiente
                   <ChevronRight class="size-3.5" />
+                </button>
+              </template>
+
+              <!-- Memo anulado por el aprobador -->
+              <template v-else-if="message.annulledAt">
+                <p class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-danger">
+                  <Ban class="size-3.5" />
+                  Documento anulado
+                </p>
+                <p class="mt-1 text-[13px] leading-snug text-ink-muted">
+                  <template v-if="message.annulledByName">Por {{ message.annulledByName }}</template>
+                  <template v-if="message.annulledAt"> · {{ formatDateTime(message.annulledAt) }}</template>.
+                </p>
+                <p
+                  v-if="message.annulledReason"
+                  class="mt-2 whitespace-pre-wrap rounded-lg border border-danger/20 bg-danger-soft/50 px-2.5 py-2 text-[12px] text-ink"
+                >
+                  {{ message.annulledReason }}
+                </p>
+                <p class="mt-2 text-[12px] leading-snug text-ink-subtle">
+                  Queda sin efecto con la marca «ANULADO». Conserva su número y sigue como
+                  solo lectura.
+                </p>
+                <button
+                  v-if="message.isSender || auth.isAdmin"
+                  type="button"
+                  class="btn btn-outline mt-3 w-full"
+                  @click="openDocument"
+                >
+                  <FileText class="size-4" />
+                  Ver documento
                 </button>
               </template>
 
@@ -606,6 +663,15 @@ onBeforeUnmount(() => {
                     Serie {{ message.signature.serial }}
                   </p>
                 </div>
+                <button
+                  v-if="canAnnul"
+                  type="button"
+                  class="btn btn-danger mt-3 w-full"
+                  @click="openAnnul"
+                >
+                  <Ban class="size-4" />
+                  Anular documento
+                </button>
                 <button
                   v-if="auth.isAdmin && nextPending"
                   type="button"
@@ -788,6 +854,15 @@ onBeforeUnmount(() => {
       :message-id="message.id"
       @close="rejectOpen = false"
       @rejected="onRejected"
+    />
+
+    <AnnulDocumentDialog
+      v-if="message"
+      :open="annulOpen"
+      :message-id="message.id"
+      :expected-version="message.document.version"
+      @close="annulOpen = false"
+      @annulled="onAnnulled"
     />
 
     <SendDocumentDialog

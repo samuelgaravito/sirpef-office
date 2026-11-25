@@ -137,6 +137,13 @@ function describe(message: RealtimeMessage): Omit<AppNotification, 'id' | 'at' |
           detail: payload.subject,
           ...base,
         };
+      case 'inbox.message.annulled':
+        return {
+          kind: 'rejected',
+          title: `Documento anulado por ${payload.actorName}`,
+          detail: payload.subject,
+          ...base,
+        };
       case 'inbox.message.reviewed':
       case 'connection.ready':
       default:

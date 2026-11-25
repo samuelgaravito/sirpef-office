@@ -31,6 +31,8 @@ export const INBOX_REALTIME_EVENT_TYPES = [
   'inbox.message.reviewed',
   /** El aprobador firmó y selló el documento. */
   'inbox.message.signed',
+  /** El administrador que aprobó un memo lo deja sin efecto. */
+  'inbox.message.annulled',
 ] as const;
 
 /** Cambios sobre un documento. */

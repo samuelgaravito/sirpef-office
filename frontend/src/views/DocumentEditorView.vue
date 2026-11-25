@@ -67,6 +67,7 @@ import {
   contentHasVariable,
   createEditorExtensions,
   DOCUMENT_NUMBER_VARIABLE,
+  documentWatermark,
   emptyChrome,
   NUMBERING_MESSAGES,
   resolveBodyVariable,
@@ -850,7 +851,7 @@ async function load(): Promise<void> {
     status.value = response.document.status;
     permission.value = response.document.permission;
     version.value = response.document.version;
-    locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent';
+    locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent' || response.document.status === 'cancelled';
     canExport.value = response.canExport;
     pendingMessage.value = response.document.pendingMessage ?? null;
     lastRejection.value = response.document.lastRejection ?? null;
@@ -2378,7 +2379,7 @@ onBeforeUnmount(() => {
       <TriangleAlert class="mt-0.5 size-4 shrink-0" />
       <div class="min-w-0 flex-1">
         <p class="font-semibold">
-          Devuelto para corrección
+          {{ lastRejection.allowSenderEdit ? 'Devuelto para corrección' : 'Rechazado definitivamente' }}
           <template v-if="lastRejection.rejectedByName"> por {{ lastRejection.rejectedByName }}</template>
           <template v-if="lastRejection.rejectedAt"> el {{ formatDateTime(lastRejection.rejectedAt) }}</template>
         </p>
@@ -2386,7 +2387,7 @@ onBeforeUnmount(() => {
           <strong class="font-medium text-ink">Motivo:</strong> {{ lastRejection.reason }}
         </p>
         <p v-if="!lastRejection.allowSenderEdit" class="mt-0.5 text-ink-muted">
-          El documento quedó cerrado y no se puede editar.
+          El documento quedó cerrado con la marca «RECHAZADO» y no se puede editar.
         </p>
         <p v-else class="mt-0.5 text-ink-muted">
           Corrige lo indicado y reenvía el documento a aprobación.
@@ -2503,6 +2504,7 @@ onBeforeUnmount(() => {
               }"
               :chrome-open="chromeOpen"
               :editable="canEdit"
+              :watermark="documentWatermark(status)"
               :active-chrome="activeChrome"
               @toggle="toggleChrome"
               @height="setChromeHeight"
@@ -2673,7 +2675,7 @@ onBeforeUnmount(() => {
             </p>
 
             <p v-if="!lastRejection.allowSenderEdit" class="mt-1.5 text-[13px] text-ink-muted">
-              El documento quedó cerrado y no se puede editar.
+              El documento quedó cerrado con la marca «RECHAZADO» y no se puede editar.
             </p>
 
             <div class="mt-2 flex flex-wrap gap-2">

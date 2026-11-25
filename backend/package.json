@@ -34,6 +34,7 @@
     "dev:token": "tsx scripts/dev-token.ts",
     "sva:sync": "tsx scripts/sva-sync.ts",
     "smoke:inbox": "tsx scripts/inbox-flow-smoke.ts",
+    "smoke:annul": "tsx scripts/annul-flow-smoke.ts",
     "smoke:numbering": "tsx scripts/numbering-flow-smoke.ts",
     "smoke:errors": "tsx scripts/error-smoke.ts",
     "smoke:errors:db": "tsx scripts/error-db-smoke.ts",

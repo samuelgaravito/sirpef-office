@@ -281,6 +281,16 @@ export async function sendPushForRealtimeEvent(event: RealtimeEvent): Promise<vo
           type: event.type,
         });
         return;
+      case 'inbox.message.annulled':
+        await sendPushToUsers(recipients, {
+          title: 'Documento anulado',
+          body,
+          url: `/inbox/${data.messageId}`,
+          messageId: data.messageId,
+          documentId: data.documentId,
+          type: event.type,
+        });
+        return;
       default:
         return;
     }

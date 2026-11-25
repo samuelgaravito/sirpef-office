@@ -18,9 +18,9 @@ export type UserRole = 'admin' | 'member';
 
 const RANK: Record<Permission, number> = { viewer: 1, editor: 2, owner: 3 };
 
-/** Un documento enviado (o sellado explícitamente) es de solo lectura. */
+/** Un documento enviado, anulado (o sellado explícitamente) es de solo lectura. */
 export function isDocumentLocked(doc: Pick<DocumentRow, 'lockedAt' | 'status'>): boolean {
-  return doc.lockedAt !== null || doc.status === 'sent';
+  return doc.lockedAt !== null || doc.status === 'sent' || doc.status === 'cancelled';
 }
 
 /** Impide cualquier escritura sobre un documento ya aprobado y enviado. */

@@ -240,6 +240,23 @@ export const DOCUMENT_STATUSES = [
 
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
+/**
+ * Texto de la marca de agua que llevan las vistas y exportaciones según el
+ * estado del documento. Los estados que no aparecen aquí no llevan marca.
+ *
+ * - `cancelled`: memo aprobado que el administrador dejó sin efecto.
+ * - `rejected`: rechazo definitivo, cerrado y en solo lectura.
+ */
+export const DOCUMENT_WATERMARKS: Partial<Record<DocumentStatus, string>> = {
+  cancelled: 'ANULADO',
+  rejected: 'RECHAZADO',
+};
+
+/** Marca de agua del documento, o `null` si su estado no lleva ninguna. */
+export function documentWatermark(status: DocumentStatus): string | null {
+  return DOCUMENT_WATERMARKS[status] ?? null;
+}
+
 export type VersionKind = 'auto' | 'manual' | 'ai' | 'export' | 'restore';
 
 export interface DocumentSummary {
@@ -521,12 +538,18 @@ export interface InboxMessageDetail extends InboxMessageSummary {
   /** Si el usuario actual puede exportar el documento. */
   canExport: boolean;
   canApprove: boolean;
+  /** El aprobador del memo puede anularlo si sigue aprobado y enviado. */
+  canAnnul: boolean;
   isRecipient: boolean;
   isSender: boolean;
   readAt: string | null;
-  /** Cuándo vio el remitente la aprobación o el rechazo. */
+  /** Cuándo vio el remitente la aprobación, el rechazo o la anulación. */
   senderReadAt: string | null;
   archivedAt: string | null;
+  /** Datos de la anulación; `null` mientras el memo siga vigente. */
+  annulledAt: string | null;
+  annulledByName: string | null;
+  annulledReason: string | null;
   document: DocumentSummary;
   /** Mensaje pendiente actual del documento, si existe. */
   pendingMessage: PendingMessageSummary | null;

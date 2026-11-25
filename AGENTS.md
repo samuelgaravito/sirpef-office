@@ -97,10 +97,13 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   bandeja `received` de la API móvil y que el contador se actualiza.
 - `npm run smoke:mobile-auth` levanta un SVA simulado en un puerto efímero y prueba el
   canje de sesión nativa y `/api/mobile/bootstrap`. **No necesita el SVA real.**
+- `npm run smoke:annul` prueba la anulación de un memo aprobado contra la API y la base
+  reales: solo el aprobador puede anular, se conserva el número y el sellado, el
+  destinatario deja de verlo y HTML/PDF/DOCX llevan la marca de agua «ANULADO».
 - `npm run smoke:mobile-sign` prueba la firma móvil completa contra **PostgreSQL y Chrome
   reales**: refresh/logout nativo, registro de clave EC, challenge, aprobación + firma,
   PDF sellado, certificado y verificación pública. Limpia sus datos y archivos al final.
-- `npm run smoke:*` restantes (inbox, numbering, campaign, template-share) necesitan **la API
+- `npm run smoke:*` restantes (inbox, annul, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean
   usuarios/documentos temporales y los limpian al final.

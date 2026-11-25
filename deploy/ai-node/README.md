@@ -36,11 +36,12 @@ docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
 ```bash
 cp .env.example .env
 # edita SD_SERVER y SD_TOKEN
-./install.sh
+bash install.sh
 ```
 
-El instalador comprueba Docker, detecta la GPU, arranca los servicios y
-descarga `qwen2.5:14b`. Si prefieres hacerlo a mano:
+El instalador comprueba Docker, detecta la GPU, **carga sola la imagen del agente** si el
+paquete trae `sirpef-ai-node-*.tar.gz`, arranca los servicios y descarga `qwen2.5:14b`. Si
+prefieres hacerlo a mano:
 
 ```bash
 docker compose up -d
@@ -62,6 +63,8 @@ docker save sirpef-ai-node:1.0 | gzip > sirpef-ai-node-1.0.tar.gz
 # en cada PC
 gunzip -c sirpef-ai-node-1.0.tar.gz | docker load
 ```
+
+Si usas el paquete completo, `install.sh` hace esa carga por ti cuando la imagen no está.
 
 Con registro interno, basta publicarla y dejar `AI_NODE_IMAGE` apuntando a ella:
 

@@ -464,6 +464,9 @@ export const documentMessages = pgTable(
     allowSenderExport: boolean('allow_sender_export').notNull().default(false),
     /** Cuándo vio el remitente el resultado (aprobado o rechazado). */
     senderReadAt: timestamp('sender_read_at', { withTimezone: true }),
+    /** Anulación de un memo ya aprobado: el aprobador lo deja sin efecto. */
+    annulledAt: timestamp('annulled_at', { withTimezone: true }),
+    annulledReason: text('annulled_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
