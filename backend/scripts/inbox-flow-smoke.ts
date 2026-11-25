@@ -134,6 +134,20 @@ async function main(): Promise<void> {
     assert(detailAfterSubmit.body.document.status === 'in_review', 'El documento pasa a in_review');
     assert(Boolean(detailAfterSubmit.body.document.pendingMessage), 'El editor conoce el envío pendiente');
 
+    const pendingEdit = await call<{ error?: string; code?: string }>(
+      `/documents/${documentId}/content`,
+      memberToken,
+      'PUT',
+      {
+        content: { type: 'doc', content: [{ type: 'paragraph' }] },
+        expectedVersion: version,
+      },
+    );
+    assert(
+      pendingEdit.status === 409 && pendingEdit.body.error === 'DOCUMENT_LOCKED',
+      'El remitente no puede editar mientras espera aprobación',
+    );
+
     const deletePending = await call(`/documents/${documentId}`, memberToken, 'DELETE');
     assert(deletePending.status === 409, 'No se puede eliminar un memo con envío pendiente');
 

@@ -160,6 +160,34 @@ async function assertNoPendingSend(documentId: string): Promise<void> {
   }
 }
 
+/**
+ * El remitente no puede seguir editando mientras el jefe revisa el envío.
+ * El administrador aprobador sí puede corregir antes de aprobar o rechazar.
+ */
+async function assertNoPendingEdit(
+  user: { role: string },
+  documentId: string,
+): Promise<void> {
+  if (user.role === 'admin') return;
+
+  const [pending] = await db
+    .select({ id: documentMessages.id })
+    .from(documentMessages)
+    .where(
+      and(
+        eq(documentMessages.documentId, documentId),
+        eq(documentMessages.status, 'pending_approval'),
+      ),
+    )
+    .limit(1);
+
+  if (pending) {
+    throw locked(
+      'El documento está pendiente de aprobación y no se puede editar hasta que el jefe lo revise. Puedes cancelar el envío desde la bandeja.',
+    );
+  }
+}
+
 /* ──────────────────────────── Serialización ─────────────────────────── */
 
 export function toSummary(
@@ -661,6 +689,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     const { document, permission } = await assertDocument(user.sub, id, 'editor');
     assertDocumentMutable(document);
+    await assertNoPendingEdit(user, id);
 
     const next = {
       content: body.content,
@@ -763,6 +792,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     const { document } = await assertDocument(user.sub, id, 'editor');
     assertDocumentMutable(document);
+    await assertNoPendingEdit(user, id);
 
     if (body.status !== undefined && body.status !== document.status) {
       if (user.role !== 'admin') {
@@ -1017,6 +1047,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .parse(request.params);
     const { document } = await assertDocument(user.sub, params.id, 'editor');
     assertDocumentMutable(document);
+    await assertNoPendingEdit(user, params.id);
 
     const [snapshot] = await db
       .select()

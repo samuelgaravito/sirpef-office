@@ -193,8 +193,10 @@ document_counters (series_id, year) → secuencia emitida al oficializar
 2. Al pulsar **Enviar**, elige destinatarios, asunto y mensaje. Se crea un
    `document_messages` en `pending_approval`, el memo pasa a `in_review` y se
    comparte como `editor` con los administradores. El asistente lo ve en
-   **Enviados** con el chip ámbar «Pendiente de aprobación». El memo aún **no
-   tiene número**: se muestra el número previsto, que no reserva el contador.
+   **Enviados** con el chip ámbar «Pendiente de aprobación». Mientras espera,
+   el **remitente queda en solo lectura**: no puede editar contenido, metadatos
+   ni restaurar versiones; sí puede cancelar el envío. El memo aún **no tiene
+   número**: se muestra el número previsto, que no reserva el contador.
 3. El jefe (`admin`) lo ve en **Bandeja → Recibidos**, dentro del bloque destacado
    «Requiere tu aprobación». Puede abrirlo, corregirlo y, al aprobar, decide si el
    asistente podrá exportar el memo; se guarda una versión de historial con la nota

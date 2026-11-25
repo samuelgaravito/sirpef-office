@@ -426,8 +426,19 @@ const pageCount = ref(0);
 let saveTimer: number | undefined;
 let previewTimer: number | undefined;
 
+/**
+ * El remitente queda bloqueado mientras el jefe revisa. El administrador
+ * aprobador conserva la edición para poder corregir antes de decidir.
+ */
+const pendingSenderLocked = computed(
+  () => Boolean(pendingMessage.value && !auth.isAdmin),
+);
+
 const canEdit = computed(
-  () => (permission.value === 'owner' || permission.value === 'editor') && !locked.value,
+  () =>
+    (permission.value === 'owner' || permission.value === 'editor') &&
+    !locked.value &&
+    !pendingSenderLocked.value,
 );
 
 const canReview = computed(() =>
@@ -885,6 +896,9 @@ async function load(): Promise<void> {
     conflict.value = false;
     previewMode.value = false;
     previewHtml.value = '';
+    liveNotice.value = null;
+    remoteDeleted.value = false;
+    remoteRevoked.value = false;
     void loadReviewMessage();
     // Si el envío venía pedido desde la vista «nueva», ahora que el documento
     // ya tiene id se abre el diálogo sin que el usuario tenga que repetir el clic.
@@ -1751,6 +1765,8 @@ function handleLiveEvent(event: RealtimeMessage): void {
   if (!isDocumentMessage(event)) return;
   const payload = event.payload;
   if (payload.documentId !== documentId.value) return;
+  // El WebSocket devuelve también el guardado propio: no es un cambio remoto.
+  if (payload.actorId === auth.user?.id) return;
 
   if (event.type === 'document.deleted') {
     remoteDeleted.value = true;
@@ -2359,7 +2375,12 @@ onBeforeUnmount(() => {
       <!-- Remitente / otros usuarios -->
       <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[13.5px] text-ink-muted">
         <Send class="size-4 shrink-0 text-warning" />
-        <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
+        <span class="flex-1">
+          Este documento tiene un envío pendiente de aprobación.
+          <template v-if="pendingSenderLocked">
+            Está bloqueado en solo lectura hasta que el jefe lo revise.
+          </template>
+        </span>
         <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
           Ver solicitud
         </RouterLink>
