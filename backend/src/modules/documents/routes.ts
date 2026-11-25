@@ -59,6 +59,7 @@ import { badRequest, conflict, forbidden, internal, locked, notFound } from '../
 import { resolveTemplateDesign } from '../../lib/active-design.js';
 import { sameJson } from '../../lib/json.js';
 import { saveVersion } from '../../lib/versions.js';
+import { publishDocumentEvent } from '../realtime/events.js';
 import {
   chromeOverrideSchema,
   docTypeSchema,
@@ -632,6 +633,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       templateId: body.templateId ?? null,
     });
 
+    await publishDocumentEvent({
+      type: 'document.created',
+      documentId: created.id,
+      documentTitle: created.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: created.version,
+      updatedAt: created.updatedAt.toISOString(),
+      change: 'create',
+      status: created.status,
+    });
+
     return reply.status(201).send({
       document: toSummary(created, user.name, 'owner'),
     });
@@ -714,6 +727,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     } else if (body.checkpoint) {
       await logActivity(user.sub, 'document', id, 'checkpoint', { version: updated.version });
     }
+
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: id,
+      documentTitle: updated.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: updated.version,
+      updatedAt: updated.updatedAt.toISOString(),
+      change: 'content',
+      status: updated.status,
+    });
 
     return {
       version: updated.version,
@@ -808,6 +833,19 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     if (!updated) throw internal('DOCUMENT_UPDATE_FAILED', 'No se pudo actualizar el documento');
 
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: id,
+      documentTitle: updated.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: updated.version,
+      updatedAt: updated.updatedAt.toISOString(),
+      change:
+        body.status !== undefined && body.status !== document.status ? 'status' : 'metadata',
+      status: updated.status,
+    });
+
     return {
       document: toSummary(updated, user.name, updated.ownerId === user.sub ? 'owner' : 'editor'),
     };
@@ -827,6 +865,19 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(documents.id, id));
 
     await logActivity(user.sub, 'document', id, 'deleted', { title: document.title });
+
+    await publishDocumentEvent({
+      type: 'document.deleted',
+      documentId: id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: new Date().toISOString(),
+      change: 'trash',
+      status: document.status,
+    });
+
     return { ok: true };
   });
 
@@ -896,6 +947,19 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       title: row.title,
       ...(releasedDocNumber ? { releasedDocNumber } : {}),
     });
+
+    await publishDocumentEvent({
+      type: 'document.restored',
+      documentId: id,
+      documentTitle: row.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: row.version,
+      updatedAt: new Date().toISOString(),
+      change: 'restore',
+      status: row.status,
+    });
+
     return { ok: true, releasedDocNumber };
   });
 
@@ -986,6 +1050,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     await saveVersion(params.id, user.sub, 'restore', `Restaurada la versión ${params.version}`);
     await logActivity(user.sub, 'document', params.id, 'restored', { version: params.version });
 
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: params.id,
+      documentTitle: updated.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: updated.version,
+      updatedAt: updated.updatedAt.toISOString(),
+      change: 'content',
+      status: updated.status,
+    });
+
     return { version: updated.version, content: updated.content };
   });
 
@@ -1015,6 +1091,18 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       permission: body.permission,
     });
 
+    await publishDocumentEvent({
+      type: 'document.shared',
+      documentId: id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: new Date().toISOString(),
+      change: 'share',
+      status: document.status,
+    });
+
     return { ok: true };
   });
 
@@ -1031,6 +1119,19 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .where(
         and(eq(documentShares.documentId, params.id), eq(documentShares.userId, params.userId)),
       );
+
+    await publishDocumentEvent({
+      type: 'document.unshared',
+      documentId: params.id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: new Date().toISOString(),
+      change: 'unshare',
+      status: document.status,
+      extraUserIds: [params.userId],
+    });
 
     return { ok: true };
   });

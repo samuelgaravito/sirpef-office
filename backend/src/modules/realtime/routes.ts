@@ -21,6 +21,9 @@ const CLOSE_FORBIDDEN_ORIGIN = 4403;
  * en la query es solo una alternativa para clientes que no manejen cookies.
  */
 function extractToken(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  if (header?.startsWith('Bearer ')) return header.slice(7).trim();
+
   const cookie = request.cookies?.[ACCESS_COOKIE];
   if (cookie) return cookie;
 

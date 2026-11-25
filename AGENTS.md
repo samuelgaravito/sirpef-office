@@ -91,6 +91,10 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
 - `npm run smoke:ai-conversations` prueba el historial y los informes guardados contra la API y
   la base reales: crear, listar, reconstruir, renombrar, borrar, guardar/ejecutar/borrar un
   informe y comprobar el 404 de otro usuario.
+- `npm run smoke:push` prueba el alta y la baja de suscripciones push (web y Android)
+  contra PostgreSQL, sin enviar un push real.
+- `npm run smoke:mobile-received` comprueba que un envío directo aparece en la
+  bandeja `received` de la API móvil y que el contador se actualiza.
 - `npm run smoke:mobile-auth` levanta un SVA simulado en un puerto efímero y prueba el
   canje de sesión nativa y `/api/mobile/bootstrap`. **No necesita el SVA real.**
 - `npm run smoke:mobile-sign` prueba la firma móvil completa contra **PostgreSQL y Chrome
@@ -198,7 +202,9 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
 - `README.md` = uso y operación. `docs/ARQUITECTURA.md` = arquitectura, modelo de datos,
   flujos, API y render (léelo antes de tocar render o numeración). `docs/SVA.md` = integración
   con SVA y sus modos de autenticación (`local` / `hybrid` / `sva`).
+  `docs/NOTIFICACIONES.md` = push dentro/fuera y contrato de eventos;
+  `docs/FIREBASE.md` = pasos para activar FCM en Android.
 - La tabla de variables del README y `docs/ARQUITECTURA.md` están **al día** con el código
-  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **20 tablas**), pero
+  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **21 tablas**), pero
   compruébalo: si vuelve a haber discrepancia, **manda el código ejecutable**.
 - Si el README y el código discrepan, **manda el código ejecutable**.

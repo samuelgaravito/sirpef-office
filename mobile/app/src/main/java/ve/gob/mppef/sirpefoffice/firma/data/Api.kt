@@ -45,6 +45,8 @@ interface SirpefApi {
     suspend fun documents(
         @Query("scope") scope: String,
         @Query("q") query: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("pageSize") pageSize: Int = 20,
     ): DocumentsResponse
 
     @GET("documents/{id}/pdf")
@@ -68,6 +70,22 @@ interface SirpefApi {
         @Path("id") documentId: String,
         @Body body: ChallengeRequest,
     ): ChallengeResponse
+
+    @POST("inbox/{id}/reject")
+    suspend fun rejectMessage(
+        @Path("id") messageId: String,
+        @Body body: RejectRequest,
+    ): RejectResponse
+
+    @POST("notifications/subscribe")
+    suspend fun registerPushSubscription(
+        @Body body: PushSubscriptionRequest,
+    ): JsonElement
+
+    @POST("notifications/unsubscribe")
+    suspend fun unregisterPushSubscription(
+        @Body body: Map<String, String>,
+    ): JsonElement
 
     @POST("inbox/{id}/approve-and-sign")
     suspend fun approveAndSign(

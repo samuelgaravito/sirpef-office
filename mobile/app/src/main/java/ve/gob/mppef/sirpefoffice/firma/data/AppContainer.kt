@@ -10,4 +10,5 @@ class AppContainer(context: Context) {
     val sirpefApi = ApiFactory.sirpef(BuildConfig.SIRPEF_BASE_URL, sessionStore)
     val deviceKeyManager = DeviceKeyManager(appContext)
     val pdfCache = PdfCache(appContext)
+    val realtimeClient = RealtimeClient(BuildConfig.SIRPEF_BASE_URL, sessionStore)
 }

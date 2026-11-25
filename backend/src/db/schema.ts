@@ -879,6 +879,49 @@ export const documentSignaturesRelations = relations(documentSignatures, ({ one 
   }),
 }));
 
+/**
+ * Suscripciones push por dispositivo/navegador.
+ *
+ * Web usa el endpoint y las claves del navegador; Android usa el token FCM.
+ * El endpoint/token es único en todo el sistema porque identifica al
+ * dispositivo, no al usuario: al iniciar sesión se reasigna al usuario actual.
+ */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** web | android */
+    platform: text('platform').notNull().default('web'),
+    /** Endpoint Web Push o token FCM. */
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh'),
+    auth: text('auth'),
+    deviceId: uuid('device_id').references(() => mobileDevices.id, { onDelete: 'set null' }),
+    userAgent: text('user_agent').notNull().default(''),
+    appVersion: text('app_version').notNull().default(''),
+    /** active | expired */
+    status: text('status').notNull().default('active'),
+    failureCount: integer('failure_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('push_subscriptions_endpoint_idx').on(t.endpoint),
+    index('push_subscriptions_user_idx').on(t.userId),
+  ],
+);
+
+export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  user: one(users, { fields: [pushSubscriptions.userId], references: [users.id] }),
+  device: one(mobileDevices, {
+    fields: [pushSubscriptions.deviceId],
+    references: [mobileDevices.id],
+  }),
+}));
+
 export const signatureCertificatesRelations = relations(signatureCertificates, ({ one }) => ({
   document: one(documents, {
     fields: [signatureCertificates.documentId],
@@ -916,3 +959,5 @@ export type DocumentSignatureRow = typeof documentSignatures.$inferSelect;
 export type NewDocumentSignature = typeof documentSignatures.$inferInsert;
 export type SignatureCertificateRow = typeof signatureCertificates.$inferSelect;
 export type NewSignatureCertificate = typeof signatureCertificates.$inferInsert;
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;

@@ -54,6 +54,7 @@ y conservar el **historial de versiones** de cada documento.
 | Consulta y estadísticas | **Chat de consulta** (`/consulta`): la IA elige el plan y el servidor responde con documentos enlazados o con **el gráfico que mejor explique la cifra** (KPI, barras, líneas, dona o comparación), más insights como el peso del top o el delta frente al periodo anterior. Las barras refinan la consulta sin volver a llamar al modelo. **Historial de conversaciones** en el servidor (buscar, renombrar, borrar, `/consulta/:id`) y **informes guardados**: se almacena el plan, no las cifras, y al abrirlos se recalculan con los permisos actuales. Módulo **Estadísticas** con totales, tendencia, aprobaciones, salud y plantillas más usadas; **cada cifra abre la lista real de documentos** que hay detrás. |
 | Multiusuario | JWT de acceso + refresh token rotativo en cookie httpOnly, roles `admin`/`member`, compartición por documento (`editor`/`viewer`) y por plantilla (`editor`/`viewer`), registro de actividad. |
 | Bandeja y aprobación | Bandeja interna con dos pestañas: **Recibidos** y **Enviados**. En Recibidos, las solicitudes pendientes del jefe aparecen destacadas en un bloque superior con contador y acción **Devolver / rechazar**. **Enviados** reúne los envíos propios y los memos que el jefe aprobó o rechazó, con un selector de estado (todos, pendientes, aprobados, rechazados, anulados). El asistente prepara destinatarios, asunto y mensaje; el jefe revisa, corrige, aprueba y envía. Al aprobar o rechazar, el asistente recibe un aviso **en tiempo real** en la bandeja: una **campana flotante** con el asunto (que agrupa los avisos seguidos y se va sola a los pocos segundos) y, si el usuario lo autoriza, un **aviso del sistema** cuando no está mirando la aplicación. Además suben el badge y la marca **Nuevo**. Al rechazar se elige si el asistente puede corregir y reenviar o si el memo queda cerrado; al aprobar se elige si el asistente puede exportar el memo o si solo lo hará el administrador. El memo enviado queda **sellado como solo lectura** (sin edición, borrado, restauración ni cambios de acceso); su exportación queda reservada al administrador que aprobó, a los administradores destinatarios y, si se autorizó, al asistente remitente. |
+| Tiempo real y avisos | El listado de documentos y el editor abierto se actualizan al guardar, compartir, aprobar o borrar otro usuario, sin pisar cambios locales. La **campana** y el **centro de notificaciones** muestran el historial; con la pestaña oculta sale un aviso del sistema. Con la web cerrada, **Web Push** (PWA) avisa igualmente. En Android, el jefe o destinatario ve los documentos enviados sin refrescar; si firma desde la app, la vista web del mensaje cambia sola. La app Android puede recibir **FCM** con la app cerrada cuando se configura Firebase. |
 | Numeración | Correlativos por plantilla (`MEM-0001-2026`, `CRT-0001-2026`…): prefijo opcional de 1 a 20 caracteres, número inicial, relleno y reinicio anual. Cada plantilla lleva su propia enumeración —la serie es la dueña del prefijo y del contador—, así que sus números nunca se intercalan con los de otra aunque repitan prefijo. Con el prefijo en blanco la serie numera sin etiqueta (`0001-2026`). Incluye campos automáticos (fecha, firmante, cargo). |
 
 ### Capturas
@@ -203,6 +204,9 @@ producción añade `--profile tls` y define `SIRPEF_DOMAIN`.
 | `AI_LOCAL_TIMEOUT_MS` | `600000` | Espera máxima de los modelos locales (Ollama). Sin GPU un 7B tarda minutos en un documento. |
 | `AI_NUM_CTX` | `8192` | Contexto que se pide al proveedor local. Ollama usa 4 096 por defecto y **recorta el prompt por delante** (el modelo pierde las reglas y la plantilla). |
 | `AI_NODE_ENABLED` | `true` | Si un usuario tiene su equipo conectado por el túnel, la redacción se hace en su GPU. `false` desactiva los nodos y todo pasa por el proveedor del servidor. |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | — | Claves de Web Push. Sin ellas no hay push con la web cerrada; el resto de avisos sigue funcionando. |
+| `VAPID_SUBJECT` | `mailto:soporte@sirpefoffice.local` | Contacto que se envía en el protocolo Web Push. |
+| `FCM_SERVICE_ACCOUNT_JSON` | — | Cuenta de servicio de Firebase (JSON o ruta) para push Android con la app cerrada. |
 
 El resto de variables (claves de IA, correo del admin del seed, Google Docs) está
 documentado en `backend/.env.example`. La URL de la API del frontend se configura en
@@ -733,6 +737,8 @@ cd backend
 | `npm run smoke:inbox` | Con la API levantada, prueba el flujo de bandeja: solicitud de envío, aprobación, autorización de exportación, sellado, lectura, rechazo y bloqueo de edición/borrado/exportación (crea usuarios y documentos temporales y los elimina). |
 | `npm run smoke:realtime` | Levanta la API y comprueba el canal de eventos: el handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar (necesita PostgreSQL). |
 | `npm run smoke:realtime:proxy` | Con la web de desarrollo levantada, comprueba el mismo canal a través del proxy: login → cookie → handshake por el mismo origen. Acepta `ADMIN_EMAIL` / `ADMIN_PASSWORD`. |
+| `npm run smoke:push` | Comprueba el alta y la baja de suscripciones push (web y Android) contra PostgreSQL, sin enviar un push real. |
+| `npm run smoke:mobile-received` | Comprueba que un envío directo aparece en la bandeja `received` de la API móvil y que el contador se actualiza. |
 | `npm run smoke:bell` | Con la web de desarrollo levantada, comprueba en Chrome la campana flotante: aparece con el asunto, agrupa los avisos con contador, se va sola, y Ajustes permite activar o silenciar los avisos del sistema. |
 | `npm run smoke:send-once` | Con la web de desarrollo levantada, comprueba que el diálogo de envío se abre con **un solo clic** en un documento nuevo (la vista se remonta al crearlo y la intención tiene que sobrevivir). |
 | `node scripts/ui-smoke.mjs` | Prueba de humo de la UI con Chrome headless: previews reales de documentos y plantillas, hoja de Diseño con bandas editables y ancho de página completo, inserción de tablas y unión de celdas, creación directa de documentos, modal de diseño al crear plantilla y flujo completo (capturas en `/tmp/sirpefoffice-shots`). |
@@ -874,8 +880,9 @@ Recuerda definir secretos nuevos, HTTPS y una política de backups de PostgreSQL
 - **Bandeja interna, sin correo real**: los envíos llegan a usuarios del sistema; no hay
   integración SMTP ni destinatarios externos. El flujo de aprobación usa los roles
   existentes: los asistentes deben ser `member` y los jefes `admin`.
-- **Sin colaboración en tiempo real**: el modelo es autoguardado + versionado optimista
-  (dos editores simultáneos reciben 409 y pueden recargar).
+- **Sin colaboración carácter a carácter**: el modelo es autoguardado + versionado optimista y
+  sincronización al guardar (dos editores simultáneos reciben 409 y pueden recargar). No hay
+  cursores remotos ni CRDT.
 - **Paginación por bloques**: el editor, HTML, vista de impresión, PDF y DOCX cortan
   entre bloques de nivel superior. Un párrafo, tabla o imagen más alto que una hoja hace
   crecer la hoja en el editor; PDF/Word pueden fragmentarlo y el número de páginas puede

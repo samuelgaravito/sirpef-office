@@ -16,7 +16,7 @@ import { logActivity } from '../../lib/activity.js';
 import { numberDocumentInTx } from '../../lib/counter.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { saveVersion } from '../../lib/versions.js';
-import { publishInboxEvent } from '../realtime/events.js';
+import { publishDocumentEvent, publishInboxEvent } from '../realtime/events.js';
 
 export interface ApproveMessageInput {
   user: AuthenticatedUser;
@@ -171,6 +171,7 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     documentId: document.id,
     documentTitle: document.title,
     subject,
+    actorId: user.sub,
     actorName: user.name,
     status: 'sent',
   });
@@ -181,7 +182,34 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     documentId: document.id,
     documentTitle: document.title,
     subject,
+    actorId: user.sub,
     actorName: user.name,
+    status: 'sent',
+  });
+
+  // La vista del aprobador (web, otra pestaña o la app) deja de mostrar la
+  // solicitud como pendiente en cuanto se aprueba.
+  await publishInboxEvent({
+    type: 'inbox.message.reviewed',
+    userIds: [user.sub],
+    messageId,
+    documentId: document.id,
+    documentTitle: document.title,
+    subject,
+    actorId: user.sub,
+    actorName: user.name,
+    status: 'sent',
+  });
+
+  await publishDocumentEvent({
+    type: 'document.locked',
+    documentId: document.id,
+    documentTitle: document.title,
+    actorId: user.sub,
+    actorName: user.name,
+    version: document.version,
+    updatedAt: new Date().toISOString(),
+    change: 'lock',
     status: 'sent',
   });
 

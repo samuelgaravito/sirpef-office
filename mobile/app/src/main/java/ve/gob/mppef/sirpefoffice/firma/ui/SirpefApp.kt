@@ -83,6 +83,7 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     onFilter = viewModel::setFilter,
                     onSearch = viewModel::setSearch,
                     onRefresh = viewModel::refreshDocuments,
+                    onPage = viewModel::goToPage,
                     onDocument = viewModel::selectDocument,
                     onProfile = viewModel::openProfile,
                 )
@@ -95,6 +96,10 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     onApprove = viewModel::approveAndSign,
                     onRetry = viewModel::retrySign,
                     onCertificate = viewModel::openCertificate,
+                    onDecision = viewModel::chooseDecision,
+                    onReject = viewModel::rejectDocument,
+                    onRejectReason = viewModel::setRejectReason,
+                    onAllowEdit = viewModel::setAllowEdit,
                 )
 
                 Screen.CERTIFICATE -> CertificateScreen(

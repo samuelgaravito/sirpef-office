@@ -10,7 +10,9 @@ import {
   documentMessageRecipients,
   documentMessages,
   documentShares,
+  documentSignatures,
   documents,
+  signatureCertificates,
   templates,
   users,
 } from '../../db/schema.js';
@@ -27,7 +29,7 @@ import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js'
 import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
 import { saveVersion } from '../../lib/versions.js';
 import { toSummary } from '../documents/routes.js';
-import { publishInboxEvent } from '../realtime/events.js';
+import { publishDocumentEvent, publishInboxEvent } from '../realtime/events.js';
 import { approveMessage } from './approve.js';
 
 /* ───────────────────────────── Esquemas ───────────────────────────── */
@@ -497,11 +499,39 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
               : null,
         });
 
+    const [signatureRow] = await db
+      .select({
+        signedAt: documentSignatures.signedAt,
+        serial: signatureCertificates.serial,
+        signerName: users.name,
+      })
+      .from(documentSignatures)
+      .innerJoin(
+        signatureCertificates,
+        eq(signatureCertificates.signatureId, documentSignatures.id),
+      )
+      .innerJoin(users, eq(users.id, documentSignatures.userId))
+      .where(
+        and(
+          eq(documentSignatures.messageId, id),
+          eq(documentSignatures.status, 'sealed'),
+        ),
+      )
+      .orderBy(desc(documentSignatures.signedAt))
+      .limit(1);
+
     return {
       ...serializeMessage(
         row as MessageListRow,
         Boolean((isRecipient && row.readAt === null) || isResultUnread),
       ),
+      signature: signatureRow
+        ? {
+            signedAt: signatureRow.signedAt.toISOString(),
+            serial: signatureRow.serial,
+            signerName: signatureRow.signerName,
+          }
+        : null,
       recipients: recipients.map((recipient) => ({
         ...recipient,
         readAt: recipient.readAt?.toISOString() ?? null,
@@ -651,7 +681,20 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         documentId: document.id,
         documentTitle: document.title,
         subject: body.subject,
+        actorId: user.sub,
         actorName: user.name,
+        status: 'sent',
+      });
+
+      await publishDocumentEvent({
+        type: 'document.locked',
+        documentId: document.id,
+        documentTitle: document.title,
+        actorId: user.sub,
+        actorName: user.name,
+        version: document.version,
+        updatedAt: now.toISOString(),
+        change: 'lock',
         status: 'sent',
       });
     } else {
@@ -670,8 +713,21 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         documentId: document.id,
         documentTitle: document.title,
         subject: body.subject,
+        actorId: user.sub,
         actorName: user.name,
         status: 'pending_approval',
+      });
+
+      await publishDocumentEvent({
+        type: 'document.updated',
+        documentId: document.id,
+        documentTitle: document.title,
+        actorId: user.sub,
+        actorName: user.name,
+        version: document.version,
+        updatedAt: now.toISOString(),
+        change: 'status',
+        status: 'in_review',
       });
     }
 
@@ -773,8 +829,35 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       documentId: document.id,
       documentTitle: document.title,
       subject: message.subject,
+      actorId: user.sub,
       actorName: user.name,
       status: 'rejected',
+    });
+
+    // El aprobador que tiene la vista abierta (u otra pestaña suya) debe ver
+    // que el envío ya no está pendiente.
+    await publishInboxEvent({
+      type: 'inbox.message.reviewed',
+      userIds: [user.sub],
+      messageId: id,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject: message.subject,
+      actorId: user.sub,
+      actorName: user.name,
+      status: 'rejected',
+    });
+
+    await publishDocumentEvent({
+      type: allowEdit ? 'document.updated' : 'document.locked',
+      documentId: document.id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: now.toISOString(),
+      change: allowEdit ? 'status' : 'lock',
+      status: allowEdit ? 'draft' : 'rejected',
     });
 
     return { ok: true, id, status: 'rejected', allowEdit };
@@ -825,8 +908,21 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
       documentId: document.id,
       documentTitle: document.title,
       subject: message.subject,
+      actorId: user.sub,
       actorName: user.name,
       status: 'cancelled',
+    });
+
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: document.id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: now.toISOString(),
+      change: 'status',
+      status: 'draft',
     });
 
     return { ok: true, id, status: 'cancelled' };

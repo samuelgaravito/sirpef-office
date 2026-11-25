@@ -833,67 +833,88 @@ al exportar PDF/DOCX.
 
 ### 7.6 Canal de eventos en tiempo real
 
-La bandeja avisa sin recargar: cuando un envío se crea, se aprueba, se rechaza o se
-cancela, el navegador recibe un aviso y actualiza el badge y la lista.
+La bandeja, el listado de documentos y el editor abierto se actualizan sin recargar.
+Cuando un envío se crea, se aprueba, se rechaza o se cancela, el navegador recibe un
+aviso y refresca solo lo que corresponde. En Android, el mismo canal mantiene la lista de
+pendientes y recibidos al día mientras la app está abierta.
 
 **Servidor** (`backend/src/modules/realtime/`):
 
 - `routes.ts` expone `GET /api/ws`. El handshake se autentica con la cookie httpOnly
-  `sd_access` —el navegador no puede mandar cabeceras en un WebSocket— o, como
-  alternativa, con `?token=`. El origen se comprueba a mano (CORS no aplica al
-  handshake) y el estado de la cuenta, en la base local. Sin sesión se cierra con
-  **4401**; con un origen no permitido, con **4403**.
+  `sd_access`, con `Authorization: Bearer` (app Android) o, como alternativa, con
+  `?token=`. El origen se comprueba a mano (CORS no aplica al handshake) y el estado de
+  la cuenta, en la base local. Sin sesión se cierra con **4401**; con un origen no
+  permitido, con **4403**.
 - `hub.ts` mantiene las conexiones agrupadas por usuario, reparte cada evento solo a sus
   destinatarios, manda un *ping* cada 30 s para detectar conexiones muertas y comprueba
   cada 5 min que las cuentas de los conectados sigan activas.
-- `events.ts` publica con `pg_notify` en el canal `sirpefoffice_realtime`. Se usa
-  PostgreSQL y no un emisor en memoria porque los scripts de la aplicación (demo, humo,
-  siembra) escriben en la bandeja conectándose directamente a la base de datos: con un
-  emisor en memoria sus cambios no llegarían al navegador. La escucha usa una conexión
-  propia, aparte del pool de consultas, y se reintenta sola si la base no está lista.
+- `events.ts` publica con `pg_notify` en el canal `sirpefoffice_realtime` y lanza el push
+  en segundo plano. Se usa PostgreSQL y no un emisor en memoria porque los scripts de la
+  aplicación (demo, humo, siembra) escriben directamente en la base: con un emisor en
+  memoria sus cambios no llegarían al navegador. La escucha usa una conexión propia,
+  aparte del pool de consultas, y se reintenta sola si la base no está lista.
+- `documentAudience()` calcula propietario + filas de `document_shares`. Los
+  destinatarios de un envío y los administradores que deben aprobarlo reciben su fila en
+  la transacción, así que entran en la audiencia sin consultas extra.
 
-**Cliente** (`frontend/src/composables/useRealtime.ts`): una única conexión por sesión,
-abierta en el componente raíz cuando hay sesión y cerrada al cerrarla (no en `AppShell`,
-que se remonta en cada ruta). Se reconecta sola con espera creciente y al volver a la
-pestaña. Los suscriptores reciben el evento y piden los datos con la API de siempre: el
-evento solo dice *qué* ha cambiado, así que no hay dos versiones de la forma de un
-mensaje.
+**Cliente web** (`frontend/src/composables/useRealtime.ts`): una única conexión por
+sesión, abierta en el componente raíz cuando hay sesión y cerrada al cerrarla (no en
+`AppShell`, que se remonta en cada ruta). Se reconecta sola con espera creciente y al
+volver a la pestaña. Los suscriptores reciben el evento y piden los datos con la API de
+siempre: el evento solo dice *qué* ha cambiado, así que no hay dos versiones de la forma
+de un mensaje.
 
-Eventos (`shared/src/realtime.ts`): `connection.ready`, `inbox.message.created`,
-`inbox.message.pending`, `inbox.message.approved`, `inbox.result.approved`,
-`inbox.result.rejected` e `inbox.message.cancelled`.
+**Listado y editor**:
+
+- `DocumentsView` recarga la página y los filtros actuales con debounce y un guardia de
+  secuencia para no pisar una respuesta nueva con una vieja.
+- `DocumentEditorView` aplica el cambio remoto solo si no hay cambios locales y no hay
+  un diálogo que dependa de `expectedVersion`. Si hay trabajo local, muestra una barra
+  para cargar la versión remota o seguir editando. Nunca sobrescribe en silencio.
+- `InboxMessageView` recarga el mensaje al recibir `inbox.message.reviewed` o
+  `inbox.message.signed`, cierra los diálogos de decisión y muestra el estado firmado.
+
+Eventos (`shared/src/realtime.ts`):
+
+- Bandeja: `connection.ready`, `inbox.message.created`, `inbox.message.pending`,
+  `inbox.message.approved`, `inbox.result.approved`, `inbox.result.rejected`,
+  `inbox.message.cancelled`, `inbox.message.reviewed` e `inbox.message.signed`.
+- Documento: `document.created`, `document.updated`, `document.deleted`,
+  `document.restored`, `document.shared`, `document.unshared` y `document.locked`.
+
+El payload **nunca** incluye el JSON de TipTap: PostgreSQL limita `NOTIFY` a unos 8 KB.
 
 **Proxy.** El canal viaja por `/api/`, así que el proxy de producción tiene que reenviar
 el *upgrade*: Nginx necesita `proxy_set_header Upgrade` y `proxy_set_header Connection`
 (ya está en `deploy/nginx/`), Caddy lo hace solo y el proxy de Vite necesita `ws: true`.
 
-Verificación: `npm run smoke:realtime` (levanta la API y comprueba handshake, aislamiento
-por destinatario y el flujo envío → aviso → aprobación → aviso) y
-`npm run smoke:realtime:proxy` (el mismo canal a través del proxy de la web).
+Verificación: `npm run smoke:realtime` (handshake, aislamiento, evento de documento,
+envío, aprobación y firma) y `npm run smoke:realtime:proxy`.
 
-### 7.7 Campana flotante y avisos del sistema
+### 7.7 Notificaciones dentro y fuera de la app
 
-`components/layout/NotificationBell.vue`, pintada en `App.vue`, muestra un aviso flotante
-arriba a la derecha (bajo la cabecera) cuando llega un evento de la bandeja. El estado y la
-suscripción viven en `composables/useNotifications.ts`, que se engancha **una sola vez** en
-la raíz para que funcione en cualquier ruta:
+**Dentro**:
 
-- La campana **agrupa**: si llegan varios avisos seguidos se queda una sola con el
-  contador y el temporizador se reinicia. **Se va sola a los 6 s**; pasar el puntero o
-  enfocar el aviso pausa la cuenta atrás.
-- Al pulsarla (o al pulsar el aviso del sistema) se abre la bandeja.
-- Si el navegador lo permite, lanza un **aviso del sistema** (`Notification`) **solo
-  cuando la pestaña no está a la vista o la ventana no tiene el foco**, con `tag` para que
-  los avisos se sustituyan en vez de apilarse. El permiso se pide con un clic —los
-  navegadores no permiten pedirlo al cargar— desde la propia campana o desde
-  **Ajustes → Avisos**, donde además se puede silenciar.
-- Requiere contexto seguro (HTTPS o `localhost`), que ya es el caso en desarrollo y
-  producción. Android Chrome no admite el constructor de `Notification` desde la página
-  (haría falta un service worker) y iOS Safari exige PWA instalada; en ambos casos queda
-  la campana dentro de la aplicación.
+- `NotificationBell.vue` muestra el aviso flotante y agrupa los seguidos.
+- `NotificationCenter.vue` añade el historial local por usuario (50 avisos), insignia de
+  no leídos, marcar leído y limpiar.
+- `useNotifications.ts` ignora las acciones del propio usuario y decide si abre la
+  bandeja o el documento.
+- Si la pestaña no está visible, se lanza un aviso del sistema. Si el navegador tiene
+  Web Push activo, lo gestiona el service worker para no duplicar.
 
-Verificación: `npm run smoke:bell` (Chrome real: aparece, muestra el asunto, agrupa, se va
-sola y el interruptor de Ajustes cambia el estado).
+**Fuera**:
+
+- Web Push: `frontend/public/sw.js` + `manifest.webmanifest`; VAPID en el servidor;
+  tabla `push_subscriptions`; endpoints `/api/notifications/*`.
+- Android: FCM con `SirpefMessagingService`; sin `google-services.json` el código queda
+  inactivo pero la app compila. El WebSocket sigue funcionando con la app abierta.
+
+Detalle operativo y límites en [`NOTIFICACIONES.md`](./NOTIFICACIONES.md) y
+[`FIREBASE.md`](./FIREBASE.md).
+
+Verificación: `npm run smoke:push` (alta/baja de suscripciones) y `npm run smoke:bell`
+(campana real en Chrome).
 
 ---
 
@@ -1130,7 +1151,11 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | Método | Ruta | Descripción |
 | --- | --- | --- |
 | `GET` | `/health` | Estado del servicio. |
-| `GET` | `/ws` | Canal de eventos en tiempo real (WebSocket). Autentica el handshake con la cookie de sesión o `?token=`; ver 7.6. |
+| `GET` | `/ws` | Canal de eventos en tiempo real (WebSocket). Autentica con cookie, `Authorization: Bearer` o `?token=`; ver 7.6. |
+| `GET` | `/notifications/public-key` | Clave pública VAPID para Web Push. |
+| `POST` | `/notifications/subscribe` | Alta/actualización de una suscripción web o token FCM. |
+| `POST` | `/notifications/unsubscribe` | Baja de la suscripción del dispositivo. |
+| `POST` | `/notifications/test` | Aviso de prueba al usuario actual. |
 | `POST` | `/auth/register` | Registro; el primer usuario del sistema es `admin`, el resto `member`. |
 | `POST` | `/auth/login` | Login; devuelve usuario + access token y cookie refresh. |
 | `POST` | `/auth/refresh` | Rota el refresh token y emite un access nuevo. |
@@ -1279,7 +1304,7 @@ diarios de PostgreSQL, rotación de claves, límite de tamaño de subida a nivel
 | Imágenes A+B | `cd backend && node scripts/image-smoke.mjs` | Inserción, arrastre, redimensionado, flotado, alineación, persistencia y exportación PDF/DOCX con imagen. |
 | Cabecera/pie | `cd backend && node scripts/chrome-smoke.mjs` | Pie visible y anclado en modo lectura, herencia documento → plantilla → diseño, edición con imagen y tokens, alto y ancho, persistencia, restablecimiento, cambio de diseño de una plantilla y exportación. |
 | Exportación | `pdftotext` / `pdfimages` / `unzip` | Verifica datos interpolados, bandas, numeración real, imágenes embebidas y campos `PAGE`/`NUMPAGES` en DOCX. |
-| Tiempo real | `cd backend && npm run smoke:realtime` + `npm run smoke:realtime:proxy` | El handshake acepta la cookie de sesión y rechaza al que no la tiene, un aviso solo llega a su destinatario y el envío y la aprobación de un documento avisan sin recargar. |
+| Tiempo real y push | `cd backend && npm run smoke:realtime` + `smoke:realtime:proxy` + `smoke:push` + `smoke:mobile-received` | El handshake acepta cookie o Bearer, un evento solo llega a su destinatario, los documentos y la bandeja se actualizan, las suscripciones push se dan de alta/baja y el envío directo aparece en `received` de la API móvil. |
 | Campana de avisos | `cd backend && npm run smoke:bell` | En Chrome real: la campana aparece con el asunto, agrupa con contador, se va sola a los 6 s y Ajustes permite activar o silenciar los avisos del sistema. |
 | Envío en un clic | `cd backend && npm run smoke:send-once` | En un documento nuevo, el primer clic en «Enviar» abre el diálogo: la intención sobrevive al remontaje de la vista al pasar de `/documents/new` a `/documents/:id`. |
 

@@ -60,6 +60,7 @@ data class StoredSession(
 @Serializable
 data class CountsDto(
     val pending: Int = 0,
+    val received: Int = 0,
     val signed: Int = 0,
     val sent: Int = 0,
 )
@@ -102,6 +103,7 @@ data class DocumentsResponse(
     val items: List<MobileDocument> = emptyList(),
     val page: Int? = null,
     val pageSize: Int? = null,
+    val total: Int? = null,
 )
 
 @Serializable
@@ -239,6 +241,28 @@ data class ApproveAndSignResponse(
     val signed: Boolean = false,
     val signatureId: String? = null,
     val certificate: CertificateDto? = null,
+)
+
+@Serializable
+data class RejectRequest(
+    val reason: String,
+    val allowEdit: Boolean = true,
+)
+
+@Serializable
+data class RejectResponse(
+    val ok: Boolean = true,
+    val id: String? = null,
+    val status: String? = null,
+    val allowEdit: Boolean = true,
+)
+
+@Serializable
+data class PushSubscriptionRequest(
+    val platform: String = "android",
+    val endpoint: String,
+    val deviceId: String? = null,
+    val appVersion: String = "",
 )
 
 @Serializable

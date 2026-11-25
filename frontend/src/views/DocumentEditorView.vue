@@ -53,9 +53,11 @@ import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useInlineAi } from '@/composables/useInlineAi';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
+import { isDocumentMessage, type RealtimeMessage } from '@sirpefoffice/shared';
 import { takeAiPrompt } from '@/lib/ai-prompt';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
@@ -374,6 +376,13 @@ const saving = ref(false);
 const dirty = ref(false);
 const lastSavedAt = ref<Date | null>(null);
 const conflict = ref(false);
+/** Aviso de cambio remoto que no se aplicó por tener trabajo local o un modal abierto. */
+const liveNotice = ref<{ actorName: string; version: number; locked: boolean } | null>(null);
+const remoteDeleted = ref(false);
+const remoteRevoked = ref(false);
+let pendingLiveEvent: RealtimeMessage | null = null;
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
 const aiConfigured = ref(false);
 const generating = ref(false);
 /** El contenido actual viene de una propuesta del asistente. */
@@ -1080,6 +1089,9 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
     return null;
   } finally {
     saving.value = false;
+    const pending = pendingLiveEvent;
+    pendingLiveEvent = null;
+    if (pending) handleLiveEvent(pending);
   }
 }
 
@@ -1104,6 +1116,10 @@ async function save(checkpoint = false, targetId: string | null = documentId.val
     return;
   }
   if (!targetId || !canEdit.value || saving.value) return;
+  if (remoteDeleted.value || remoteRevoked.value) {
+    toast.warning('El documento ya no está disponible para guardar.');
+    return;
+  }
   if (!checkpoint && !dirty.value) return;
 
   window.clearTimeout(saveTimer);
@@ -1655,6 +1671,155 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
+/** ¿Hay un diálogo que depende de la versión actual? */
+function liveApplyBlocked(): boolean {
+  return sendOpen.value || shareOpen.value || historyOpen.value || rejectOpen.value;
+}
+
+/** Aplica en silencio el detalle recibido del servidor. */
+function applyDocumentDetail(response: DocumentDetailResponse): void {
+  const selection = editor.value
+    ? { from: editor.value.state.selection.from, to: editor.value.state.selection.to }
+    : null;
+
+  title.value = response.document.title;
+  description.value = response.document.description ?? '';
+  docNumber.value = response.document.docNumber;
+  numberingPreview.value = response.document.numberingPreview ?? null;
+  docType.value = response.document.docType;
+  status.value = response.document.status;
+  permission.value = response.document.permission;
+  version.value = response.document.version;
+  locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent';
+  canExport.value = response.canExport;
+  pendingMessage.value = response.document.pendingMessage ?? null;
+  lastRejection.value = response.document.lastRejection ?? null;
+  data.value = response.document.data ?? {};
+  schema.value = response.templateSchema ?? [];
+  modelName.value = response.templateName;
+  design.value = response.design?.tokens ?? response.document.designTokens ?? null;
+  shares.value = response.shares ?? [];
+  ownerName.value = response.document.ownerName;
+  lastSavedAt.value = new Date(response.document.updatedAt);
+
+  editor.value?.commands.setContent(response.document.content, { emitUpdate: false });
+  if (selection) {
+    const size = editor.value?.state.doc.content.size ?? 1;
+    const from = Math.max(1, Math.min(selection.from, size));
+    const to = Math.max(from, Math.min(selection.to, size));
+    editor.value?.commands.setTextSelection({ from, to });
+  }
+  editor.value?.setEditable(canEdit.value, false);
+  syncEditorContent();
+
+  inheritedChrome.value = response.inheritedChrome;
+  headerConfig.value = structuredClone(response.chrome.header);
+  footerConfig.value = structuredClone(response.chrome.footer);
+  headerSource.value = response.chrome.headerSource;
+  footerSource.value = response.chrome.footerSource;
+  setChromeContent('header', headerConfig.value.content);
+  setChromeContent('footer', footerConfig.value.content);
+  headerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
+  footerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
+  activeChrome.value = 'body';
+
+  dirty.value = false;
+  conflict.value = false;
+  previewMode.value = false;
+  previewHtml.value = '';
+  liveNotice.value = null;
+  void loadReviewMessage();
+}
+
+/** Recarga el documento tras un aviso remoto. */
+async function reloadFromRemote(): Promise<void> {
+  const id = documentId.value;
+  if (!id || saving.value) return;
+  try {
+    const response = await api.get<DocumentDetailResponse>(`/documents/${id}`);
+    applyDocumentDetail(response);
+    remoteDeleted.value = false;
+    remoteRevoked.value = false;
+  } catch (error) {
+    toast.failure(error, 'No se pudo actualizar el documento');
+  }
+}
+
+/** Decide si un cambio remoto se aplica, se avisa o se ignora. */
+function handleLiveEvent(event: RealtimeMessage): void {
+  if (!isDocumentMessage(event)) return;
+  const payload = event.payload;
+  if (payload.documentId !== documentId.value) return;
+
+  if (event.type === 'document.deleted') {
+    remoteDeleted.value = true;
+    sendOpen.value = false;
+    shareOpen.value = false;
+    historyOpen.value = false;
+    rejectOpen.value = false;
+    toast.warning('Este documento se movió a la papelera.');
+    return;
+  }
+
+  if (event.type === 'document.unshared') {
+    if (permission.value !== 'owner') {
+      remoteRevoked.value = true;
+      sendOpen.value = false;
+      shareOpen.value = false;
+      historyOpen.value = false;
+      rejectOpen.value = false;
+      toast.warning('Ya no tienes acceso a este documento.');
+      return;
+    }
+  }
+
+  if (event.type === 'document.locked') {
+    if (dirty.value || liveApplyBlocked()) {
+      liveNotice.value = {
+        actorName: payload.actorName,
+        version: payload.version,
+        locked: true,
+      };
+      return;
+    }
+    void reloadFromRemote();
+    return;
+  }
+
+  if (event.type === 'document.updated') {
+    if (payload.change === 'content' && payload.version <= version.value) return;
+    if (
+      payload.change !== 'content' &&
+      payload.version <= version.value &&
+      new Date(payload.updatedAt).getTime() <= (lastSavedAt.value?.getTime() ?? 0)
+    ) {
+      return;
+    }
+  }
+
+  if (saving.value) {
+    pendingLiveEvent = event;
+    return;
+  }
+
+  if (dirty.value || liveApplyBlocked()) {
+    liveNotice.value = {
+      actorName: payload.actorName,
+      version: payload.version,
+      locked: false,
+    };
+    return;
+  }
+
+  window.clearTimeout(liveTimer);
+  liveTimer = window.setTimeout(() => void reloadFromRemote(), 250);
+}
+
+function onConnectionReady(): void {
+  if (loading.value || saving.value || dirty.value) return;
+  void reloadFromRemote();
+}
+
 onBeforeRouteLeave(async () => {
   // Un documento nuevo se materializa al salir: así aparece en Documentos y no
   // depende de que alguien recuerde pulsar Guardar. Si la API falla, el
@@ -1693,6 +1858,10 @@ onBeforeRouteLeave(async () => {
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload);
   window.addEventListener('keydown', onKeydown);
+  unsubscribeRealtime = onRealtimeEvent((event) => {
+    if (event.type === 'connection.ready') onConnectionReady();
+    else handleLiveEvent(event);
+  });
 
   if (isNew.value) {
     await hydrateNewDocument();
@@ -1728,6 +1897,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload);
   window.removeEventListener('keydown', onKeydown);
+  unsubscribeRealtime?.();
+  window.clearTimeout(liveTimer);
   window.clearTimeout(saveTimer);
   window.clearTimeout(previewTimer);
   // Se vuelca el borrador pendiente: si no, se perdería lo escrito en los
@@ -2019,6 +2190,50 @@ onBeforeUnmount(() => {
       <span class="flex-1">Otra sesión guardó cambios en este documento.</span>
       <button type="button" class="btn btn-outline btn-sm" @click="load">Descartar y recargar</button>
       <button type="button" class="btn btn-danger btn-sm" @click="overwriteConflict">Conservar mis cambios</button>
+    </div>
+
+    <!-- Cambio remoto pendiente de aplicar -->
+    <div
+      v-if="liveNotice && !conflict"
+      class="flex flex-wrap items-center gap-3 border-b border-warning/20 bg-warning-soft/60 px-4 py-2 text-[13.5px] text-ink"
+    >
+      <Cloud class="size-4 shrink-0 text-warning" />
+      <span class="flex-1">
+        <strong class="font-semibold">{{ liveNotice.actorName }}</strong>
+        {{ liveNotice.locked ? 'aprobó o envió el documento' : 'guardó cambios' }}
+        (v{{ liveNotice.version }}).
+        <template v-if="liveNotice.locked">
+          Tus cambios locales no se podrán guardar.
+        </template>
+        <template v-else>
+          Carga la nueva versión o sigue con tus cambios.
+        </template>
+      </span>
+      <button type="button" class="btn btn-outline btn-sm" @click="reloadFromRemote">
+        Cargar la versión nueva
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        @click="liveNotice = null"
+      >
+        Seguir editando
+      </button>
+    </div>
+
+    <!-- Documento borrado o acceso retirado -->
+    <div
+      v-if="remoteDeleted || remoteRevoked"
+      class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[13.5px] text-danger"
+    >
+      <TriangleAlert class="size-4 shrink-0" />
+      <span class="flex-1">
+        {{ remoteDeleted ? 'Este documento se movió a la papelera.' : 'Ya no tienes acceso a este documento.' }}
+        Guarda una copia de tu contenido si lo necesitas.
+      </span>
+      <button type="button" class="btn btn-outline btn-sm" @click="router.push({ name: 'documents' })">
+        Volver a documentos
+      </button>
     </div>
 
     <!-- Documento nuevo: el borrador vive en este navegador hasta guardarlo -->

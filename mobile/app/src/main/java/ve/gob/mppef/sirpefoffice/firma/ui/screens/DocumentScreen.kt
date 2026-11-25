@@ -36,9 +36,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -57,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import ve.gob.mppef.sirpefoffice.firma.data.SignatureCapture
+import ve.gob.mppef.sirpefoffice.firma.ui.DocumentDecision
 import ve.gob.mppef.sirpefoffice.firma.ui.UiState
 import ve.gob.mppef.sirpefoffice.firma.ui.components.SignatureDialog
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Background
@@ -79,6 +82,10 @@ fun DocumentScreen(
     onApprove: (FragmentActivity) -> Unit,
     onRetry: (FragmentActivity) -> Unit,
     onCertificate: () -> Unit,
+    onDecision: (DocumentDecision) -> Unit,
+    onReject: () -> Unit,
+    onRejectReason: (String) -> Unit,
+    onAllowEdit: (Boolean) -> Unit,
 ) {
     val document = state.selected
     var showSignature by remember { mutableStateOf(false) }
@@ -136,10 +143,9 @@ fun DocumentScreen(
         bottomBar = {
             DocumentBottomBar(
                 state = state,
-                onSign = { showSignature = true },
                 onApprove = { onApprove(activity) },
                 onRetry = { onRetry(activity) },
-                onCertificate = onCertificate,
+                onReject = onReject,
             )
         },
     ) { padding ->
@@ -192,6 +198,30 @@ fun DocumentScreen(
                 }
             }
 
+            if (document != null && document.canSign && !document.signed) {
+                item {
+                    DecisionCard(
+                        decision = state.decision,
+                        onDecision = onDecision,
+                    )
+                }
+            }
+
+            if (
+                document != null &&
+                document.canSign &&
+                !document.signed &&
+                state.decision == DocumentDecision.REJECT
+            ) {
+                item {
+                    RejectSection(
+                        state = state,
+                        onReason = onRejectReason,
+                        onAllowEdit = onAllowEdit,
+                    )
+                }
+            }
+
             item {
                 SignatureSection(
                     state = state,
@@ -209,7 +239,6 @@ fun DocumentScreen(
             onConfirm = { capture ->
                 onSignature(capture)
                 showSignature = false
-                onApprove(activity)
             },
         )
     }
@@ -233,7 +262,11 @@ private fun VerificationCard(state: UiState) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    if (document.signed) "Documento firmado y sellado" else "Contenido listo para revisión",
+                    when {
+                        document.signed -> "Documento firmado y sellado"
+                        !document.canSign -> "Documento recibido"
+                        else -> "Contenido listo para revisión"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = Ink,
@@ -392,6 +425,30 @@ private fun SignatureSection(
                     }
                 }
 
+                !document.canSign -> {
+                    Text(
+                        "Documento recibido. Puedes consultarlo en modo lectura; no requiere tu firma.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate,
+                    )
+                }
+
+                state.decision == DocumentDecision.NONE -> {
+                    Text(
+                        "Elige primero si apruebas o rechazas el envío.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate,
+                    )
+                }
+
+                state.decision == DocumentDecision.REJECT -> {
+                    Text(
+                        "Completa el motivo del rechazo para devolver el documento.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate,
+                    )
+                }
+
                 state.signature != null -> {
                     val preview = remember(state.signature) {
                         BitmapFactory.decodeByteArray(
@@ -481,6 +538,126 @@ private fun SignatureSection(
                     )
                 }
             }
+
+            // El texto de apoyo vive en la tarjeta porque la barra inferior solo
+            // aparece cuando hay una acción real que confirmar.
+            if (!document.signed && document.canSign && state.signature == null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "La firma se valida con biometría y se sella en el servidor.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DecisionCard(
+    decision: DocumentDecision,
+    onDecision: (DocumentDecision) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = White,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "TU DECISIÓN",
+                style = MaterialTheme.typography.labelSmall,
+                color = Slate,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = { onDecision(DocumentDecision.APPROVE) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp),
+                shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (decision == DocumentDecision.APPROVE) Indigo else Indigo.copy(alpha = 0.85f),
+                ),
+            ) {
+                Icon(Icons.Outlined.CheckCircle, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Aprobar y firmar", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { onDecision(DocumentDecision.REJECT) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp),
+                shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (decision == DocumentDecision.REJECT) Danger else Ink,
+                ),
+            ) {
+                Text("Rechazar o devolver", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RejectSection(
+    state: UiState,
+    onReason: (String) -> Unit,
+    onAllowEdit: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = White,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "MOTIVO DEL RECHAZO",
+                style = MaterialTheme.typography.labelSmall,
+                color = Slate,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(8.dp))
+            TextField(
+                value = state.rejectReason,
+                onValueChange = onReason,
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                placeholder = { Text("Explica qué debe corregir el asistente…") },
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "¿Qué puede hacer el asistente?",
+                style = MaterialTheme.typography.bodySmall,
+                color = Ink,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { onAllowEdit(true) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = if (state.allowEdit) Indigo else Slate,
+                    ),
+                ) {
+                    Text("Corregir y reenviar", style = MaterialTheme.typography.labelSmall)
+                }
+                OutlinedButton(
+                    onClick = { onAllowEdit(false) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = if (!state.allowEdit) Danger else Slate,
+                    ),
+                ) {
+                    Text("Dejar bloqueado", style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }
@@ -488,19 +665,33 @@ private fun SignatureSection(
 @Composable
 private fun DocumentBottomBar(
     state: UiState,
-    onSign: () -> Unit,
     onApprove: () -> Unit,
     onRetry: () -> Unit,
-    onCertificate: () -> Unit,
+    onReject: () -> Unit,
 ) {
     val document = state.selected
+    val retry = state.pendingRetry
+    val rejecting =
+        document != null &&
+            !document.signed &&
+            document.canSign &&
+            state.decision == DocumentDecision.REJECT
+    val ready =
+        document != null &&
+            !document.signed &&
+            document.canSign &&
+            state.decision == DocumentDecision.APPROVE &&
+            state.signature != null
+
+    if (!retry && !rejecting && !ready) return
+
     Surface(color = White, shadowElevation = 8.dp) {
         Column(
             Modifier
                 .navigationBarsPadding()
                 .padding(14.dp),
         ) {
-            if (state.pendingRetry) {
+            if (retry) {
                 Button(
                     onClick = onRetry,
                     enabled = !state.signing,
@@ -512,26 +703,15 @@ private fun DocumentBottomBar(
                 ) {
                     Text("Reintentar sellado", fontWeight = FontWeight.Bold)
                 }
-            } else {
+            } else if (rejecting) {
                 Button(
-                    onClick = {
-                        when {
-                            document?.signed == true -> onCertificate()
-                            state.signature == null -> onSign()
-                            else -> onApprove()
-                        }
-                    },
-                    enabled = document != null &&
-                        (document.signed || document.canSign) &&
-                        !state.signing,
+                    onClick = onReject,
+                    enabled = !state.signing && state.rejectReason.isNotBlank(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
                     shape = RoundedCornerShape(15.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (document?.signed == true) Indigo else Ink,
-                        disabledContainerColor = Color(0xFFE3E4E8),
-                    ),
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger),
                 ) {
                     if (state.signing) {
                         CircularProgressIndicator(
@@ -541,19 +721,39 @@ private fun DocumentBottomBar(
                         )
                     } else {
                         Text(
-                            when {
-                                document?.signed == true -> "Ver certificado"
-                                state.signature == null -> "Firmar y aprobar"
-                                else -> "Confirmar y sellar firma"
-                            },
+                            if (state.allowEdit) "Devolver para corrección" else "Rechazar y bloquear",
                             fontWeight = FontWeight.Bold,
                         )
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onApprove,
+                    enabled = !state.signing,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    shape = RoundedCornerShape(15.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Ink),
+                ) {
+                    if (state.signing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = White,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Confirmar y sellar firma", fontWeight = FontWeight.Bold)
                     }
                 }
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                "La firma se valida con biometría y se sella en el servidor.",
+                if (rejecting) {
+                    "El remitente recibirá el motivo del rechazo."
+                } else {
+                    "La firma se valida con biometría y se sella en el servidor."
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = Slate,
                 modifier = Modifier.fillMaxWidth(),

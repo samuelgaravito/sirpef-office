@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { db } from '../../db/index.js';
 import {
+  documentMessageRecipients,
   documentMessages,
   documentSignatures,
   documents,
@@ -28,6 +29,7 @@ import {
 import { toPublicUser } from '../../lib/mappers.js';
 import { sha256Hex } from '../../lib/stable-json.js';
 import { approveMessage } from '../inbox/approve.js';
+import { publishInboxEvent } from '../realtime/events.js';
 import {
   createSignatureChallenge,
   findActiveDevice,
@@ -35,7 +37,7 @@ import {
 } from './signature.js';
 
 const listQuery = z.object({
-  scope: z.enum(['all', 'pending', 'sent', 'signed']).default('all'),
+  scope: z.enum(['all', 'pending', 'received', 'sent', 'signed']).default('all'),
   q: z.string().trim().max(200).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(30),
@@ -179,6 +181,135 @@ function toMobileDocument(
   };
 }
 
+function searchFilter(q: string | undefined) {
+  return q
+    ? or(
+        ilike(documents.title, `%${q}%`),
+        ilike(documentMessages.subject, `%${q}%`),
+        ilike(users.name, `%${q}%`),
+      )
+    : undefined;
+}
+
+function pendingFilter(q: string | undefined) {
+  return and(
+    eq(documentMessages.status, 'pending_approval'),
+    isNull(documents.deletedAt),
+    searchFilter(q),
+  );
+}
+
+function sentFilter(userId: string, q: string | undefined) {
+  return and(
+    inArray(documentMessages.status, ['sent', 'rejected', 'cancelled']),
+    isNull(documents.deletedAt),
+    or(
+      eq(documentMessages.senderId, userId),
+      eq(documentMessages.approvedById, userId),
+    ),
+    searchFilter(q),
+  );
+}
+
+function signedFilter(userId: string, q: string | undefined) {
+  return and(
+    eq(documentSignatures.userId, userId),
+    eq(documentSignatures.status, 'sealed'),
+    isNull(documents.deletedAt),
+    searchFilter(q),
+  );
+}
+
+/** Avisa al aprobador de que la firma quedó estampada. */
+async function publishSignatureEvent(input: {
+  userId: string;
+  userName: string;
+  messageId: string;
+  documentId: string;
+  documentTitle: string;
+  subject: string;
+  certificate: Record<string, unknown>;
+}): Promise<void> {
+  const serial = typeof input.certificate.serial === 'string' ? input.certificate.serial : null;
+  const signedAt =
+    typeof input.certificate.issuedAt === 'string' ? input.certificate.issuedAt : null;
+
+  await publishInboxEvent({
+    type: 'inbox.message.signed',
+    userIds: [input.userId],
+    messageId: input.messageId,
+    documentId: input.documentId,
+    documentTitle: input.documentTitle,
+    subject: input.subject,
+    actorId: input.userId,
+    actorName: input.userName,
+    status: 'sent',
+    signedAt,
+    serial,
+  });
+}
+
+function receivedFilter(userId: string, q: string | undefined) {
+  return and(
+    eq(documentMessages.status, 'sent'),
+    isNull(documents.deletedAt),
+    eq(documentMessageRecipients.userId, userId),
+    isNull(documentMessageRecipients.archivedAt),
+    searchFilter(q),
+  );
+}
+
+async function listReceived(
+  userId: string,
+  q: string | undefined,
+  limit: number,
+  offset: number,
+): Promise<MobileDocument[]> {
+  const rows = await db
+    .select({
+      id: documentMessages.id,
+      documentId: documents.id,
+      title: documents.title,
+      subject: documentMessages.subject,
+      senderName: users.name,
+      status: documentMessages.status,
+      documentStatus: documents.status,
+      docNumber: documents.docNumber,
+      version: documentMessages.documentVersion,
+      createdAt: documentMessages.createdAt,
+      approvedAt: documentMessages.approvedAt,
+      certificateSerial: signedSubquery(userId),
+      signedAt: signedAtSubquery(userId),
+    })
+    .from(documentMessages)
+    .innerJoin(documents, eq(documents.id, documentMessages.documentId))
+    .innerJoin(users, eq(users.id, documentMessages.senderId))
+    .innerJoin(
+      documentMessageRecipients,
+      eq(documentMessageRecipients.messageId, documentMessages.id),
+    )
+    .where(receivedFilter(userId, q))
+    .orderBy(desc(documentMessages.createdAt))
+    .limit(limit)
+    .offset(offset);
+
+  return rows.map((row) => toMobileDocument(row, false));
+}
+
+async function countReceived(userId: string, q: string | undefined): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documentMessages)
+    .innerJoin(documents, eq(documents.id, documentMessages.documentId))
+    .innerJoin(
+      documentMessageRecipients,
+      eq(documentMessageRecipients.messageId, documentMessages.id),
+    )
+    .where(receivedFilter(userId, q));
+
+  return Number(row?.count ?? 0);
+}
+
 async function listPending(
   userId: string,
   isAdmin: boolean,
@@ -188,14 +319,6 @@ async function listPending(
 ): Promise<MobileDocument[]> {
   if (!isAdmin) return [];
 
-  const search = q
-    ? or(
-        ilike(documents.title, `%${q}%`),
-        ilike(documentMessages.subject, `%${q}%`),
-        ilike(users.name, `%${q}%`),
-      )
-    : undefined;
-
   const rows = await db
     .select({
       id: documentMessages.id,
@@ -215,18 +338,26 @@ async function listPending(
     .from(documentMessages)
     .innerJoin(documents, eq(documents.id, documentMessages.documentId))
     .innerJoin(users, eq(users.id, documentMessages.senderId))
-    .where(
-      and(
-        eq(documentMessages.status, 'pending_approval'),
-        isNull(documents.deletedAt),
-        search,
-      ),
-    )
+    .where(pendingFilter(q))
     .orderBy(desc(documentMessages.createdAt))
     .limit(limit)
     .offset(offset);
 
   return rows.map((row) => toMobileDocument(row, true));
+}
+
+async function countPending(isAdmin: boolean, q: string | undefined): Promise<number> {
+  // Igual que `listPending`: un miembro sin rol de administrador no ve pendientes.
+  if (!isAdmin) return 0;
+
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documentMessages)
+    .innerJoin(documents, eq(documents.id, documentMessages.documentId))
+    .innerJoin(users, eq(users.id, documentMessages.senderId))
+    .where(pendingFilter(q));
+
+  return Number(row?.count ?? 0);
 }
 
 async function listSent(
@@ -235,14 +366,6 @@ async function listSent(
   limit: number,
   offset: number,
 ): Promise<MobileDocument[]> {
-  const search = q
-    ? or(
-        ilike(documents.title, `%${q}%`),
-        ilike(documentMessages.subject, `%${q}%`),
-        ilike(users.name, `%${q}%`),
-      )
-    : undefined;
-
   const rows = await db
     .select({
       id: documentMessages.id,
@@ -262,22 +385,23 @@ async function listSent(
     .from(documentMessages)
     .innerJoin(documents, eq(documents.id, documentMessages.documentId))
     .innerJoin(users, eq(users.id, documentMessages.senderId))
-    .where(
-      and(
-        inArray(documentMessages.status, ['sent', 'rejected', 'cancelled']),
-        isNull(documents.deletedAt),
-        or(
-          eq(documentMessages.senderId, userId),
-          eq(documentMessages.approvedById, userId),
-        ),
-        search,
-      ),
-    )
+    .where(sentFilter(userId, q))
     .orderBy(desc(documentMessages.createdAt))
     .limit(limit)
     .offset(offset);
 
   return rows.map((row) => toMobileDocument(row, false));
+}
+
+async function countSent(userId: string, q: string | undefined): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documentMessages)
+    .innerJoin(documents, eq(documents.id, documentMessages.documentId))
+    .innerJoin(users, eq(users.id, documentMessages.senderId))
+    .where(sentFilter(userId, q));
+
+  return Number(row?.count ?? 0);
 }
 
 async function listSigned(
@@ -286,14 +410,6 @@ async function listSigned(
   limit: number,
   offset: number,
 ): Promise<MobileDocument[]> {
-  const search = q
-    ? or(
-        ilike(documents.title, `%${q}%`),
-        ilike(documentMessages.subject, `%${q}%`),
-        ilike(users.name, `%${q}%`),
-      )
-    : undefined;
-
   const rows = await db
     .select({
       id: documentMessages.id,
@@ -318,14 +434,7 @@ async function listSigned(
       signatureCertificates,
       eq(signatureCertificates.signatureId, documentSignatures.id),
     )
-    .where(
-      and(
-        eq(documentSignatures.userId, userId),
-        eq(documentSignatures.status, 'sealed'),
-        isNull(documents.deletedAt),
-        search,
-      ),
-    )
+    .where(signedFilter(userId, q))
     .orderBy(desc(documentSignatures.signedAt))
     .limit(limit)
     .offset(offset);
@@ -336,6 +445,22 @@ async function listSigned(
       false,
     ),
   );
+}
+
+async function countSigned(userId: string, q: string | undefined): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(documentSignatures)
+    .innerJoin(documents, eq(documents.id, documentSignatures.documentId))
+    .innerJoin(documentMessages, eq(documentMessages.id, documentSignatures.messageId))
+    .innerJoin(users, eq(users.id, documentMessages.senderId))
+    .innerJoin(
+      signatureCertificates,
+      eq(signatureCertificates.signatureId, documentSignatures.id),
+    )
+    .where(signedFilter(userId, q));
+
+  return Number(row?.count ?? 0);
 }
 
 function escapeHtml(value: unknown): string {
@@ -383,6 +508,7 @@ export async function mobileRoutes(app: FastifyInstance): Promise<void> {
       user: toPublicUser(row),
       counts: {
         pending: auth.role === 'admin' ? Number(pendingRow?.count ?? 0) : 0,
+        received: await countReceived(auth.sub, undefined),
         signed: Number(signedRow?.count ?? 0),
         sent: Number(sentRow?.count ?? 0),
       },
@@ -400,33 +526,76 @@ export async function mobileRoutes(app: FastifyInstance): Promise<void> {
     const query = listQuery.parse(request.query);
     const limit = query.pageSize;
     const offset = (query.page - 1) * limit;
+    const isAdmin = auth.role === 'admin';
 
     if (query.scope === 'pending') {
-      const items = await listPending(auth.sub, auth.role === 'admin', query.q, limit, offset);
-      return { items, page: query.page, pageSize: limit };
+      const [items, total] = await Promise.all([
+        listPending(auth.sub, isAdmin, query.q, limit, offset),
+        countPending(isAdmin, query.q),
+      ]);
+      return { items, page: query.page, pageSize: limit, total };
     }
     if (query.scope === 'signed') {
-      const items = await listSigned(auth.sub, query.q, limit, offset);
-      return { items, page: query.page, pageSize: limit };
+      const [items, total] = await Promise.all([
+        listSigned(auth.sub, query.q, limit, offset),
+        countSigned(auth.sub, query.q),
+      ]);
+      return { items, page: query.page, pageSize: limit, total };
+    }
+    if (query.scope === 'received') {
+      const [items, total] = await Promise.all([
+        listReceived(auth.sub, query.q, limit, offset),
+        countReceived(auth.sub, query.q),
+      ]);
+      return { items, page: query.page, pageSize: limit, total };
     }
     if (query.scope === 'sent') {
-      const items = await listSent(auth.sub, query.q, limit, offset);
-      return { items, page: query.page, pageSize: limit };
+      const [items, total] = await Promise.all([
+        listSent(auth.sub, query.q, limit, offset),
+        countSent(auth.sub, query.q),
+      ]);
+      return { items, page: query.page, pageSize: limit, total };
     }
 
-    const [pending, sent] = await Promise.all([
-      listPending(auth.sub, auth.role === 'admin', query.q, limit, offset),
-      listSent(auth.sub, query.q, limit, offset),
+    // «Todos» concatena pendientes, recibidos y enviados. La ventana se
+    // reparte en ese orden para que las páginas numeradas cuadren.
+    const [pendingTotal, receivedTotal, sentTotal] = await Promise.all([
+      countPending(isAdmin, query.q),
+      countReceived(auth.sub, query.q),
+      countSent(auth.sub, query.q),
     ]);
+    const pendingOffset = Math.min(offset, pendingTotal);
+    const pendingLimit = Math.min(limit, Math.max(0, pendingTotal - pendingOffset));
+    const receivedOffset = Math.max(0, offset - pendingTotal);
+    const receivedLimit = Math.min(limit - pendingLimit, Math.max(0, receivedTotal - receivedOffset));
+    const sentOffset = Math.max(0, offset - pendingTotal - receivedTotal);
+    const sentLimit = limit - pendingLimit - receivedLimit;
+
+    const [pending, received, sent] = await Promise.all([
+      pendingLimit > 0
+        ? listPending(auth.sub, isAdmin, query.q, pendingLimit, pendingOffset)
+        : Promise.resolve([] as MobileDocument[]),
+      receivedLimit > 0
+        ? listReceived(auth.sub, query.q, receivedLimit, receivedOffset)
+        : Promise.resolve([] as MobileDocument[]),
+      sentLimit > 0
+        ? listSent(auth.sub, query.q, sentLimit, sentOffset)
+        : Promise.resolve([] as MobileDocument[]),
+    ]);
+
     const seen = new Set<string>();
-    const items = [...pending, ...sent]
-      .filter((item) => {
-        if (seen.has(item.id)) return false;
-        seen.add(item.id);
-        return true;
-      })
-      .slice(0, limit);
-    return { items, page: query.page, pageSize: limit };
+    const items = [...pending, ...received, ...sent].filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+
+    return {
+      items,
+      page: query.page,
+      pageSize: limit,
+      total: pendingTotal + receivedTotal + sentTotal,
+    };
   });
 
   /** Dispositivos vinculados. */
@@ -651,6 +820,16 @@ export async function mobileRoutes(app: FastifyInstance): Promise<void> {
         userAgent: request.headers['user-agent'] ?? null,
       });
 
+      await publishSignatureEvent({
+        userId: auth.sub,
+        userName: auth.name,
+        messageId: id,
+        documentId: approved.documentId,
+        documentTitle: approved.message.subject,
+        subject: approved.subject,
+        certificate: sealed.certificate,
+      });
+
       return {
         ok: true,
         id,
@@ -707,6 +886,16 @@ export async function mobileRoutes(app: FastifyInstance): Promise<void> {
       deviceAssertion: body.deviceAssertion,
       ip: request.ip,
       userAgent: request.headers['user-agent'] ?? null,
+    });
+
+    await publishSignatureEvent({
+      userId: auth.sub,
+      userName: auth.name,
+      messageId: body.messageId,
+      documentId: id,
+      documentTitle: document.title,
+      subject: document.title,
+      certificate: sealed.certificate,
     });
 
     return {

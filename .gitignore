@@ -48,3 +48,11 @@ sva/
 
 # Proyecto de vídeo local (HyperFrames); no se versiona
 video/
+
+# Credenciales de notificaciones push
+mobile/app/google-services.json
+backend/data/firebase-service-account.json
+
+# APK de prueba generada localmente
+mobile/app-debug-lan.apk
+mobile/app/build/outputs/

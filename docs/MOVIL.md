@@ -17,12 +17,18 @@ requiere `AUTH_MODE=sva` o `hybrid` y un SVA accesible.
 2. App → SirpefOffice POST /api/auth/mobile/sva { token }
 3. App registra una clave EC P-256 del Android Keystore:
    POST /api/mobile/devices { deviceId, publicKey, model, appVersion }
-4. App muestra pendientes:
+4. App muestra pendientes y recibidos:
    GET /api/mobile/bootstrap
    GET /api/mobile/documents?scope=pending
+   GET /api/mobile/documents?scope=received
+   Mientras está abierta, el WebSocket /api/ws refresca la lista sola.
 5. App abre el PDF:
    GET /api/documents/:id/pdf
-6. Al firmar:
+6. El jefe decide primero:
+   - Aprobar → se muestra la firma y se continúa con el paso 7.
+   - Rechazar → POST /api/inbox/:id/reject { reason, allowEdit },
+     igual que el diálogo de la web.
+7. Al firmar:
    POST /api/documents/:id/sign-challenge { messageId }
    BiometricPrompt desbloquea la clave EC y firma el payload canónico.
    POST /api/inbox/:id/approve-and-sign
@@ -31,7 +37,10 @@ requiere `AUTH_MODE=sva` o `hybrid` y un SVA accesible.
      ├─ añade una hoja de firmas con QR
      ├─ calcula el SHA-256 del PDF sellado
      └─ emite el certificado
-7. El QR abre GET /api/verify/:token (público, sin contenido del memo).
+8. El QR abre GET /api/verify/:token (público, sin contenido del memo).
+
+Con la app cerrada, FCM muestra el aviso y al pulsarlo abre el documento. Requiere
+google-services.json y FCM_SERVICE_ACCOUNT_JSON; ver FIREBASE.md.
 ```
 
 ### Payload que firma el dispositivo
@@ -55,12 +64,15 @@ SIRPEF-SIGN|challengeId|documentId|messageId|version|contentSha256|signatureSha2
 | `POST` | `/api/auth/mobile/refresh` | Rotación del refresh token nativo. |
 | `POST` | `/api/auth/mobile/logout` | Revoca el refresh token. |
 | `GET` | `/api/mobile/bootstrap` | Usuario, rol, contadores y capacidades. |
-| `GET` | `/api/mobile/documents` | `scope=all\|pending\|sent\|signed`, `q`, paginación. |
+| `GET` | `/api/mobile/documents` | `scope=all\|pending\|received\|sent\|signed`, `q`, `page`, `pageSize`; devuelve `items`, `page`, `pageSize` y `total`. |
 | `GET` | `/api/documents/:id/pdf` | PDF actual; `?sealed=1` devuelve la copia firmada. |
 | `GET/POST` | `/api/mobile/devices` | Listar y vincular dispositivos. |
 | `DELETE` | `/api/mobile/devices/:id` | Revocar un dispositivo. |
 | `POST` | `/api/documents/:id/sign-challenge` | Nonce, versión y hash del contenido. |
 | `POST` | `/api/inbox/:id/approve-and-sign` | Aprobar, sellar y certificar en una llamada. |
+| `POST` | `/api/inbox/:id/reject` | Devolver o rechazar con motivo y opción de corrección. |
+| `POST` | `/api/notifications/subscribe` | Registrar el token FCM del dispositivo. |
+| `POST` | `/api/notifications/unsubscribe` | Dar de baja el token al cerrar sesión. |
 | `POST` | `/api/documents/:id/sign` | Reintentar el sellado de un envío ya aprobado. |
 | `GET` | `/api/documents/:id/certificate` | Certificado JSON del firmante. |
 | `GET` | `/api/documents/:id/certificate.pdf` | Certificado PDF. |
@@ -169,6 +181,15 @@ Ese endpoint está deshabilitado cuando `AUTH_MODE=sva`.
 - En builds **debug** la app no activa `FLAG_SECURE`, así que se pueden tomar
   capturas con `adb exec-out screencap -p`. En release el flag sigue activo y
   las capturas salen en negro, a propósito.
+  Para permitir capturas en un release de pruebas (por ejemplo, para adjuntar
+  pantallas al soporte) se compila con el interruptor temporal:
+
+  ```bash
+  ./gradlew :app:assembleRelease -PallowScreenshots=true
+  ```
+
+  Sin esa propiedad, release mantiene `FLAG_SECURE`. El APK resultante lleva el
+  permiso incorporado; para volver a protegerlo hay que recompilar sin el flag.
 - Si el dispositivo no tiene huella ni rostro enrolado, el login **sí**
   funciona y la app avisa «Este dispositivo no tiene huella ni rostro
   enrolado. Regístralo en Ajustes para poder firmar» al intentar sellar.
@@ -279,7 +300,7 @@ Pruebas manuales recomendadas:
   destinatarios.
 - No sube PDFs externos ni escanea con cámara.
 - Sin OTP por correo (SirpefOffice no tiene SMTP configurado).
-- Sin notificaciones push ni modo offline de firma.
+- Sin modo offline de firma. Las notificaciones push funcionan con FCM cuando se configura Firebase; sin credenciales, la app actualiza en vivo solo mientras está abierta.
 - El lienzo se puede ampliar en vertical; la rotación real a horizontal queda pendiente.
 - La app no descarga todavía el certificado PDF para compartirlo; el backend
   ya lo genera y expone.

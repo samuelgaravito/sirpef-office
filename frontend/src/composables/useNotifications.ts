@@ -1,9 +1,15 @@
 import { computed, ref } from 'vue';
 
-import { isInboxRealtimeEvent, type RealtimeMessage } from '@sirpefoffice/shared';
+import {
+  isDocumentMessage,
+  isInboxMessage,
+  type RealtimeMessage,
+} from '@sirpefoffice/shared';
 
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { usePush } from '@/composables/usePush';
 import { onRealtimeEvent } from '@/composables/useRealtime';
+import { useAuthStore } from '@/stores/auth';
 
 export type SystemNotificationPermission = NotificationPermission | 'unsupported';
 export type BellTone = 'info' | 'success' | 'warning';
@@ -15,8 +21,10 @@ interface BellCopy {
 }
 
 interface StartOptions {
-  /** Qué hacer al pulsar la campana (o el aviso del sistema). */
+  /** Qué hacer al pulsar un aviso de bandeja. */
   onOpenInbox: () => void;
+  /** Qué hacer al pulsar un aviso de documento. */
+  onOpenDocument: (documentId: string) => void;
 }
 
 /** Cuánto tiempo queda el aviso flotante en pantalla. */
@@ -34,9 +42,13 @@ const muted = ref(readMuted());
 const supported = computed(() => permission.value !== 'unsupported');
 
 const { refresh: refreshInbox } = useInboxBadge();
+const push = usePush();
 
 let unsubscribe: (() => void) | null = null;
 let openInboxHandler: (() => void) | null = null;
+let openDocumentHandler: ((documentId: string) => void) | null = null;
+/** Destino del último aviso del sistema mostrado. */
+let systemTarget: { kind: 'inbox' } | { kind: 'document'; id: string } | null = null;
 let hideTimer: number | undefined;
 /** Milisegundos que le quedan al aviso cuando se pausa (hover o foco). */
 let remaining = AUTOHIDE_MS;
@@ -98,62 +110,95 @@ function resume(): void {
   hideTimer = window.setTimeout(hideBell, remaining);
 }
 
-/** Traduce cada evento de la bandeja a lo que se muestra en la campana. */
+/** Traduce cada evento a lo que se muestra en la campana. */
 function describe(message: RealtimeMessage): BellCopy | null {
-  const payload = message.payload;
-  if (!payload) return null;
-
-  switch (message.type) {
-    case 'inbox.message.created':
-      return {
-        title: `Nuevo mensaje de ${payload.actorName}`,
-        detail: payload.subject,
-        tone: 'info',
-      };
-    case 'inbox.message.pending':
-      return {
-        title: 'Envío pendiente de aprobación',
-        detail: `${payload.subject} · ${payload.actorName}`,
-        tone: 'warning',
-      };
-    case 'inbox.message.approved':
-      return {
-        title: 'Documento aprobado y enviado',
-        detail: payload.subject,
-        tone: 'success',
-      };
-    case 'inbox.result.approved':
-      return {
-        title: `Documento aprobado por ${payload.actorName}`,
-        detail: payload.subject,
-        tone: 'success',
-      };
-    case 'inbox.result.rejected':
-      return {
-        title: `Documento rechazado por ${payload.actorName}`,
-        detail: payload.subject,
-        tone: 'warning',
-      };
-    case 'inbox.message.cancelled':
-      return {
-        title: 'Envío cancelado',
-        detail: payload.subject,
-        tone: 'info',
-      };
-    default:
-      return null;
+  if (isInboxMessage(message)) {
+    const payload = message.payload;
+    if (!payload) return null;
+    switch (message.type) {
+      case 'inbox.message.created':
+        return {
+          title: `Nuevo mensaje de ${payload.actorName}`,
+          detail: payload.subject,
+          tone: 'info',
+        };
+      case 'inbox.message.pending':
+        return {
+          title: 'Envío pendiente de aprobación',
+          detail: `${payload.subject} · ${payload.actorName}`,
+          tone: 'warning',
+        };
+      case 'inbox.message.approved':
+        return {
+          title: 'Documento aprobado y enviado',
+          detail: payload.subject,
+          tone: 'success',
+        };
+      case 'inbox.result.approved':
+        return {
+          title: `Documento aprobado por ${payload.actorName}`,
+          detail: payload.subject,
+          tone: 'success',
+        };
+      case 'inbox.result.rejected':
+        return {
+          title: `Documento rechazado por ${payload.actorName}`,
+          detail: payload.subject,
+          tone: 'warning',
+        };
+      case 'inbox.message.cancelled':
+        return {
+          title: 'Envío cancelado',
+          detail: payload.subject,
+          tone: 'info',
+        };
+      case 'inbox.message.signed':
+        return {
+          title: 'Documento firmado y sellado',
+          detail: payload.subject,
+          tone: 'success',
+        };
+      case 'inbox.message.reviewed':
+      case 'connection.ready':
+      default:
+        return null;
+    }
   }
+
+  if (isDocumentMessage(message)) {
+    const payload = message.payload;
+    switch (message.type) {
+      case 'document.shared':
+        return {
+          title: `${payload.actorName} compartió un documento contigo`,
+          detail: payload.documentTitle,
+          tone: 'info',
+        };
+      default:
+        return null;
+    }
+  }
+
+  return null;
 }
 
 function shouldNotifySystem(): boolean {
   if (permission.value !== 'granted' || muted.value) return false;
+  // Con Web Push activo, el service worker es quien muestra el aviso y evita
+  // duplicados entre la página y el push.
+  if (push.enabled.value) return false;
   // Solo cuando el usuario no está mirando la aplicación: si la pestaña está
   // a la vista, ya está la campana dentro de la app.
   return document.visibilityState === 'hidden' || !document.hasFocus();
 }
 
-function showSystemNotification(title: string, body: string): void {
+function showSystemNotification(
+  title: string,
+  body: string,
+  target: { kind: 'inbox' } | { kind: 'document'; id: string },
+): void {
   try {
+    systemTarget = target;
     const notification = new Notification(title, {
       body,
       icon: '/icon-192.png',
@@ -165,7 +210,8 @@ function showSystemNotification(title: string, body: string): void {
     notification.onclick = () => {
       window.focus();
       notification.close();
-      openInbox();
+      if (systemTarget?.kind === 'document') openDocument(systemTarget.id);
+      else openInbox();
     };
   } catch {
     // Android Chrome no permite el constructor desde la página: en ese caso
@@ -184,16 +230,29 @@ function showBell(copy: BellCopy): void {
 }
 
 function handleEvent(message: RealtimeMessage): void {
-  if (!isInboxRealtimeEvent(message.type)) return;
+  if (!isInboxMessage(message) && !isDocumentMessage(message)) return;
 
-  // El badge y los contadores se recalculan con la API de siempre.
-  void refreshInbox();
+  const auth = useAuthStore();
+  const payload = message.payload;
+  // No avisar al usuario de sus propias acciones (otra pestaña suya).
+  if (payload && 'actorId' in payload && payload.actorId === auth.user?.id) return;
+
+  if (isInboxMessage(message)) {
+    // El badge y los contadores se recalculan con la API de siempre.
+    void refreshInbox();
+  }
 
   const copy = describe(message);
   if (!copy) return;
 
   showBell(copy);
-  if (shouldNotifySystem()) showSystemNotification(copy.title, copy.detail);
+  if (shouldNotifySystem()) {
+    const target =
+      isDocumentMessage(message) && payload
+        ? ({ kind: 'document', id: payload.documentId } as const)
+        : ({ kind: 'inbox' } as const);
+    showSystemNotification(copy.title, copy.detail, target);
+  }
 }
 
 /** Pide permiso al navegador. Debe llamarse desde un clic (lo exigen los navegadores). */
@@ -220,9 +279,15 @@ function openInbox(): void {
   openInboxHandler?.();
 }
 
+function openDocument(documentId: string): void {
+  hideBell();
+  openDocumentHandler?.(documentId);
+}
+
 /** Empieza a escuchar los eventos de la bandeja (idempotente). */
 function start(options: StartOptions): void {
   openInboxHandler = options.onOpenInbox;
+  openDocumentHandler = options.onOpenDocument;
   permission.value = detectPermission();
   if (unsubscribe) return;
   unsubscribe = onRealtimeEvent(handleEvent);

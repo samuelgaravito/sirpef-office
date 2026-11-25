@@ -502,10 +502,18 @@ export interface DocumentRejection {
   documentVersion: number;
 }
 
+export interface InboxSignatureSummary {
+  signedAt: string;
+  serial: string;
+  signerName: string;
+}
+
 export interface InboxMessageDetail extends InboxMessageSummary {
   recipients: InboxRecipient[];
   approvedByName: string | null;
   rejectedReason: string | null;
+  /** Firma electrónica estampada sobre el documento, si existe. */
+  signature: InboxSignatureSummary | null;
   /** Si el remitente puede corregir el memo tras un rechazo. */
   allowSenderEdit: boolean;
   /** Si el remitente puede exportar el memo tras la aprobación. */

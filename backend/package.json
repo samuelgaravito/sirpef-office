@@ -43,6 +43,8 @@
     "smoke:realtime": "tsx scripts/realtime-smoke.ts",
     "smoke:realtime:proxy": "node scripts/realtime-proxy-smoke.mjs",
     "smoke:bell": "node scripts/notification-bell-smoke.mjs",
+    "smoke:push": "tsx scripts/push-smoke.ts",
+    "smoke:mobile-received": "tsx scripts/mobile-received-smoke.ts",
     "smoke:send-once": "node scripts/send-dialog-smoke.mjs",
     "demo:inbox": "tsx scripts/inbox-demo.ts",
     "demo:inbox:notify": "tsx scripts/inbox-demo.ts --notify",
@@ -90,6 +92,7 @@
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.4",
     "fastify": "^5.12.7",
+    "firebase-admin": "12.7.0",
     "jose": "^6.2.13",
     "pdf-lib": "^1.17.1",
     "pino-pretty": "^13.1.2",
@@ -98,12 +101,14 @@
     "qrcode": "^1.5.4",
     "tsx": "^4.23.15",
     "undici": "^6.29.1",
+    "web-push": "^4.0.0",
     "ws": "^8.22.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
     "@types/qrcode": "^1.5.6",
+    "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.2",
     "drizzle-kit": "^0.31.11",
     "typescript": "5.9.3"

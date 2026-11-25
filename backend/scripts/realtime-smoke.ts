@@ -189,6 +189,20 @@ async function main(): Promise<void> {
     const documentId = created.body.document.id;
     createdDocumentIds.push(documentId);
 
+    /* 4b. Un cambio de metadatos avisa al propietario (otra pestaña). */
+    const documentForOwner = waitForEvent(memberSocket.socket, 'document.updated');
+    const renamed = await call(`/documents/${documentId}`, memberToken, 'PATCH', {
+      title: 'Borrador renombrado',
+    });
+    assert(renamed.status === 200, 'El propietario cambia el título del documento');
+    const documentEvent = await documentForOwner;
+    assert(documentEvent !== null, 'El propietario recibe el cambio de documento en vivo');
+    const documentPayload = documentEvent?.payload as { documentId?: string } | null;
+    assert(
+      documentPayload?.documentId === documentId,
+      'El evento de documento identifica el documento cambiado',
+    );
+
     const pendingForAdmin = waitForEvent(adminSocket.socket, 'inbox.message.pending');
     const submitted = await call<{ id: string; status: string }>('/inbox', memberToken, 'POST', {
       documentId,

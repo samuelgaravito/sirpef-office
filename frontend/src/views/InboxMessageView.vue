@@ -30,6 +30,7 @@ import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { errorMessage as explainError } from '@/lib/error-message';
 import {
@@ -37,6 +38,7 @@ import {
   type InboxStatusContext,
 } from '@/lib/labels';
 import { normalizeRouteId } from '@/lib/routes';
+import { isDocumentMessage, isInboxMessage } from '@sirpefoffice/shared';
 import { useAuthStore } from '@/stores/auth';
 import type { InboxMessageDetail, InboxMessageSummary, ListResponse } from '@/types';
 
@@ -56,6 +58,8 @@ const viewerExpanded = ref(false);
 const detailsOpen = ref(true);
 const noteExpanded = ref(false);
 const pendingQueue = ref<InboxMessageSummary[]>([]);
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
 
 const messageId = computed(() => normalizeRouteId(route.params.id));
 
@@ -287,11 +291,43 @@ watch(messageId, () => {
   viewerExpanded.value = false;
   void load();
 });
+function handleRealtime(event: import('@sirpefoffice/shared').RealtimeMessage): void {
+  const current = message.value?.id;
+  const currentDocument = message.value?.document.id;
+  let relevant = false;
+
+  if (isInboxMessage(event) && event.payload) {
+    relevant =
+      event.payload.messageId === current ||
+      (event.payload.documentId === currentDocument &&
+        (event.type === 'inbox.message.signed' || event.type === 'inbox.message.reviewed'));
+  } else if (isDocumentMessage(event) && event.payload) {
+    relevant = event.payload.documentId === currentDocument;
+  }
+  if (!relevant) return;
+
+  window.clearTimeout(liveTimer);
+  liveTimer = window.setTimeout(async () => {
+    const wasPending = message.value?.status === 'pending_approval';
+    sendOpen.value = false;
+    rejectOpen.value = false;
+    await load();
+    if (wasPending && message.value?.status !== 'pending_approval') {
+      toast.info('Este envío ya fue procesado desde otra sesión.');
+    }
+  }, 250);
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   void load();
+  unsubscribeRealtime = onRealtimeEvent(handleRealtime);
 });
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown);
+  window.clearTimeout(liveTimer);
+  unsubscribeRealtime?.();
+});
 </script>
 
 <template>
@@ -555,6 +591,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                     Quedó bloqueado como solo lectura.
                   </template>
                 </p>
+                <div
+                  v-if="message.signature"
+                  class="mt-2 rounded-lg border border-success/20 bg-success-soft/50 px-2.5 py-2 text-[12px] text-ink"
+                >
+                  <p class="flex items-center gap-1.5 font-semibold text-success">
+                    <ShieldCheck class="size-3.5" />
+                    Firmado electrónicamente
+                  </p>
+                  <p class="mt-0.5 text-ink-muted">
+                    {{ message.signature.signerName }} · {{ formatDateTime(message.signature.signedAt) }}
+                  </p>
+                  <p class="mt-0.5 break-all text-[11px] text-ink-subtle">
+                    Serie {{ message.signature.serial }}
+                  </p>
+                </div>
                 <button
                   v-if="auth.isAdmin && nextPending"
                   type="button"

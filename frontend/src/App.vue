@@ -4,9 +4,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import NotificationBell from '@/components/layout/NotificationBell.vue';
+import PushPrompt from '@/components/layout/PushPrompt.vue';
 import ToastHost from '@/components/ui/ToastHost.vue';
 import { api } from '@/api/client';
+import { useNotificationCenter } from '@/composables/useNotificationCenter';
 import { useNotifications } from '@/composables/useNotifications';
+import { usePush } from '@/composables/usePush';
 import {
   connectRealtime,
   disconnectRealtime,
@@ -18,6 +21,8 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const notifications = useNotifications();
+const notificationCenter = useNotificationCenter();
+const push = usePush();
 
 /**
  * El canal de eventos sigue a la sesión: se abre al iniciar sesión y se
@@ -30,9 +35,13 @@ watch(
   (authenticated) => {
     if (authenticated) {
       connectRealtime();
+      if (auth.user?.id) notificationCenter.start(auth.user.id);
+      void push.sync();
     } else {
       disconnectRealtime();
       notifications.reset();
+      notificationCenter.stop();
+      void push.clearForLogout();
     }
   },
   { immediate: true },
@@ -43,9 +52,13 @@ watch(
  * campana flotante y el aviso del sistema funcionen en cualquier ruta.
  */
 onMounted(() => {
+  void push.refresh();
   notifications.start({
     onOpenInbox: () => {
       void router.push({ name: 'inbox' });
+    },
+    onOpenDocument: (id: string) => {
+      void router.push({ name: 'document', params: { id } });
     },
   });
 });
@@ -143,6 +156,7 @@ onUnmounted(() => {
     <component :is="Component" :key="viewKey" />
   </RouterView>
   <NotificationBell />
+  <PushPrompt />
   <ToastHost />
 
   <!-- Hay una versión nueva en el servidor -->

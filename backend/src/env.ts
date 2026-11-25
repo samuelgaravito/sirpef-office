@@ -140,6 +140,14 @@ const envSchema = z.object({
   GOOGLE_REDIRECT_URI: z.string().default('http://localhost:3101/auth/google/callback'),
   GOOGLE_DOCUMENT_ID: z.string().default(''),
 
+  /* ── Notificaciones push ──────────────────────────────────────────── */
+  /** Claves VAPID para Web Push (generar con `npx web-push generate-vapid-keys`). */
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  VAPID_SUBJECT: z.string().default('mailto:soporte@sirpefoffice.local'),
+  /** JSON de la cuenta de servicio de Firebase, en base64 o ruta a un archivo. */
+  FCM_SERVICE_ACCOUNT_JSON: z.string().default(''),
+
   // Reservado para futuros usos
   ENABLE_TRACKED_CHANGES: bool,
 });

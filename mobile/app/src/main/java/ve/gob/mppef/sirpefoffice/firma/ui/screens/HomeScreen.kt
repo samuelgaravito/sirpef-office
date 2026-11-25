@@ -2,6 +2,7 @@ package ve.gob.mppef.sirpefoffice.firma.ui.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,11 +21,15 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.NotificationsNone
@@ -34,6 +39,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -41,11 +47,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,11 +87,20 @@ fun HomeScreen(
     onFilter: (DocumentFilter) -> Unit,
     onSearch: (String) -> Unit,
     onRefresh: () -> Unit,
+    onPage: (Int) -> Unit,
     onDocument: (MobileDocument) -> Unit,
     onProfile: () -> Unit,
 ) {
     val context = LocalContext.current
     val user = state.user
+    val listState = rememberLazyListState()
+
+    // Cada cambio de página vuelve al inicio de la lista, como una hoja nueva.
+    LaunchedEffect(state.page) {
+        if (listState.firstVisibleItemIndex > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
 
     Scaffold(
         containerColor = Background,
@@ -101,6 +120,7 @@ fun HomeScreen(
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -111,12 +131,14 @@ fun HomeScreen(
                     name = user?.name ?: "Usuario",
                     role = user?.role ?: "member",
                     pending = state.counts.pending,
+                    received = state.counts.received,
                     signed = state.counts.signed,
                     search = state.search,
                     loading = state.loading,
                     onSearch = onSearch,
                     onRefresh = onRefresh,
                     onPending = { onFilter(DocumentFilter.PENDING) },
+                    onReceived = { onFilter(DocumentFilter.RECEIVED) },
                     onSigned = { onFilter(DocumentFilter.SIGNED) },
                 )
             }
@@ -154,6 +176,17 @@ fun HomeScreen(
                     EmptyDocuments(state.filter)
                 }
             }
+
+            if (state.pageCount > 1) {
+                item(key = "paginador") {
+                    DocumentPager(
+                        page = state.page,
+                        pageCount = state.pageCount,
+                        loading = state.pageLoading,
+                        onPage = onPage,
+                    )
+                }
+            }
         }
     }
 }
@@ -163,12 +196,14 @@ private fun VaultHeader(
     name: String,
     role: String,
     pending: Int,
+    received: Int,
     signed: Int,
     search: String,
     loading: Boolean,
     onSearch: (String) -> Unit,
     onRefresh: () -> Unit,
     onPending: () -> Unit,
+    onReceived: () -> Unit,
     onSigned: () -> Unit,
 ) {
     Box(
@@ -231,22 +266,32 @@ private fun VaultHeader(
                 Box(
                     modifier = Modifier
                         .size(40.dp)
-                        .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp)),
+                        .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                        .clickable(onClick = onReceived),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         Icons.Outlined.NotificationsNone,
-                        contentDescription = null,
+                        contentDescription = "Documentos recibidos",
                         tint = Color(0xFFE3E4E8),
                         modifier = Modifier.size(20.dp),
                     )
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 9.dp, end = 10.dp)
-                            .size(7.dp)
-                            .background(Danger, CircleShape),
-                    )
+                    if (received > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 5.dp, end = 5.dp)
+                                .background(Danger, CircleShape)
+                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                        ) {
+                            Text(
+                                if (received > 99) "99+" else received.toString(),
+                                color = White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
             }
 
@@ -393,7 +438,11 @@ private fun FilterRow(
             color = Color(0xFFE3E4E8),
             shape = RoundedCornerShape(14.dp),
         ) {
-            Row(Modifier.padding(4.dp)) {
+            Row(
+                Modifier
+                    .padding(4.dp)
+                    .horizontalScroll(rememberScrollState()),
+            ) {
                 DocumentFilter.entries.forEach { filter ->
                     val active = filter == selected
                     Box(
@@ -550,6 +599,7 @@ private fun EmptyDocuments(filter: DocumentFilter) {
             Text(
                 when (filter) {
                     DocumentFilter.PENDING -> "No tienes documentos pendientes de firma."
+                    DocumentFilter.RECEIVED -> "No has recibido documentos todavía."
                     DocumentFilter.SIGNED -> "Todavía no has firmado documentos."
                     DocumentFilter.ALL -> "No se encontraron documentos."
                 },
@@ -558,6 +608,150 @@ private fun EmptyDocuments(filter: DocumentFilter) {
             )
         }
     }
+}
+
+@Composable
+private fun DocumentPager(
+    page: Int,
+    pageCount: Int,
+    loading: Boolean,
+    onPage: (Int) -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = White,
+        shadowElevation = 1.dp,
+    ) {
+        Column {
+            if (loading) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = Indigo,
+                    trackColor = Color.Transparent,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PagerArrow(
+                    forward = false,
+                    enabled = page > 1 && !loading,
+                ) { onPage(page - 1) }
+
+                pagerSlots(page, pageCount).forEach { slot ->
+                    when (slot) {
+                        null -> Text(
+                            "…",
+                            color = SlateLight,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 2.dp),
+                        )
+
+                        else -> PagerNumber(
+                            number = slot,
+                            active = slot == page,
+                            enabled = !loading,
+                        ) { onPage(slot) }
+                    }
+                }
+
+                PagerArrow(
+                    forward = true,
+                    enabled = page < pageCount && !loading,
+                ) { onPage(page + 1) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PagerArrow(
+    forward: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val label = if (forward) "Página siguiente" else "Página anterior"
+    Box(
+        modifier = Modifier
+            .size(width = 38.dp, height = 40.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (forward) Icons.Outlined.ChevronRight else Icons.Outlined.ChevronLeft,
+            contentDescription = null,
+            tint = if (enabled) Ink else SlateLight,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
+@Composable
+private fun PagerNumber(
+    number: Int,
+    active: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(width = 36.dp, height = 40.dp)
+            .clip(CircleShape)
+            .clickable(enabled = enabled && !active, onClick = onClick)
+            .semantics {
+                contentDescription = if (active) {
+                    "Página $number, actual"
+                } else {
+                    "Ir a la página $number"
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(if (active) Ink else Color.Transparent, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                number.toString(),
+                color = if (active) White else Slate,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+            )
+        }
+    }
+}
+
+/**
+ * Números visibles del paginador: primera y última página siempre, y la
+ * actual con sus vecinas. Los huecos se muestran como puntos suspensivos.
+ */
+private fun pagerSlots(page: Int, pageCount: Int): List<Int?> {
+    if (pageCount <= 5) return (1..pageCount).toList()
+
+    val slots = mutableListOf<Int?>()
+    slots += 1
+
+    val start = maxOf(2, page - 1)
+    val end = minOf(pageCount - 1, page + 1)
+    if (start > 2) slots += null
+    for (number in start..end) slots += number
+    if (end < pageCount - 1) slots += null
+
+    slots += pageCount
+    return slots
 }
 
 @Composable
