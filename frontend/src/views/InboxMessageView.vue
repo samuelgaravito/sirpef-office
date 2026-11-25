@@ -282,13 +282,7 @@ function onKeydown(event: KeyboardEvent): void {
 
   if (!canApprove.value || sendOpen.value || rejectOpen.value) return;
 
-  if (event.key === 'a' || event.key === 'A') {
-    event.preventDefault();
-    openApprove();
-  } else if (event.key === 'r' || event.key === 'R') {
-    event.preventDefault();
-    openReject();
-  } else if (event.key === 'e' || event.key === 'E') {
+  if (event.key === 'e' || event.key === 'E') {
     event.preventDefault();
     openDocument();
   } else if (event.key === 'n' || event.key === 'N') {
@@ -441,7 +435,7 @@ onBeforeUnmount(() => {
               <template v-if="canApprove">
                 <p class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
                   <ShieldCheck class="size-3.5 text-warning" />
-                  Tu decisión
+                  Revisión del envío
                 </p>
 
                 <div v-if="message.body" class="mt-2.5">
@@ -479,15 +473,14 @@ onBeforeUnmount(() => {
                   </p>
                 </div>
 
-                <div class="mt-3 space-y-2">
-                  <button type="button" class="btn btn-primary btn-sm w-full" @click="openApprove">
-                    <CheckCircle2 class="size-4" />
-                    Aprobar y enviar
-                  </button>
-                  <button type="button" class="btn btn-outline btn-sm w-full" @click="openReject">
-                    <XCircle class="size-4" />
-                    Devolver
-                  </button>
+                <div class="mt-3 rounded-lg border border-warning/20 bg-warning-soft/50 px-2.5 py-2 text-[12.5px] leading-snug text-ink-muted">
+                  <p class="flex items-start gap-1.5">
+                    <ShieldCheck class="mt-0.5 size-3.5 shrink-0 text-warning" />
+                    <span>
+                      La aprobación o el rechazo se realizan desde la
+                      <strong class="font-medium text-ink">aplicación móvil de firma</strong>.
+                    </span>
+                  </p>
                 </div>
 
                 <div
@@ -827,20 +820,10 @@ onBeforeUnmount(() => {
                 El documento cambió desde el envío (v{{ message.documentVersion }} → v{{ message.document.version }}). Revísalo antes de aprobar.
               </template>
               <template v-else>
-                {{ canApprove ? 'Revisa y decide sin salir de la vista.' : 'Vista final del documento.' }}
+                {{ canApprove ? 'La aprobación o el rechazo se realizan desde la app móvil.' : 'Vista final del documento.' }}
               </template>
             </span>
-            <template v-if="canApprove">
-              <button type="button" class="btn btn-outline btn-sm" @click="openReject">
-                <XCircle class="size-4" />
-                Devolver
-              </button>
-              <button type="button" class="btn btn-primary btn-sm" @click="openApprove">
-                <CheckCircle2 class="size-4" />
-                Aprobar y enviar
-              </button>
-            </template>
-            <button v-else type="button" class="btn btn-outline btn-sm" @click="viewerExpanded = false">
+            <button type="button" class="btn btn-outline btn-sm" @click="viewerExpanded = false">
               Cerrar
             </button>
           </div>

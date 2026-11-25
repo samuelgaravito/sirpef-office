@@ -2350,26 +2350,10 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
-        <div class="flex flex-wrap gap-2">
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            :disabled="!canReview"
-            @click="openRejectDialog"
-          >
-            <XCircle class="size-4" />
-            Devolver o rechazar
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            :disabled="!canReview || saving"
-            @click="openApproveDialog()"
-          >
-            <CheckCircle2 class="size-4" />
-            Aprobar y enviar
-          </button>
-        </div>
+        <p class="max-w-[260px] rounded-lg border border-warning/20 bg-surface/80 px-3 py-2 text-[12.5px] leading-snug text-ink-muted">
+          La aprobación o el rechazo se realizan desde la
+          <strong class="font-medium text-ink">aplicación móvil de firma</strong>.
+        </p>
       </div>
 
       <!-- Remitente / otros usuarios -->

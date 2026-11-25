@@ -198,9 +198,9 @@ document_counters (series_id, year) → secuencia emitida al oficializar
    ni restaurar versiones; sí puede cancelar el envío. El memo aún **no tiene
    número**: se muestra el número previsto, que no reserva el contador.
 3. El jefe (`admin`) lo ve en **Bandeja → Recibidos**, dentro del bloque destacado
-   «Requiere tu aprobación». Puede abrirlo, corregirlo y, al aprobar, decide si el
-   asistente podrá exportar el memo; se guarda una versión de historial con la nota
-   «Aprobado y enviado».
+   «Requiere tu aprobación». Desde la web puede abrirlo, revisarlo y corregirlo,
+   pero **no aprobar ni rechazar**: la decisión se toma en la **app móvil de firma**.
+   La web solo muestra una tarjeta informativa con el enlace a la solicitud.
 4. La aprobación es atómica: el mensaje pasa a `sent`, el memo a `sent`, se
    rellena `locked_at`/`locked_by`, `allow_sender_export` y los destinatarios
    reciben acceso `viewer`. **En la misma transacción se asigna el correlativo**:
