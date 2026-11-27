@@ -10,6 +10,8 @@ import {
   users,
 } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/jwt.js';
+import { approveMessage } from '../src/modules/inbox/approve.js';
+import { rejectMessage } from '../src/modules/inbox/reject.js';
 
 const API = process.env.SD_API ?? 'http://localhost:3101/api';
 
@@ -70,6 +72,13 @@ async function main(): Promise<void> {
 
   if (!admin || !member) throw new Error('Se necesitan un admin y un member activos');
 
+  const adminUser = {
+    sub: admin.id,
+    email: admin.email,
+    name: admin.name,
+    role: admin.role,
+    menus: [],
+  } as const;
   const adminToken = await signAccessToken({
     sub: admin.id,
     email: admin.email,
@@ -134,6 +143,20 @@ async function main(): Promise<void> {
     assert(detailAfterSubmit.body.document.status === 'in_review', 'El documento pasa a in_review');
     assert(Boolean(detailAfterSubmit.body.document.pendingMessage), 'El editor conoce el envío pendiente');
 
+    const pendingEdit = await call<{ error?: string; code?: string }>(
+      `/documents/${documentId}/content`,
+      memberToken,
+      'PUT',
+      {
+        content: { type: 'doc', content: [{ type: 'paragraph' }] },
+        expectedVersion: version,
+      },
+    );
+    assert(
+      pendingEdit.status === 409 && pendingEdit.body.error === 'DOCUMENT_LOCKED',
+      'El remitente no puede editar mientras espera aprobación',
+    );
+
     const deletePending = await call(`/documents/${documentId}`, memberToken, 'DELETE');
     assert(deletePending.status === 409, 'No se puede eliminar un memo con envío pendiente');
 
@@ -167,13 +190,15 @@ async function main(): Promise<void> {
     );
     assert(messageDetail.body.canApprove === true, 'El jefe puede aprobar el envío');
 
-    const approved = await call<{ status: string }>(
-      `/inbox/${submitted.body.id}/approve`,
-      adminToken,
-      'POST',
-      { expectedVersion: version, recipientIds: [admin.id] },
-    );
-    assert(approved.status === 200 && approved.body.status === 'sent', 'El jefe aprueba y envía');
+    // La aprobación web está deshabilitada: se llama al mismo servicio de la app.
+    const approved = await approveMessage({
+      user: adminUser,
+      messageId: submitted.body.id,
+      expectedVersion: version,
+      allowSenderExport: false,
+      recipientIds: [admin.id],
+    });
+    assert(approved.message.status === 'sent', 'El jefe aprueba y envía');
 
     const sentDetail = await call<{ document: { status: string; lockedAt: string | null } }>(
       `/documents/${documentId}`,
@@ -339,12 +364,14 @@ async function main(): Promise<void> {
     });
     assert(submittedExport.status === 201, 'Se crea el envío para autorizar exportación');
 
-    const approvedExport = await call(`/inbox/${submittedExport.body.id}/approve`, adminToken, 'POST', {
+    const approvedExport = await approveMessage({
+      user: adminUser,
+      messageId: submittedExport.body.id,
       expectedVersion: createdExport.body.document.version,
-      recipientIds: [admin.id],
       allowSenderExport: true,
+      recipientIds: [admin.id],
     });
-    assert(approvedExport.status === 200, 'El jefe aprueba autorizando la exportación');
+    assert(approvedExport.message.status === 'sent', 'El jefe aprueba autorizando la exportación');
 
     const exportMessage = await call<{ allowSenderExport: boolean }>(
       `/inbox/${submittedExport.body.id}`,
@@ -394,10 +421,13 @@ async function main(): Promise<void> {
     });
     assert(submitted2.status === 201, 'Se crea un segundo envío');
 
-    const rejected = await call(`/inbox/${submitted2.body.id}/reject`, adminToken, 'POST', {
+    const rejected = await rejectMessage({
+      user: adminUser,
+      messageId: submitted2.body.id,
       reason: 'Falta la firma del jefe.',
+      allowEdit: true,
     });
-    assert(rejected.status === 200, 'El jefe rechaza el envío');
+    assert(rejected.status === 'rejected', 'El jefe rechaza el envío');
 
     const rejectedDetail = await call<{ document: { status: string; lockedAt: string | null } }>(
       `/documents/${documentId2}`,
@@ -511,11 +541,13 @@ async function main(): Promise<void> {
     });
     assert(submitted3.status === 201, 'Se crea el envío para rechazo definitivo');
 
-    const rejectedFinal = await call(`/inbox/${submitted3.body.id}/reject`, adminToken, 'POST', {
+    const rejectedFinal = await rejectMessage({
+      user: adminUser,
+      messageId: submitted3.body.id,
       reason: 'No corresponde al área.',
       allowEdit: false,
     });
-    assert(rejectedFinal.status === 200, 'El jefe rechaza definitivamente el envío');
+    assert(rejectedFinal.status === 'rejected', 'El jefe rechaza definitivamente el envío');
 
     const finalMessage = await call<{ allowSenderEdit: boolean }>(
       `/inbox/${submitted3.body.id}`,

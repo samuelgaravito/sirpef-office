@@ -4,11 +4,13 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import SigningDevicesCard from '@/components/settings/SigningDevicesCard.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
 import { useAiStatus } from '@/composables/useAiStatus';
 import { useNotifications } from '@/composables/useNotifications';
+import { usePush } from '@/composables/usePush';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
 import { errorMessage as explainError } from '@/lib/error-message';
@@ -17,6 +19,7 @@ import { useAuthStore } from '@/stores/auth';
 const auth = useAuthStore();
 const toast = useToast();
 const notifications = useNotifications();
+const push = usePush();
 const { essential, setEssential } = useUiMode();
 const { load: refreshAiStatus } = useAiStatus();
 const {
@@ -418,6 +421,7 @@ async function copyDiagnostics(): Promise<void> {
 }
 
 onMounted(() => {
+  void push.refresh();
   profileName.value = auth.user?.name ?? '';
   void loadAi();
   void loadNodes();
@@ -494,6 +498,9 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <!-- Teléfonos de firma -->
+      <SigningDevicesCard v-if="auth.isAdmin" class="mt-5" />
+
       <!-- Avisos -->
       <section class="card mt-5 p-5">
         <header class="mb-4 flex items-center gap-2">
@@ -503,8 +510,9 @@ onUnmounted(() => {
 
         <p class="text-[12.5px] leading-relaxed text-ink-muted">
           Recibe un aviso del sistema cuando llegue un mensaje, una aprobación o un rechazo a
-          tu bandeja y no estés mirando la aplicación. Funciona mientras SirpefOffice siga
-          abierto en alguna pestaña.
+          tu bandeja y no estés mirando la aplicación. Estos avisos funcionan mientras
+          SirpefOffice siga abierto en alguna pestaña; para recibirlos con la web cerrada,
+          activa las notificaciones push de abajo.
         </p>
 
         <div class="mt-4 flex flex-wrap items-center gap-3">
@@ -543,6 +551,67 @@ onUnmounted(() => {
         </div>
 
         <p class="mt-3 text-[12px] leading-relaxed text-ink-subtle">{{ notificationStatus }}</p>
+
+        <div class="mt-5 border-t border-hairline pt-4">
+          <div class="flex items-center gap-2">
+            <BellRing class="size-4 text-ink-muted" />
+            <h3 class="text-[13px] font-semibold">Notificaciones fuera de la app</h3>
+            <span class="chip">
+              {{
+                !push.supported.value
+                  ? 'No compatibles'
+                  : push.enabled.value
+                    ? 'Activadas'
+                    : push.permission.value === 'denied'
+                      ? 'Bloqueadas'
+                      : 'Sin activar'
+              }}
+            </span>
+          </div>
+          <p class="mt-2 text-[12px] leading-relaxed text-ink-muted">
+            Recibe el aviso del sistema aunque SirpefOffice esté cerrado o el móvil bloqueado.
+            En iPhone/iPad hay que añadir la web a la pantalla de inicio. En Android la app usa
+            Firebase para los avisos con la app cerrada.
+          </p>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              v-if="push.supported.value && !push.enabled.value"
+              type="button"
+              class="btn btn-primary"
+              :disabled="push.busy.value"
+              @click="push.enable()"
+            >
+              <component :is="push.busy.value ? Loader2 : BellRing" :class="['size-4', push.busy.value ? 'animate-spin' : '']" />
+              Activar notificaciones push
+            </button>
+            <button
+              v-else-if="push.enabled.value"
+              type="button"
+              class="btn btn-outline"
+              :disabled="push.busy.value"
+              @click="push.disable()"
+            >
+              <BellOff class="size-4" />
+              Desactivar en este dispositivo
+            </button>
+            <button
+              v-if="push.enabled.value"
+              type="button"
+              class="btn btn-outline"
+              :disabled="push.busy.value"
+              @click="push.test()"
+            >
+              <Bell class="size-4" />
+              Enviar aviso de prueba
+            </button>
+          </div>
+          <p v-if="push.error.value" class="mt-2 text-[12px] font-medium text-danger">
+            {{ push.error.value }}
+          </p>
+          <p v-else-if="push.notice.value" class="mt-2 text-[12px] font-medium text-success">
+            {{ push.notice.value }}
+          </p>
+        </div>
       </section>
 
       <!-- Interfaz -->

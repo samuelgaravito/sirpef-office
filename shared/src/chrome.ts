@@ -54,6 +54,14 @@ function clampHeight(value: unknown, kind: ChromeKind): number {
   return Math.min(MAX_HEIGHT_MM, Math.max(MIN_HEIGHT_MM, Math.round(number * 10) / 10));
 }
 
+/** Altura efectiva de una banda, con el valor por defecto de su tipo. */
+export function chromeBandHeightMm(
+  config: Pick<ChromeConfig, 'heightMm'> | null | undefined,
+  kind: ChromeKind,
+): number {
+  return clampHeight(config?.heightMm, kind);
+}
+
 /** Normaliza el ancho de banda como porcentaje del ancho de página. */
 export function clampChromeWidth(
   value: unknown,

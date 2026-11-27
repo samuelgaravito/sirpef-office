@@ -18,6 +18,8 @@ import { exportRoutes } from './modules/exports/routes.js';
 import { inboxRoutes } from './modules/inbox/routes.js';
 import { menuRoutes } from './modules/menus/routes.js';
 import { mobileRoutes } from './modules/mobile/routes.js';
+import { tokenRoutes } from './modules/token/routes.js';
+import { emergencyRoutes } from './modules/documents/emergency-routes.js';import { notificationRoutes } from './modules/notifications/routes.js';
 import { numberingRoutes } from './modules/numbering/routes.js';
 import { realtimeRoutes } from './modules/realtime/routes.js';
 import { statsRoutes } from './modules/stats/routes.js';
@@ -60,7 +62,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(rateLimit, {
-    max: 200,
+    // El SPA comparte bucket cuando llega por el proxy de Vite (127.0.0.1):
+    // 200/min se agotaba con el sondeo de emergencia y las reconexiones del
+    // WebSocket. En producción cada cliente tiene su propia IP.
+    max: isProduction ? 600 : 2000,
     timeWindow: '1 minute',
     allowList: [],
   });
@@ -95,8 +100,11 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(exportRoutes, { prefix: '/api/documents' });
   await app.register(inboxRoutes, { prefix: '/api/inbox' });
   await app.register(mobileRoutes, { prefix: '/api' });
+  await app.register(tokenRoutes, { prefix: '/api' });
+  await app.register(emergencyRoutes, { prefix: '/api' });
   await app.register(statsRoutes, { prefix: '/api/stats' });
   await app.register(chartRoutes, { prefix: '/api/stats' });
+  await app.register(notificationRoutes, { prefix: '/api/notifications' });
   await app.register(realtimeRoutes, { prefix: '/api' });
   await app.register(systemRoutes, { prefix: '/api/system' });
 

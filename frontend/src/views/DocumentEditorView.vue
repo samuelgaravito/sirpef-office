@@ -31,7 +31,7 @@ import {
   TriangleAlert,
   XCircle,
 } from 'lucide-vue-next';
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
@@ -53,9 +53,11 @@ import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useInlineAi } from '@/composables/useInlineAi';
 import { useToast } from '@/composables/useToast';
 import { useUiMode } from '@/composables/useUiMode';
+import { isDocumentMessage, type RealtimeMessage } from '@sirpefoffice/shared';
 import { takeAiPrompt } from '@/lib/ai-prompt';
 import { errorMessage as explainError } from '@/lib/error-message';
 import { PaginationExtension } from '@/lib/pagination/extension';
@@ -69,6 +71,7 @@ import {
   emptyChrome,
   NUMBERING_MESSAGES,
   resolveBodyVariable,
+  variableValueText,
 } from '@sirpefoffice/shared';
 import type {
   AiDraftMessage,
@@ -375,6 +378,13 @@ const saving = ref(false);
 const dirty = ref(false);
 const lastSavedAt = ref<Date | null>(null);
 const conflict = ref(false);
+/** Aviso de cambio remoto que no se aplicó por tener trabajo local o un modal abierto. */
+const liveNotice = ref<{ actorName: string; version: number; locked: boolean } | null>(null);
+const remoteDeleted = ref(false);
+const remoteRevoked = ref(false);
+let pendingLiveEvent: RealtimeMessage | null = null;
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
 const aiConfigured = ref(false);
 const generating = ref(false);
 /** El contenido actual viene de una propuesta del asistente. */
@@ -402,6 +412,62 @@ const previewHtml = ref('');
 const loadingPreview = ref(false);
 const findOpen = ref(false);
 
+/* ── Edición de emergencia ─────────────────────────────────────────── */
+interface EmergencyEditState {
+  id: string;
+  reason: string;
+  expiresAt: string;
+}
+const canEmergencyEdit = ref(false);
+const emergencyEdit = ref<EmergencyEditState | null>(null);
+const emergencyClosing = ref(false);
+let emergencyPoll: number | undefined;
+let emergencyPollBusy = false;
+
+/**
+ * La edición de emergencia se autoriza en la app Firma. Mientras el documento
+ * siga bloqueado, se consulta el detalle para habilitar el editor en cuanto
+ * llegue la autorización.
+ */
+async function refreshEmergencyAuthorization(): Promise<void> {
+  const id = documentId.value;
+  if (!id || remoteDeleted.value || emergencyPollBusy) return;
+  emergencyPollBusy = true;
+  try {
+    const response = await api.get<DocumentDetailResponse>(`/documents/${id}`);
+    const active = response.emergencyEdit ?? null;
+    if (active && !emergencyEdit.value) {
+      emergencyEdit.value = active;
+      canEmergencyEdit.value = false;
+      locked.value = false;
+      editor.value?.setEditable(true, false);
+      toast.success('Edición autorizada desde la app. Ya puedes editar.');
+    }
+  } catch {
+    /* se reintenta en el siguiente ciclo */
+  } finally {
+    emergencyPollBusy = false;
+  }
+}
+
+function syncEmergencyPolling(): void {
+  const should =
+    locked.value &&
+    !emergencyEdit.value &&
+    canEmergencyEdit.value &&
+    status.value === 'sent' &&
+    !remoteDeleted.value;
+  if (should && emergencyPoll === undefined) {
+    // El evento en tiempo real suele bastar; este sondeo es solo un respaldo.
+    emergencyPoll = window.setInterval(() => void refreshEmergencyAuthorization(), 15000);
+  } else if (!should && emergencyPoll !== undefined) {
+    window.clearInterval(emergencyPoll);
+    emergencyPoll = undefined;
+  }
+}
+
+watch([locked, emergencyEdit, status, canEmergencyEdit], () => syncEmergencyPolling());
+
 /* ───────────────────── Estructura y selección de la hoja ───────────────────── */
 interface OutlineItem {
   pos: number;
@@ -416,9 +482,25 @@ const pageCount = ref(0);
 
 let saveTimer: number | undefined;
 let previewTimer: number | undefined;
+/** Guardado en curso: las llamadas concurrentes esperan a esta misma promesa. */
+let saveInFlight: Promise<void> | null = null;
+/** Evita que una respuesta vieja de la vista previa pise a la nueva. */
+let previewRequestId = 0;
+
+/**
+ * El remitente queda bloqueado mientras el jefe revisa. El administrador
+ * aprobador conserva la edición para poder corregir antes de decidir.
+ */
+const pendingSenderLocked = computed(
+  () => Boolean(pendingMessage.value && !auth.isAdmin),
+);
 
 const canEdit = computed(
-  () => (permission.value === 'owner' || permission.value === 'editor') && !locked.value,
+  () =>
+    ((permission.value === 'owner' || permission.value === 'editor') ||
+      Boolean(emergencyEdit.value)) &&
+    (!locked.value || Boolean(emergencyEdit.value)) &&
+    !pendingSenderLocked.value,
 );
 
 const canReview = computed(() =>
@@ -439,6 +521,12 @@ const manualStatusOptions = (
   Object.entries(STATUS_LABELS) as [DocumentStatus, string][]
 ).filter(([value]) => value !== 'sent' && value !== 'approved' && value !== 'cancelled');
 
+/** Valores con el número vigente para previsualizar cabecera y pie como el servidor. */
+const chromeValues = computed<VariableValues>(() => ({
+  ...data.value,
+  [DOCUMENT_NUMBER_VARIABLE]: docNumber.value ?? numberingPreview.value?.number ?? '',
+}));
+
 const autoDescription = computed(() =>
   buildAutoDescription({
     docType: docType.value as DocType,
@@ -457,22 +545,44 @@ const inheritedChrome = ref<ResolvedChrome | null>(null);
 /** Evita que cargar contenido programáticamente cree una sobrescritura. */
 let syncingChrome = false;
 
+function valueAtPath(values: VariableValues, path: string): unknown {
+  const parts = path.split('.');
+  let current: unknown = values;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      current = Number.isInteger(index) ? current[index] : undefined;
+    } else if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
 /**
- * Sustituye `{{numero_documento}}` por el número asignado o, en un borrador,
- * por el previsto. Las decoraciones no modifican el documento guardado.
+ * Sustituye visualmente todas las variables con el mismo texto que usa el
+ * servidor. Así la paginación del editor mide igual que la vista previa.
+ * Las decoraciones no modifican el documento guardado.
  */
-function resolveNumberVariable(variableKey: string): { text: string; title?: string } | null {
-  if (variableKey !== DOCUMENT_NUMBER_VARIABLE) return null;
-  if (docNumber.value) {
-    return { text: docNumber.value, title: NUMBERING_MESSAGES.variableLabel };
+function resolveEditorVariable(variableKey: string): { text: string; title?: string } | null {
+  if (variableKey === DOCUMENT_NUMBER_VARIABLE) {
+    if (docNumber.value) {
+      return { text: docNumber.value, title: NUMBERING_MESSAGES.variableLabel };
+    }
+    if (numberingPreview.value) {
+      return {
+        text: numberingPreview.value.number,
+        title: NUMBERING_MESSAGES.variablePendingTitle,
+      };
+    }
+    return { text: '' };
   }
-  if (numberingPreview.value) {
-    return {
-      text: numberingPreview.value.number,
-      title: NUMBERING_MESSAGES.variablePendingTitle,
-    };
-  }
-  return null;
+
+  const value = valueAtPath(data.value, variableKey);
+  return { text: variableValueText(value) };
 }
 
 /**
@@ -491,7 +601,7 @@ const editor = useEditor({
     ...createEditorExtensions({
       placeholder: 'Escribe el contenido del documento…',
     }),
-    VariableHighlight.configure({ resolve: resolveNumberVariable }),
+    VariableHighlight.configure({ resolve: resolveEditorVariable }),
     PaginationExtension,
   ],
   content: null,
@@ -642,7 +752,7 @@ function chromeEditorOptions(kind: ChromeKind) {
             : 'Pie: texto, {page} y {total} para la numeración…',
         pageBreak: false,
       }),
-      VariableHighlight.configure({ resolve: resolveNumberVariable }),
+      VariableHighlight.configure({ resolve: resolveEditorVariable }),
     ],
     content: null,
     editable: false,
@@ -842,7 +952,13 @@ async function load(): Promise<void> {
     status.value = response.document.status;
     permission.value = response.document.permission;
     version.value = response.document.version;
-    locked.value = Boolean(response.document.lockedAt) || response.document.status === 'sent' || response.document.status === 'cancelled';
+    canEmergencyEdit.value = response.canEmergencyEdit;
+    emergencyEdit.value = response.emergencyEdit ?? null;
+    locked.value =
+      (Boolean(response.document.lockedAt) ||
+        response.document.status === 'sent' ||
+        response.document.status === 'cancelled') &&
+      !response.emergencyEdit;
     canExport.value = response.canExport;
     pendingMessage.value = response.document.pendingMessage ?? null;
     lastRejection.value = response.document.lastRejection ?? null;
@@ -876,6 +992,9 @@ async function load(): Promise<void> {
     conflict.value = false;
     previewMode.value = false;
     previewHtml.value = '';
+    liveNotice.value = null;
+    remoteDeleted.value = false;
+    remoteRevoked.value = false;
     void loadReviewMessage();
     // Si el envío venía pedido desde la vista «nueva», ahora que el documento
     // ya tiene id se abre el diálogo sin que el usuario tenga que repetir el clic.
@@ -1081,6 +1200,9 @@ async function materialize(navigateToDocument = true): Promise<string | null> {
     return null;
   } finally {
     saving.value = false;
+    const pending = pendingLiveEvent;
+    pendingLiveEvent = null;
+    if (pending) handleLiveEvent(pending);
   }
 }
 
@@ -1098,15 +1220,38 @@ function markDirty(): void {
 }
 
 async function save(checkpoint = false, targetId: string | null = documentId.value): Promise<void> {
+  // Si ya hay un guardado en curso, se espera y, si el documento sigue sucio
+  // o se pidió un punto de control, se encola otro. Antes se retornaba sin
+  // guardar y la vista previa salía con la versión anterior.
+  if (saveInFlight) {
+    await saveInFlight;
+    if (dirty.value || checkpoint) return save(checkpoint, targetId);
+    return;
+  }
+
   if (isNew.value) {
     // Un borrador local recién abierto desde una plantilla aún no está
     // «sucio», pero el aviso pide guardarlo: debe poder materializarse tal cual.
     await materialize();
     return;
   }
-  if (!targetId || !canEdit.value || saving.value) return;
+  if (!targetId || !canEdit.value) return;
+  if (remoteDeleted.value || remoteRevoked.value) {
+    toast.warning('El documento ya no está disponible para guardar.');
+    return;
+  }
   if (!checkpoint && !dirty.value) return;
 
+  const run = performSave(checkpoint, targetId);
+  saveInFlight = run;
+  try {
+    await run;
+  } finally {
+    if (saveInFlight === run) saveInFlight = null;
+  }
+}
+
+async function performSave(checkpoint: boolean, targetId: string): Promise<void> {
   window.clearTimeout(saveTimer);
   saving.value = true;
 
@@ -1184,7 +1329,11 @@ async function openSendDialog(prefill?: {
   body?: string;
   recipientIds?: string[];
 }): Promise<void> {
-  if (!canEdit.value || pendingMessage.value) return;
+  if (!canEdit.value) return;
+  if (pendingMessage.value) {
+    toast.info('Este documento ya tiene un envío pendiente de aprobación. La decisión se toma en la app.');
+    return;
+  }
   // Los datos obligatorios se comprueban antes de crear o enviar nada.
   if (warnMissingRequired()) return;
   sendMode.value = 'send';
@@ -1202,7 +1351,10 @@ async function openSendDialog(prefill?: {
   }
 
   if (dirty.value) await save();
-  if (dirty.value || conflict.value) return;
+  if (dirty.value || conflict.value) {
+    toast.warning('No se pudo guardar el documento. Revisa el conflicto antes de enviarlo.');
+    return;
+  }
   sendPrefill.value = {
     subject: prefill?.subject ?? '',
     body: prefill?.body ?? '',
@@ -1278,6 +1430,13 @@ async function onSent(payload?: { id: string; status: 'sent' | 'pending_approval
   // Al aprobar desde el editor, el documento se sella y se queda a la vista.
   if (wasApprove) {
     await load();
+    return;
+  }
+
+  // El envío del administrador ya no se autoaprueba: queda en su bandeja y se
+  // aprueba en la app. Llevarlo allí evita que parezca que «no hizo nada».
+  if (payload?.status === 'pending_approval' && auth.isAdmin) {
+    await router.push({ name: 'inbox' });
     return;
   }
 
@@ -1561,10 +1720,59 @@ async function sendAssistantMessage(instruction: string): Promise<void> {
   }
 }
 
+/* ── Edición de emergencia ─────────────────────────────────────────── */
+
+async function finishEmergencyEdit(): Promise<void> {
+  const id = documentId.value;
+  const edit = emergencyEdit.value;
+  if (!id || !edit || emergencyClosing.value) return;
+  emergencyClosing.value = true;
+  try {
+    // El autoguardado puede estar en cola: la revisión debe incluir lo último.
+    if (dirty.value) await save(true, id);
+    if (dirty.value || conflict.value) return;
+    const response = await api.post<{ changed: boolean; messageId: string | null }>(
+      `/documents/${id}/emergency-edit/${edit.id}/finish`,
+      {},
+    );
+    toast.success(
+      response.changed
+        ? 'Revisión de emergencia creada. El documento vuelve a revisión.'
+        : 'No había cambios. La edición se cerró sin invalidar nada.',
+    );
+    await load();
+  } catch (error) {
+    toast.failure(error, 'No se pudo cerrar la edición de emergencia');
+  } finally {
+    emergencyClosing.value = false;
+  }
+}
+
+async function cancelEmergencyEdit(): Promise<void> {
+  const id = documentId.value;
+  const edit = emergencyEdit.value;
+  if (!id || !edit || emergencyClosing.value) return;
+  if (dirty.value) {
+    toast.warning('Hay cambios sin guardar. Termina la edición para enviarlos a revisión.');
+    return;
+  }
+  emergencyClosing.value = true;
+  try {
+    await api.post(`/documents/${id}/emergency-edit/${edit.id}/cancel`, {});
+    toast.success('Edición de emergencia cancelada.');
+    await load();
+  } catch (error) {
+    toast.failure(error, 'No se pudo cancelar la edición de emergencia');
+  } finally {
+    emergencyClosing.value = false;
+  }
+}
+
 /** Alterna entre el editor y la vista renderizada con los datos aplicados. */
 async function togglePreview(): Promise<void> {
   if (previewMode.value) {
     previewMode.value = false;
+    previewRequestId += 1;
     return;
   }
 
@@ -1574,16 +1782,22 @@ async function togglePreview(): Promise<void> {
     id = await materialize();
     if (!id) return;
   }
+  const request = ++previewRequestId;
   loadingPreview.value = true;
   try {
-    if (dirty.value) await save(true, id);
-    // `preview=1`: vista previa dentro de la app (no es una exportación).
-    previewHtml.value = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
+    // Espera al autoguardado en curso y fuerza un punto de control. Sin esto
+    // el primer clic podía leer el HTML anterior y parecía necesitar dos.
+    await save(true, id);
+    if (request !== previewRequestId) return;
+    const html = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
+    if (request !== previewRequestId) return;
+    previewHtml.value = html;
+    await nextTick();
     previewMode.value = true;
   } catch (error) {
     toast.failure(error, 'No se pudo generar la vista previa');
   } finally {
-    loadingPreview.value = false;
+    if (request === previewRequestId) loadingPreview.value = false;
   }
 }
 
@@ -1602,12 +1816,16 @@ function schedulePreview(): void {
   window.clearTimeout(previewTimer);
   previewTimer = window.setTimeout(async () => {
     if (!previewMode.value) return;
+    const request = ++previewRequestId;
     await save();
+    if (request !== previewRequestId) return;
     const id = documentId.value;
     if (!id) return;
     try {
       // `preview=1`: vista previa dentro de la app (no es una exportación).
-      previewHtml.value = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
+      const html = await api.get<string>(`/documents/${id}/html`, { preview: '1' });
+      if (request !== previewRequestId) return;
+      previewHtml.value = html;
     } catch {
       /* la vista previa se reintentará en el siguiente cambio */
     }
@@ -1656,6 +1874,165 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
+/** ¿Hay un diálogo que depende de la versión actual? */
+function liveApplyBlocked(): boolean {
+  return sendOpen.value || shareOpen.value || historyOpen.value || rejectOpen.value;
+}
+
+/** Aplica en silencio el detalle recibido del servidor. */
+function applyDocumentDetail(response: DocumentDetailResponse): void {
+  const selection = editor.value
+    ? { from: editor.value.state.selection.from, to: editor.value.state.selection.to }
+    : null;
+
+  title.value = response.document.title;
+  description.value = response.document.description ?? '';
+  docNumber.value = response.document.docNumber;
+  numberingPreview.value = response.document.numberingPreview ?? null;
+  docType.value = response.document.docType;
+  status.value = response.document.status;
+  permission.value = response.document.permission;
+  version.value = response.document.version;
+  canEmergencyEdit.value = response.canEmergencyEdit;
+  emergencyEdit.value = response.emergencyEdit ?? null;
+  locked.value =
+    (Boolean(response.document.lockedAt) ||
+      response.document.status === 'sent' ||
+      Boolean(response.document.emergencyEditOpen)) &&
+    !response.emergencyEdit;
+  canExport.value = response.canExport;
+  pendingMessage.value = response.document.pendingMessage ?? null;
+  lastRejection.value = response.document.lastRejection ?? null;
+  data.value = response.document.data ?? {};
+  schema.value = response.templateSchema ?? [];
+  modelName.value = response.templateName;
+  design.value = response.design?.tokens ?? response.document.designTokens ?? null;
+  shares.value = response.shares ?? [];
+  ownerName.value = response.document.ownerName;
+  lastSavedAt.value = new Date(response.document.updatedAt);
+
+  editor.value?.commands.setContent(response.document.content, { emitUpdate: false });
+  if (selection) {
+    const size = editor.value?.state.doc.content.size ?? 1;
+    const from = Math.max(1, Math.min(selection.from, size));
+    const to = Math.max(from, Math.min(selection.to, size));
+    editor.value?.commands.setTextSelection({ from, to });
+  }
+  editor.value?.setEditable(canEdit.value, false);
+  syncEditorContent();
+
+  inheritedChrome.value = response.inheritedChrome;
+  headerConfig.value = structuredClone(response.chrome.header);
+  footerConfig.value = structuredClone(response.chrome.footer);
+  headerSource.value = response.chrome.headerSource;
+  footerSource.value = response.chrome.footerSource;
+  setChromeContent('header', headerConfig.value.content);
+  setChromeContent('footer', footerConfig.value.content);
+  headerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
+  footerEditor.value?.setEditable(canEdit.value && chromeOpen.value, false);
+  activeChrome.value = 'body';
+
+  dirty.value = false;
+  conflict.value = false;
+  if (!loadingPreview.value) {
+    previewMode.value = false;
+    previewHtml.value = '';
+  }
+  liveNotice.value = null;
+  void loadReviewMessage();
+}
+
+/** Recarga el documento tras un aviso remoto. */
+async function reloadFromRemote(): Promise<void> {
+  const id = documentId.value;
+  if (!id || saving.value) return;
+  try {
+    const response = await api.get<DocumentDetailResponse>(`/documents/${id}`);
+    applyDocumentDetail(response);
+    remoteDeleted.value = false;
+    remoteRevoked.value = false;
+  } catch (error) {
+    toast.failure(error, 'No se pudo actualizar el documento');
+  }
+}
+
+/** Decide si un cambio remoto se aplica, se avisa o se ignora. */
+function handleLiveEvent(event: RealtimeMessage): void {
+  if (!isDocumentMessage(event)) return;
+  const payload = event.payload;
+  if (payload.documentId !== documentId.value) return;
+  // El WebSocket devuelve también el guardado propio: no es un cambio remoto.
+  if (payload.actorId === auth.user?.id) return;
+
+  if (event.type === 'document.deleted') {
+    remoteDeleted.value = true;
+    sendOpen.value = false;
+    shareOpen.value = false;
+    historyOpen.value = false;
+    rejectOpen.value = false;
+    toast.warning('Este documento se movió a la papelera.');
+    return;
+  }
+
+  if (event.type === 'document.unshared') {
+    if (permission.value !== 'owner') {
+      remoteRevoked.value = true;
+      sendOpen.value = false;
+      shareOpen.value = false;
+      historyOpen.value = false;
+      rejectOpen.value = false;
+      toast.warning('Ya no tienes acceso a este documento.');
+      return;
+    }
+  }
+
+  if (event.type === 'document.locked') {
+    if (dirty.value || liveApplyBlocked()) {
+      liveNotice.value = {
+        actorName: payload.actorName,
+        version: payload.version,
+        locked: true,
+      };
+      return;
+    }
+    void reloadFromRemote();
+    return;
+  }
+
+  if (event.type === 'document.updated') {
+    if (payload.change === 'content' && payload.version <= version.value) return;
+    if (
+      payload.change !== 'content' &&
+      payload.version <= version.value &&
+      new Date(payload.updatedAt).getTime() <= (lastSavedAt.value?.getTime() ?? 0)
+    ) {
+      return;
+    }
+  }
+
+  if (saving.value) {
+    pendingLiveEvent = event;
+    return;
+  }
+
+  if (dirty.value || liveApplyBlocked()) {
+    liveNotice.value = {
+      actorName: payload.actorName,
+      version: payload.version,
+      locked: false,
+    };
+    return;
+  }
+
+  window.clearTimeout(liveTimer);
+  liveTimer = window.setTimeout(() => void reloadFromRemote(), 250);
+}
+
+function onConnectionReady(): void {
+  if (loading.value || saving.value || dirty.value || loadingPreview.value) return;
+  void reloadFromRemote();
+}
+
 onBeforeRouteLeave(async () => {
   // Un documento nuevo se materializa al salir: así aparece en Documentos y no
   // depende de que alguien recuerde pulsar Guardar. Si la API falla, el
@@ -1694,6 +2071,10 @@ onBeforeRouteLeave(async () => {
 onMounted(async () => {
   window.addEventListener('beforeunload', onBeforeUnload);
   window.addEventListener('keydown', onKeydown);
+  unsubscribeRealtime = onRealtimeEvent((event) => {
+    if (event.type === 'connection.ready') onConnectionReady();
+    else handleLiveEvent(event);
+  });
 
   if (isNew.value) {
     await hydrateNewDocument();
@@ -1729,8 +2110,11 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload);
   window.removeEventListener('keydown', onKeydown);
+  unsubscribeRealtime?.();
+  window.clearTimeout(liveTimer);
   window.clearTimeout(saveTimer);
   window.clearTimeout(previewTimer);
+  if (emergencyPoll !== undefined) window.clearInterval(emergencyPoll);
   // Se vuelca el borrador pendiente: si no, se perdería lo escrito en los
   // últimos milisegundos antes de salir de la vista.
   flushLocalDraft();
@@ -2022,6 +2406,50 @@ onBeforeUnmount(() => {
       <button type="button" class="btn btn-danger btn-sm" @click="overwriteConflict">Conservar mis cambios</button>
     </div>
 
+    <!-- Cambio remoto pendiente de aplicar -->
+    <div
+      v-if="liveNotice && !conflict"
+      class="flex flex-wrap items-center gap-3 border-b border-warning/20 bg-warning-soft/60 px-4 py-2 text-[13.5px] text-ink"
+    >
+      <Cloud class="size-4 shrink-0 text-warning" />
+      <span class="flex-1">
+        <strong class="font-semibold">{{ liveNotice.actorName }}</strong>
+        {{ liveNotice.locked ? 'aprobó o envió el documento' : 'guardó cambios' }}
+        (v{{ liveNotice.version }}).
+        <template v-if="liveNotice.locked">
+          Tus cambios locales no se podrán guardar.
+        </template>
+        <template v-else>
+          Carga la nueva versión o sigue con tus cambios.
+        </template>
+      </span>
+      <button type="button" class="btn btn-outline btn-sm" @click="reloadFromRemote">
+        Cargar la versión nueva
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        @click="liveNotice = null"
+      >
+        Seguir editando
+      </button>
+    </div>
+
+    <!-- Documento borrado o acceso retirado -->
+    <div
+      v-if="remoteDeleted || remoteRevoked"
+      class="flex flex-wrap items-center gap-3 border-b border-danger/20 bg-danger-soft px-4 py-2 text-[13.5px] text-danger"
+    >
+      <TriangleAlert class="size-4 shrink-0" />
+      <span class="flex-1">
+        {{ remoteDeleted ? 'Este documento se movió a la papelera.' : 'Ya no tienes acceso a este documento.' }}
+        Guarda una copia de tu contenido si lo necesitas.
+      </span>
+      <button type="button" class="btn btn-outline btn-sm" @click="router.push({ name: 'documents' })">
+        Volver a documentos
+      </button>
+    </div>
+
     <!-- Documento nuevo: el borrador vive en este navegador hasta guardarlo -->
     <div
       v-if="isNew"
@@ -2119,32 +2547,21 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
-        <div class="flex flex-wrap gap-2">
-          <button
-            type="button"
-            class="btn btn-outline btn-sm"
-            :disabled="!canReview"
-            @click="openRejectDialog"
-          >
-            <XCircle class="size-4" />
-            Devolver o rechazar
-          </button>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            :disabled="!canReview || saving"
-            @click="openApproveDialog()"
-          >
-            <CheckCircle2 class="size-4" />
-            Aprobar y enviar
-          </button>
-        </div>
+        <p class="max-w-[260px] rounded-lg border border-warning/20 bg-surface/80 px-3 py-2 text-[12.5px] leading-snug text-ink-muted">
+          La aprobación o el rechazo se realizan desde la
+          <strong class="font-medium text-ink">aplicación móvil de firma</strong>.
+        </p>
       </div>
 
       <!-- Remitente / otros usuarios -->
       <div v-else class="flex flex-wrap items-center gap-2 px-4 py-2 text-[13.5px] text-ink-muted">
         <Send class="size-4 shrink-0 text-warning" />
-        <span class="flex-1">Este documento tiene un envío pendiente de aprobación.</span>
+        <span class="flex-1">
+          Este documento tiene un envío pendiente de aprobación.
+          <template v-if="pendingSenderLocked">
+            Está bloqueado en solo lectura hasta que el jefe lo revise.
+          </template>
+        </span>
         <RouterLink :to="{ name: 'inbox-message', params: { id: pendingMessage.id } }" class="btn btn-outline btn-sm">
           Ver solicitud
         </RouterLink>
@@ -2199,13 +2616,49 @@ onBeforeUnmount(() => {
             ? 'Documento rechazado. Es de solo lectura: ya no se puede editar.'
             : 'Documento aprobado y enviado. Es de solo lectura: ya no se puede editar, borrar ni restaurar.'
         }}
-        <template v-if="status !== 'rejected'">
+        <template v-if="status !== 'rejected' && canEmergencyEdit">
+          Para reabrirlo, autoriza una edición de emergencia desde la app Firma con el código de Token.
+        </template>
+        <template v-else-if="status !== 'rejected'">
           Si necesitas cambiarlo, pide a quien lo aprobó que lo devuelva para corrección.
         </template>
         <template v-if="!canExport"> La exportación está reservada al administrador.</template>
         <template v-else> Puedes exportarlo en PDF, Word o HTML.</template>
       </span>
       <span class="chip">Solo lectura</span>
+    </div>
+
+    <!-- Edición de emergencia activa -->
+    <div
+      v-if="emergencyEdit"
+      class="flex flex-wrap items-center gap-3 border-b border-danger/25 bg-danger-soft/60 px-4 py-2.5 text-[13px] text-danger"
+    >
+      <TriangleAlert class="size-4 shrink-0" />
+      <div class="min-w-0 flex-1">
+        <p class="font-semibold">
+          EDICIÓN DE EMERGENCIA · {{ emergencyEdit.reason }}
+        </p>
+        <p class="mt-0.5 text-[12px]">
+          Todos los cambios quedan auditados. La firma anterior queda invalidada y deberá
+          reaprobarse. Ventana hasta {{ formatDateTime(emergencyEdit.expiresAt) }}.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="btn btn-outline btn-sm"
+        :disabled="emergencyClosing"
+        @click="cancelEmergencyEdit"
+      >
+        Cancelar
+      </button>
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        :disabled="emergencyClosing"
+        @click="finishEmergencyEdit"
+      >
+        {{ emergencyClosing ? 'Cerrando…' : 'Terminar y enviar a revisión' }}
+      </button>
     </div>
 
     <!-- Barra de herramientas -->
@@ -2287,6 +2740,7 @@ onBeforeUnmount(() => {
                 source: footerSource,
                 own: footerSource === 'document',
               }"
+              :values="chromeValues"
               :chrome-open="chromeOpen"
               :editable="canEdit"
               :watermark="documentWatermark(status)"
@@ -2640,9 +3094,6 @@ onBeforeUnmount(() => {
       :document-id="documentId ?? ''"
       :document-title="title"
       :expected-version="version"
-      :mode="sendMode"
-      :message-id="approveMessageId"
-      :sent-version="approveSentVersion"
       :initial-subject="sendPrefill.subject"
       :initial-body="sendPrefill.body"
       :initial-recipient-ids="sendPrefill.recipientIds"
@@ -2650,14 +3101,6 @@ onBeforeUnmount(() => {
       :numbering="numberingPreview"
       @close="sendOpen = false"
       @sent="onSent"
-    />
-
-    <RejectDocumentDialog
-      v-if="reviewMessage"
-      :open="rejectOpen"
-      :message-id="reviewMessage.id"
-      @close="rejectOpen = false"
-      @rejected="onRejected"
     />
 
     <div v-if="!canEdit" class="pointer-events-none fixed bottom-4 left-1/2 z-40 -translate-x-1/2">
@@ -2681,5 +3124,6 @@ onBeforeUnmount(() => {
       <Check class="size-3" />
       Guardado
     </div>
+
   </div>
 </template>

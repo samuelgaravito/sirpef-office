@@ -290,6 +290,8 @@ export interface DocumentSummary {
   lockedAt: string | null;
   /** Usuario que aprobó y envió el documento. */
   lockedBy: string | null;
+  /** El documento está en una ventana de edición de emergencia. */
+  emergencyEditOpen?: boolean;
   createdAt: string;
   updatedAt: string;
   /** Fecha de borrado lógico; `null` o ausente = activo. */
@@ -464,6 +466,7 @@ export const INBOX_MESSAGE_STATUSES = [
   'sent',
   'rejected',
   'cancelled',
+  'superseded',
 ] as const;
 
 export type InboxMessageStatus = (typeof INBOX_MESSAGE_STATUSES)[number];
@@ -519,10 +522,18 @@ export interface DocumentRejection {
   documentVersion: number;
 }
 
+export interface InboxSignatureSummary {
+  signedAt: string;
+  serial: string;
+  signerName: string;
+}
+
 export interface InboxMessageDetail extends InboxMessageSummary {
   recipients: InboxRecipient[];
   approvedByName: string | null;
   rejectedReason: string | null;
+  /** Firma electrónica estampada sobre el documento, si existe. */
+  signature: InboxSignatureSummary | null;
   /** Si el remitente puede corregir el memo tras un rechazo. */
   allowSenderEdit: boolean;
   /** Si el remitente puede exportar el memo tras la aprobación. */

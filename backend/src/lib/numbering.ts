@@ -15,7 +15,6 @@ import {
   type DocType,
   type NumberingSeriesConfig,
   type NumberingSeriesState,
-  type VariableValues,
 } from '@sirpefoffice/shared';
 
 import { db, type Database } from '../db/index.js';
@@ -31,7 +30,7 @@ import { badRequest, forbidden, internal, notFound } from './errors.js';
  * Ejecutor de consultas: la conexión normal o una transacción. Permite que la
  * reserva del número y la actualización del documento ocurran juntas.
  */
-export type DbExecutor = Pick<Database, 'insert' | 'update' | 'select'>;
+export type DbExecutor = Pick<Database, 'insert' | 'update' | 'select' | 'delete'>;
 
 export type NumberingSeriesRow = typeof numberingSeries.$inferSelect;
 
@@ -585,17 +584,16 @@ export async function reserveDocumentNumber(
  */
 export async function assignDocumentNumber(
   exec: DbExecutor,
-  document: { id: string; docNumber: string | null; data: VariableValues },
+  document: { id: string; docNumber: string | null },
   series: NumberingSeriesRow,
 ): Promise<string> {
   if (document.docNumber) return document.docNumber;
 
   const reserved = await reserveDocumentNumber(series, exec);
 
-  const nextData: VariableValues = { ...(document.data ?? {}) };
-  // Compatibilidad: las plantillas antiguas usan {{numero}} como campo manual.
-  if (!nextData.numero) nextData.numero = reserved.number;
-
+  // No se toca `data`: los valores de las variables forman parte del hash que
+  // el usuario firma. El correlativo vive solo en sus columnas y se resuelve
+  // al renderizar (`{{numero_documento}}` y, por compatibilidad, `{{numero}}`).
   await exec
     .update(documents)
     .set({
@@ -604,7 +602,6 @@ export async function assignDocumentNumber(
       numberingYear: reserved.year,
       numberingValue: reserved.value,
       numberingSeriesId: series.id,
-      data: nextData,
       updatedAt: new Date(),
     })
     .where(and(eq(documents.id, document.id), isNull(documents.docNumber)));

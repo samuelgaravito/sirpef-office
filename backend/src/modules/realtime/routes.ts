@@ -21,6 +21,9 @@ const CLOSE_FORBIDDEN_ORIGIN = 4403;
  * en la query es solo una alternativa para clientes que no manejen cookies.
  */
 function extractToken(request: FastifyRequest): string | undefined {
+  const header = request.headers.authorization;
+  if (header?.startsWith('Bearer ')) return header.slice(7).trim();
+
   const cookie = request.cookies?.[ACCESS_COOKIE];
   if (cookie) return cookie;
 
@@ -74,7 +77,12 @@ function originAllowed(request: FastifyRequest): boolean {
  * API (y con ello la cookie de sesión).
  */
 export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/ws', { websocket: true }, async (socket, request) => {
+  app.get(
+    '/ws',
+    // Las reconexiones del WebSocket no deben consumir el límite global ni
+    // entrar en un bucle de 429 cuando la pestaña se reconecta.
+    { websocket: true, config: { rateLimit: false } },
+    async (socket, request) => {
     if (!originAllowed(request)) {
       socket.close(CLOSE_FORBIDDEN_ORIGIN, 'Origen no permitido');
       return;
@@ -101,5 +109,6 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         ts: new Date().toISOString(),
       }),
     );
-  });
+    },
+  );
 }

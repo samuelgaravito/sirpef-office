@@ -1,12 +1,12 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { normalizeMenuKeys, type MenuKey } from '@sirpefoffice/shared';
 
 import { db } from '../db/index.js';
-import { users } from '../db/schema.js';
+import { mobileDevices, users } from '../db/schema.js';
 import { env, isProduction } from '../env.js';
-import { forbidden, unauthorized } from './errors.js';
+import { AppError, forbidden, unauthorized } from './errors.js';
 import { accessTokenMaxAgeSeconds, verifyAccessToken, type AccessTokenPayload } from './jwt.js';
 
 /** Identidad autenticada con los menús vigentes leídos de la base local. */
@@ -51,6 +51,28 @@ export async function authenticate(request: FastifyRequest): Promise<Authenticat
     .limit(1);
 
   if (!row?.isActive) throw unauthorized('Cuenta deshabilitada');
+
+  // Un access token de la app Firma lleva el dispositivo. Si la web lo
+  // revocó, la sesión muere aunque el JWT todavía no haya expirado.
+  if (payload.deviceId) {
+    const [device] = await db
+      .select({ status: mobileDevices.status })
+      .from(mobileDevices)
+      .where(
+        and(
+          eq(mobileDevices.userId, payload.sub),
+          eq(mobileDevices.deviceId, payload.deviceId),
+        ),
+      )
+      .limit(1);
+    if (device?.status !== 'active') {
+      throw new AppError(
+        401,
+        'DEVICE_REVOKED',
+        'Este teléfono fue desvinculado. Pide un nuevo código en la web.',
+      );
+    }
+  }
 
   const current: AuthenticatedUser = {
     ...payload,

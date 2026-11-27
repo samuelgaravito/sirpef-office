@@ -19,6 +19,7 @@ import { buildApp } from '../src/app.js';
 import { db, sql } from '../src/db/index.js';
 import { documents, users } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/jwt.js';
+import { approveMessage } from '../src/modules/inbox/approve.js';
 import { publishInboxEvent } from '../src/modules/realtime/events.js';
 import { startRealtimeListener, stopRealtimeListener } from '../src/modules/realtime/hub.js';
 
@@ -178,6 +179,13 @@ async function main(): Promise<void> {
     /* 4. El envío de un documento avisa al administrador que puede aprobarlo. */
     const memberToken = await tokenFor(member);
     const adminToken = await tokenFor(admin);
+    const adminUser = {
+      sub: admin.id,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+      menus: [],
+    } as const;
 
     const created = await call<{ document: { id: string; version: number } }>(
       '/documents',
@@ -188,6 +196,20 @@ async function main(): Promise<void> {
     assert(created.status === 201, 'El asistente crea un borrador');
     const documentId = created.body.document.id;
     createdDocumentIds.push(documentId);
+
+    /* 4b. Un cambio de metadatos avisa al propietario (otra pestaña). */
+    const documentForOwner = waitForEvent(memberSocket.socket, 'document.updated');
+    const renamed = await call(`/documents/${documentId}`, memberToken, 'PATCH', {
+      title: 'Borrador renombrado',
+    });
+    assert(renamed.status === 200, 'El propietario cambia el título del documento');
+    const documentEvent = await documentForOwner;
+    assert(documentEvent !== null, 'El propietario recibe el cambio de documento en vivo');
+    const documentPayload = documentEvent?.payload as { documentId?: string } | null;
+    assert(
+      documentPayload?.documentId === documentId,
+      'El evento de documento identifica el documento cambiado',
+    );
 
     const pendingForAdmin = waitForEvent(adminSocket.socket, 'inbox.message.pending');
     const submitted = await call<{ id: string; status: string }>('/inbox', memberToken, 'POST', {
@@ -213,13 +235,13 @@ async function main(): Promise<void> {
 
     /* 5. La aprobación avisa al remitente. */
     const approvedForMember = waitForEvent(memberSocket.socket, 'inbox.result.approved');
-    const approved = await call<{ status: string }>(
-      `/inbox/${submitted.body.id}/approve`,
-      adminToken,
-      'POST',
-      { expectedVersion: created.body.document.version },
-    );
-    assert(approved.status === 200, 'El administrador aprueba el envío');
+    const approved = await approveMessage({
+      user: adminUser,
+      messageId: submitted.body.id,
+      expectedVersion: created.body.document.version,
+      allowSenderExport: false,
+    });
+    assert(approved.message.status === 'sent', 'El administrador aprueba el envío');
 
     const resultEvent = await approvedForMember;
     assert(

@@ -9,7 +9,7 @@ import {
   Plus,
   Search,
 } from 'lucide-vue-next';
-import { computed, onMounted, ref, type Component } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue';
 import { useRouter } from 'vue-router';
 
 import NewDocumentDialog from '@/components/documents/NewDocumentDialog.vue';
@@ -20,11 +20,12 @@ import ModulePanel from '@/components/layout/ModulePanel.vue';
 import { useAiStatus } from '@/composables/useAiStatus';
 import { useCreateDocument } from '@/composables/useCreateDocument';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { describeError } from '@/lib/error-message';
 import { api } from '@/api/client';
 import { useAuthStore } from '@/stores/auth';
-import type { AiTemplateChoice } from '@sirpefoffice/shared';
+import { isDocumentRealtimeEvent, isInboxRealtimeEvent, type AiTemplateChoice } from '@sirpefoffice/shared';
 import type { ListResponse } from '@/types';
 
 const auth = useAuthStore();
@@ -248,9 +249,22 @@ function rememberOrigin(event: PointerEvent): void {
   panelOrigin.value = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
+
 onMounted(() => {
   void load();
   void loadAiStatus();
+  unsubscribeRealtime = onRealtimeEvent((message) => {
+    if (!isDocumentRealtimeEvent(message.type) && !isInboxRealtimeEvent(message.type)) return;
+    window.clearTimeout(liveTimer);
+    liveTimer = window.setTimeout(() => void load(), 300);
+  });
+});
+
+onBeforeUnmount(() => {
+  window.clearTimeout(liveTimer);
+  unsubscribeRealtime?.();
 });
 </script>
 

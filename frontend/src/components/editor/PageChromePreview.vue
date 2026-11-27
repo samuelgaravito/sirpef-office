@@ -3,14 +3,15 @@ import { renderToHTMLString } from '@tiptap/static-renderer';
 import { computed } from 'vue';
 
 import { bandImageStyleMm } from '@/lib/band-images';
-import { clampChromeWidth, editorExtensions, withEmptyParagraphHeights } from '@sirpefoffice/shared';
-import type { ChromeConfig, ChromeKind } from '@sirpefoffice/shared';
+import { chromeBandHeightMm, clampChromeWidth, editorExtensions, interpolateSimpleContent, withEmptyParagraphHeights } from '@sirpefoffice/shared';
+import type { ChromeConfig, ChromeKind, VariableValues } from '@sirpefoffice/shared';
 
 const props = defineProps<{
   kind: ChromeKind;
   config: ChromeConfig;
   pageNumber: number;
   pageCount: number;
+  values?: VariableValues;
 }>();
 
 const width = computed(() => clampChromeWidth(props.config.widthPercent));
@@ -24,7 +25,7 @@ const html = computed(() => {
   if (!props.config.enabled) return '';
 
   const rendered = renderToHTMLString({
-    content: props.config.content as never,
+    content: interpolateSimpleContent(props.config.content, props.values ?? {}) as never,
     extensions: editorExtensions,
   });
 
@@ -48,7 +49,7 @@ const html = computed(() => {
     <div
       class="wp-chrome-band__surface"
       :style="{
-        minHeight: `${config.heightMm ?? 16}mm`,
+        minHeight: `${chromeBandHeightMm(config, kind)}mm`,
         width: `${width}%`,
         marginLeft: 'auto',
         marginRight: 'auto',

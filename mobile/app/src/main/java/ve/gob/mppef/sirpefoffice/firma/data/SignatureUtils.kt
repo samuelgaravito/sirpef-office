@@ -33,6 +33,18 @@ fun buildSigningPayload(
     signatureSha256,
 ).joinToString("|")
 
+/** Payload que firma la app de firma para vincular o recuperar Token. */
+fun buildTotpDevicePayload(purpose: String, nonce: String): String =
+    listOf("SIRPEF-TOKEN", purpose, nonce).joinToString("|")
+
+/** Payload que demuestra la posesión de la clave durante el alta del teléfono. */
+fun buildPairingPayload(pairToken: String, deviceId: String): String =
+    listOf("SIRPEF-PAIR", pairToken, deviceId).joinToString("|")
+
+/** Payload del login diario; debe coincidir con el backend. */
+fun buildLoginPayload(nonce: String, deviceId: String, identifier: String): String =
+    listOf("SIRPEF-LOGIN", nonce, deviceId, identifier).joinToString("|")
+
 fun strokesToCapture(
     strokes: List<StrokePayload>,
     width: Int = 1000,

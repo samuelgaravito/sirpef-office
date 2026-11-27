@@ -15,30 +15,41 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Fingerprint
+import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ve.gob.mppef.sirpefoffice.firma.ui.UiState
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Danger
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Indigo
@@ -55,6 +66,9 @@ fun ProfileScreen(
     state: UiState,
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    onStartTokenPairing: () -> Unit,
+    onGenerateRecoveryCodes: () -> Unit,
+    onClearTokenDialogs: () -> Unit,
 ) {
     val user = state.user
     Scaffold(
@@ -223,6 +237,83 @@ fun ProfileScreen(
                 Column(Modifier.padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
+                            Icons.Outlined.Key,
+                            contentDescription = null,
+                            tint = Indigo,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "SirpefOffice Token",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Ink,
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (state.tokenStatus?.paired == true) {
+                            "Activo en ${state.tokenStatus.pairedDeviceLabel ?: "tu teléfono Token"}. " +
+                                "La app Token genera el código que autoriza el sellado."
+                        } else {
+                            "Todavía no hay un teléfono Token vinculado. Actívalo antes de firmar."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.tokenStatus?.paired == true) Color(0xFF026B04) else Slate,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onStartTokenPairing,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFE9F1FA),
+                            contentColor = Ink,
+                        ),
+                        enabled = !state.tokenBusy,
+                    ) {
+                        if (state.tokenBusy) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = Indigo,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Outlined.Key, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (state.tokenStatus?.paired == true) {
+                                    "Reemplazar Token"
+                                } else {
+                                    "Activar Token"
+                                },
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = onGenerateRecoveryCodes,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SurfaceSoft,
+                            contentColor = Ink,
+                        ),
+                        enabled = !state.tokenBusy,
+                    ) {
+                        Text("Generar códigos de recuperación", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = White,
+                shadowElevation = 1.dp,
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
                             Icons.Outlined.Smartphone,
                             contentDescription = null,
                             tint = Slate,
@@ -261,5 +352,74 @@ fun ProfileScreen(
                 }
             }
         }
+    }
+
+    if (state.pairingCode != null) {
+        AlertDialog(
+            onDismissRequest = onClearTokenDialogs,
+            title = { Text("Código de vinculación") },
+            text = {
+                Column {
+                    Text(
+                        "En SirpefOffice Token, inicia sesión, elige «Vincular este teléfono» e introduce este código:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    SelectionContainer {
+                        Text(
+                            state.pairingCode,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Ink,
+                            letterSpacing = 2.sp,
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "Caduca en 5 minutos y solo se puede usar una vez. " +
+                            "Si ya había un Token activo, quedará invalidado al vincular el nuevo.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onClearTokenDialogs) { Text("Listo") }
+            },
+        )
+    }
+
+    if (state.recoveryCodes.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = onClearTokenDialogs,
+            title = { Text("Códigos de recuperación") },
+            text = {
+                Column {
+                    Text(
+                        "Guárdalos en un lugar seguro. Se muestran una sola vez y sirven para vincular un teléfono nuevo si pierdes el Token.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Slate,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    SelectionContainer {
+                        Column {
+                            for (code in state.recoveryCodes) {
+                                Text(
+                                    code,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Ink,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onClearTokenDialogs) { Text("Entendido") }
+            },
+        )
     }
 }

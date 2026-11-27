@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowLeft, CalendarDays, ChevronDown, FileText, Loader2, Plus, Search, SlidersHorizontal, Trash2 } from 'lucide-vue-next';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import AppShell from '@/components/layout/AppShell.vue';
@@ -12,8 +12,10 @@ import BaseModal from '@/components/ui/BaseModal.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import { useCreateDocument } from '@/composables/useCreateDocument';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { api } from '@/api/client';
+import { isDocumentRealtimeEvent, isInboxRealtimeEvent } from '@sirpefoffice/shared';
 import {
   DATE_PRESETS,
   dateFilterLabel,
@@ -110,6 +112,9 @@ function clearDates(): void {
 }
 
 let searchTimer: number | undefined;
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
+let loadSeq = 0;
 
 async function loadTemplates(): Promise<void> {
   try {
@@ -138,6 +143,7 @@ async function load(): Promise<void> {
     loading.value = false;
     return;
   }
+  const seq = ++loadSeq;
   loading.value = true;
   try {
     const data = await api.get<ListResponse<DocumentSummary>>('/documents', {
@@ -153,12 +159,13 @@ async function load(): Promise<void> {
       dateFrom: dateFrom.value ? startOfDayIso(dateFrom.value) : undefined,
       dateTo: dateTo.value ? endOfDayIso(dateTo.value) : undefined,
     });
+    if (seq !== loadSeq) return;
     documents.value = data.items;
     total.value = data.total ?? data.items.length;
   } catch (error) {
-    toast.failure(error, 'No se pudieron cargar los documentos');
+    if (seq === loadSeq) toast.failure(error, 'No se pudieron cargar los documentos');
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -235,6 +242,24 @@ async function restore(document: DocumentSummary): Promise<void> {
 onMounted(() => {
   void loadTemplates();
   void load();
+  unsubscribeRealtime = onRealtimeEvent((message) => {
+    if (!isDocumentRealtimeEvent(message.type) && !isInboxRealtimeEvent(message.type)) return;
+    window.clearTimeout(liveTimer);
+    liveTimer = window.setTimeout(() => {
+      if (loading.value) return;
+      // Si el documento borrado deja vacía la página actual, retrocede.
+      if (documents.value.length === 1 && page.value > 1 && message.type === 'document.deleted') {
+        page.value -= 1;
+        return;
+      }
+      void load();
+    }, 250);
+  });
+});
+
+onBeforeUnmount(() => {
+  window.clearTimeout(liveTimer);
+  unsubscribeRealtime?.();
 });
 </script>
 
