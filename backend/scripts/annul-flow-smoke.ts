@@ -11,6 +11,14 @@ import {
   users,
 } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/jwt.js';
+import { approveMessage } from '../src/modules/inbox/approve.js';
+import { totpCredentials } from '../src/db/schema.js';
+import {
+  currentTotpStep,
+  encryptTotpSecret,
+  generateTotpSecret,
+  totpCode,
+} from '../src/lib/totp.js';
 
 const API = process.env.SD_API ?? 'http://localhost:3101/api';
 
@@ -137,6 +145,16 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  const [approverAdmin] = await db
+    .insert(users)
+    .values({
+      email: `smoke-annul-approver-${suffix}@example.com`,
+      name: 'Aprobador de anulación',
+      role: 'admin',
+      isActive: true,
+    })
+    .returning();
+
   const [recipient] = await db
     .insert(users)
     .values({
@@ -147,13 +165,32 @@ async function main(): Promise<void> {
     })
     .returning();
 
-  if (!member || !otherAdmin || !recipient) throw new Error('No se pudieron crear los usuarios');
+  if (!member || !otherAdmin || !approverAdmin || !recipient) {
+    throw new Error('No se pudieron crear los usuarios');
+  }
 
-  const temporaryUserIds = [member.id, otherAdmin.id, recipient.id];
-  const adminToken = await tokenFor(admin);
+  const temporaryUserIds = [member.id, otherAdmin.id, approverAdmin.id, recipient.id];
+  const adminToken = await tokenFor(approverAdmin);
   const memberToken = await tokenFor(member);
   const otherAdminToken = await tokenFor(otherAdmin);
   const recipientToken = await tokenFor(recipient);
+
+  const totpSecret = generateTotpSecret();
+  const encrypted = encryptTotpSecret({ userId: approverAdmin.id, secret: totpSecret });
+  await db.insert(totpCredentials).values({
+    userId: approverAdmin.id,
+    secretEncrypted: encrypted.encrypted,
+    keyId: encrypted.keyId,
+    pairedDeviceId: 'smoke-annul-phone',
+    pairedDeviceLabel: 'Teléfono de prueba',
+  });
+  const adminUser = {
+    sub: approverAdmin.id,
+    email: approverAdmin.email,
+    name: approverAdmin.name,
+    role: approverAdmin.role,
+    menus: [],
+  } as const;
 
   const createdIds: string[] = [];
 
@@ -178,13 +215,16 @@ async function main(): Promise<void> {
     });
     assert(submitted.status === 201, 'El asistente envía el memo a aprobación');
 
-    const approved = await call<{ status: string; docNumber: string | null }>(
-      `/inbox/${submitted.body.id}/approve`,
-      adminToken,
-      'POST',
-      { expectedVersion: version, recipientIds: [recipient.id] },
-    );
-    assert(approved.status === 200 && approved.body.status === 'sent', 'El jefe aprueba el memo');
+    // La aprobación web está deshabilitada: el smoke usa la misma función que
+    // la app móvil, sin pasar por el sellado.
+    const approved = await approveMessage({
+      user: adminUser,
+      messageId: submitted.body.id,
+      expectedVersion: version,
+      allowSenderExport: false,
+      recipientIds: [recipient.id],
+    });
+    assert(approved.message.status === 'sent', 'El jefe aprueba el memo');
 
     const sealed = await call<{ document: { status: string; docNumber: string | null; lockedAt: string | null } }>(
       `/documents/${documentId}`,
@@ -201,26 +241,30 @@ async function main(): Promise<void> {
     assert(approverDetail.status === 200, 'El aprobador abre el mensaje aprobado');
     assert(approverDetail.body.canAnnul === true, 'El aprobador ve la opción de anular');
 
-    const memberCannot = await call(`/inbox/${submitted.body.id}/annul`, memberToken, 'POST', {
+    const code = totpCode({ secret: totpSecret, step: currentTotpStep() });
+    const memberCannot = await call(`/mobile/inbox/${submitted.body.id}/annul`, memberToken, 'POST', {
       expectedVersion: version,
+      code,
     });
     assert(memberCannot.status === 403, 'Un miembro no puede anular aunque sea el remitente');
 
-    const otherAdminCannot = await call(`/inbox/${submitted.body.id}/annul`, otherAdminToken, 'POST', {
+    const otherAdminCannot = await call(`/mobile/inbox/${submitted.body.id}/annul`, otherAdminToken, 'POST', {
       expectedVersion: version,
+      code,
     });
     assert(otherAdminCannot.status === 403, 'Otro administrador distinto del aprobador no puede anular');
 
-    const wrongVersion = await call(`/inbox/${submitted.body.id}/annul`, adminToken, 'POST', {
+    const wrongVersion = await call(`/mobile/inbox/${submitted.body.id}/annul`, adminToken, 'POST', {
       expectedVersion: version + 99,
+      code,
     });
     assert(wrongVersion.status === 409, 'La anulación respeta el versionado optimista');
 
     const annulled = await call<{ ok: boolean; status: string }>(
-      `/inbox/${submitted.body.id}/annul`,
+      `/mobile/inbox/${submitted.body.id}/annul`,
       adminToken,
       'POST',
-      { expectedVersion: version, reason: 'Se emitió por error.' },
+      { expectedVersion: version, reason: 'Se emitió por error.', code },
     );
     assert(annulled.status === 200, 'El aprobador anula el memo');
 
@@ -234,7 +278,7 @@ async function main(): Promise<void> {
     }>(`/inbox/${submitted.body.id}`, adminToken);
     assert(annulledDetail.body.status === 'cancelled', 'El mensaje queda anulado');
     assert(annulledDetail.body.canAnnul === false, 'Un memo anulado ya no se puede volver a anular');
-    assert(annulledDetail.body.annulledByName === admin.name, 'Se conoce quién lo anuló');
+    assert(annulledDetail.body.annulledByName === approverAdmin.name, 'Se conoce quién lo anuló');
     assert(
       annulledDetail.body.annulledReason === 'Se emitió por error.',
       'Se conserva el motivo de la anulación',
@@ -246,8 +290,9 @@ async function main(): Promise<void> {
     );
     assert(Boolean(annulledDetail.body.document.lockedAt), 'El memo anulado sigue bloqueado');
 
-    const secondAnnul = await call(`/inbox/${submitted.body.id}/annul`, adminToken, 'POST', {
+    const secondAnnul = await call(`/mobile/inbox/${submitted.body.id}/annul`, adminToken, 'POST', {
       expectedVersion: version,
+      code,
     });
     assert(secondAnnul.status === 409, 'No se puede anular dos veces');
 

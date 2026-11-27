@@ -1,5 +1,6 @@
 import { relations, sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -40,13 +41,14 @@ export const documentStatusEnum = pgEnum('document_status', [
   'rejected',
   'cancelled',
 ]);
-export const versionKindEnum = pgEnum('version_kind', ['auto', 'manual', 'ai', 'export', 'restore']);
+export const versionKindEnum = pgEnum('version_kind', ['auto', 'manual', 'ai', 'export', 'restore', 'emergency']);
 export const sharePermissionEnum = pgEnum('share_permission', ['owner', 'editor', 'viewer']);
 export const documentMessageStatusEnum = pgEnum('document_message_status', [
   'pending_approval',
   'sent',
   'rejected',
   'cancelled',
+  'superseded',
 ]);
 export const docTypeEnum = pgEnum('doc_type', [
   'memorandum',
@@ -113,11 +115,16 @@ export const refreshTokens = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
     userAgent: text('user_agent'),
     ip: text('ip'),
+    /** Dispositivo móvil que abrió la sesión; null en sesiones web. */
+    deviceId: text('device_id'),
+    /** Momento del último login completo (cédula/correo + huella + TOTP). */
+    authAt: timestamp('auth_at', { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('refresh_tokens_hash_idx').on(t.tokenHash),
     index('refresh_tokens_user_idx').on(t.userId),
+    index('refresh_tokens_device_idx').on(t.deviceId),
   ],
 );
 
@@ -334,6 +341,9 @@ export const documents = pgTable(
     /** Sello de inmutabilidad: al aprobar y enviar el documento deja de editarse. */
     lockedAt: timestamp('locked_at', { withTimezone: true }),
     lockedBy: uuid('locked_by').references(() => users.id, { onDelete: 'set null' }),
+    /** Una edición de emergencia cambió el contenido y el documento está en revisión. */
+    emergencyEditOpen: boolean('emergency_edit_open').notNull().default(false),
+    emergencyEditCount: integer('emergency_edit_count').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
@@ -658,6 +668,32 @@ export const mobileDevices = pgTable(
 );
 
 /**
+ * Código de un solo uso que la web entrega para vincular la app de firma.
+ * Solo se guarda el hash: el valor real se muestra una vez en la web.
+ */
+export const mobilePairingCodes = pgTable(
+  'mobile_pairing_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    createdByUserId: uuid('created_by_user_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('mobile_pairing_codes_user_idx').on(t.userId),
+    index('mobile_pairing_codes_expires_idx').on(t.expiresAt),
+  ],
+);
+
+/**
  * Desafío de un solo uso para firmar. Liga al usuario, al dispositivo, al
  * documento y a la versión exacta que se está firmando.
  */
@@ -680,6 +716,17 @@ export const signatureChallenges = pgTable(
     purpose: text('purpose').notNull().default('approval'),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     usedAt: timestamp('used_at', { withTimezone: true }),
+    /** Marca de autorización con el token TOTP de SirpefOffice Token. */
+    totpVerifiedAt: timestamp('totp_verified_at', { withTimezone: true }),
+    /** Paso TOTP (contador de 30 s) que autorizó el desafío. */
+    totpStep: integer('totp_step'),
+    /** Intentos fallidos de código para este desafío. */
+    totpAttempts: integer('totp_attempts').notNull().default(0),
+    /** Dispositivo que autorizó el desafío. */
+    totpAuthorizedDeviceId: uuid('totp_authorized_device_id').references(
+      () => mobileDevices.id,
+      { onDelete: 'set null' },
+    ),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -719,6 +766,9 @@ export const documentSignatures = pgTable(
     signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
     ip: text('ip'),
     userAgent: text('user_agent'),
+    /** Una revisión de emergencia invalidó esta firma. */
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    supersededReason: text('superseded_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -747,12 +797,167 @@ export const signatureCertificates = pgTable(
     sealedPdfPath: text('sealed_pdf_path').notNull(),
     certificatePdfPath: text('certificate_pdf_path').notNull(),
     sealedPdfSha256: text('sealed_pdf_sha256').notNull(),
+    supersededAt: timestamp('superseded_at', { withTimezone: true }),
+    supersededReason: text('superseded_reason'),
+    supersededBy: uuid('superseded_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex('signature_certificates_serial_idx').on(t.serial),
     uniqueIndex('signature_certificates_token_idx').on(t.verificationTokenHash),
     index('signature_certificates_document_idx').on(t.documentId),
+  ],
+);
+
+/* ───────────────────────── Token TOTP de autorización ───────────────── */
+
+/**
+ * Secreto TOTP de un usuario. Solo puede haber uno activo: al vincular un
+ * teléfono nuevo se rota el secreto y el anterior deja de servir.
+ */
+export const totpCredentials = pgTable(
+  'totp_credentials',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .unique()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Secreto cifrado con AES-256-GCM; nunca se guarda en claro. */
+    secretEncrypted: text('secret_encrypted').notNull(),
+    /** Clave del llavero usada para cifrar. */
+    keyId: text('key_id').notNull().default('1'),
+    algorithm: text('algorithm').notNull().default('SHA1'),
+    digits: integer('digits').notNull().default(6),
+    period: integer('period').notNull().default(30),
+    /** Identificador opaco del teléfono Token vinculado. */
+    pairedDeviceId: text('paired_device_id').notNull(),
+    pairedDeviceLabel: text('paired_device_label').notNull().default(''),
+    /** Último paso TOTP consumido; evita reutilizar el mismo código. */
+    lastUsedStep: bigint('last_used_step', { mode: 'number' }),
+    /** Cambia al rotar el secreto: la app detecta que fue reemplazada. */
+    secretUpdatedAt: timestamp('secret_updated_at', { withTimezone: true }).notNull().defaultNow(),
+    pairedAt: timestamp('paired_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('totp_credentials_user_idx').on(t.userId)],
+);
+
+/** Código de vinculación temporal, guardado solo como hash. */
+export const totpPairingCodes = pgTable(
+  'totp_pairing_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    createdByDeviceId: uuid('created_by_device_id').references(() => mobileDevices.id, {
+      onDelete: 'set null',
+    }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('totp_pairing_codes_hash_idx').on(t.codeHash),
+    index('totp_pairing_codes_user_idx').on(t.userId),
+  ],
+);
+
+/** Código de recuperación de un solo uso, guardado solo como hash. */
+export const totpRecoveryCodes = pgTable(
+  'totp_recovery_codes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    codeHash: text('code_hash').notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('totp_recovery_codes_hash_idx').on(t.codeHash),
+    index('totp_recovery_codes_user_idx').on(t.userId),
+  ],
+);
+
+/** Nonce de un solo uso para firmar operaciones sensibles del dispositivo. */
+export const totpDeviceChallenges = pgTable(
+  'totp_device_challenges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    deviceId: uuid('device_id').references(() => mobileDevices.id, { onDelete: 'cascade' }),
+    /** pairing | recovery */
+    purpose: text('purpose').notNull(),
+    nonceHash: text('nonce_hash').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('totp_device_challenges_nonce_idx').on(t.nonceHash),
+    index('totp_device_challenges_user_idx').on(t.userId),
+  ],
+);
+
+/* ─────────────────── Edición de emergencia ─────────────────────────── */
+
+/**
+ * Ventana auditada para corregir un documento ya aprobado. Solo la abre el
+ * administrador que aprobó la versión vigente y exige TOTP de Token.
+ */
+export const documentEmergencyEdits = pgTable(
+  'document_emergency_edits',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    originalMessageId: uuid('original_message_id').references(() => documentMessages.id, {
+      onDelete: 'set null',
+    }),
+    reason: text('reason').notNull(),
+    previousStatus: text('previous_status').notNull(),
+    previousVersion: integer('previous_version').notNull(),
+    previousLockedAt: timestamp('previous_locked_at', { withTimezone: true }),
+    previousLockedBy: uuid('previous_locked_by').references(() => users.id, {
+      onDelete: 'set null',
+    }),
+    previousDocNumber: text('previous_doc_number'),
+    beforeContentSha256: text('before_content_sha256').notNull(),
+    afterContentSha256: text('after_content_sha256'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    cancelledAt: timestamp('cancelled_at', { withTimezone: true }),
+    resultVersion: integer('result_version'),
+    resultMessageId: uuid('result_message_id').references(() => documentMessages.id, {
+      onDelete: 'set null',
+    }),
+    reauthMethod: text('reauth_method').notNull().default('totp'),
+    totpStep: integer('totp_step'),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    /** open | finished | cancelled | expired */
+    status: text('status').notNull().default('open'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('document_emergency_edits_document_idx').on(t.documentId),
+    uniqueIndex('document_emergency_edits_open_idx')
+      .on(t.documentId)
+      .where(sql`${t.status} = 'open'`),
   ],
 );
 
@@ -882,6 +1087,49 @@ export const documentSignaturesRelations = relations(documentSignatures, ({ one 
   }),
 }));
 
+/**
+ * Suscripciones push por dispositivo/navegador.
+ *
+ * Web usa el endpoint y las claves del navegador; Android usa el token FCM.
+ * El endpoint/token es único en todo el sistema porque identifica al
+ * dispositivo, no al usuario: al iniciar sesión se reasigna al usuario actual.
+ */
+export const pushSubscriptions = pgTable(
+  'push_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** web | android */
+    platform: text('platform').notNull().default('web'),
+    /** Endpoint Web Push o token FCM. */
+    endpoint: text('endpoint').notNull(),
+    p256dh: text('p256dh'),
+    auth: text('auth'),
+    deviceId: uuid('device_id').references(() => mobileDevices.id, { onDelete: 'set null' }),
+    userAgent: text('user_agent').notNull().default(''),
+    appVersion: text('app_version').notNull().default(''),
+    /** active | expired */
+    status: text('status').notNull().default('active'),
+    failureCount: integer('failure_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('push_subscriptions_endpoint_idx').on(t.endpoint),
+    index('push_subscriptions_user_idx').on(t.userId),
+  ],
+);
+
+export const pushSubscriptionsRelations = relations(pushSubscriptions, ({ one }) => ({
+  user: one(users, { fields: [pushSubscriptions.userId], references: [users.id] }),
+  device: one(mobileDevices, {
+    fields: [pushSubscriptions.deviceId],
+    references: [mobileDevices.id],
+  }),
+}));
+
 export const signatureCertificatesRelations = relations(signatureCertificates, ({ one }) => ({
   document: one(documents, {
     fields: [signatureCertificates.documentId],
@@ -919,3 +1167,12 @@ export type DocumentSignatureRow = typeof documentSignatures.$inferSelect;
 export type NewDocumentSignature = typeof documentSignatures.$inferInsert;
 export type SignatureCertificateRow = typeof signatureCertificates.$inferSelect;
 export type NewSignatureCertificate = typeof signatureCertificates.$inferInsert;
+export type DocumentEmergencyEditRow = typeof documentEmergencyEdits.$inferSelect;
+export type NewDocumentEmergencyEdit = typeof documentEmergencyEdits.$inferInsert;
+export type PushSubscriptionRow = typeof pushSubscriptions.$inferSelect;
+export type NewPushSubscription = typeof pushSubscriptions.$inferInsert;
+export type TotpCredentialRow = typeof totpCredentials.$inferSelect;
+export type NewTotpCredential = typeof totpCredentials.$inferInsert;
+export type TotpPairingCodeRow = typeof totpPairingCodes.$inferSelect;
+export type TotpRecoveryCodeRow = typeof totpRecoveryCodes.$inferSelect;
+export type TotpDeviceChallengeRow = typeof totpDeviceChallenges.$inferSelect;

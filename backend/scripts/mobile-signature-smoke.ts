@@ -23,15 +23,23 @@ import {
   documents,
   mobileDevices,
   refreshTokens,
+  numberingSeries,
   signatureCertificates,
+  templates,
   users,
 } from '../src/db/schema.js';
 import { closePdfBrowser } from '../src/export/pdf.js';
 import { env } from '../src/env.js';
 import { generateRefreshToken, refreshTokenExpiry, signAccessToken } from '../src/lib/jwt.js';
+import { numberDocumentInTx } from '../src/lib/counter.js';
 import { hashPassword } from '../src/lib/password.js';
 import { buildSigningPayload, canonicalContentHash, newVerificationToken } from '../src/lib/signature.js';
 import { sha256Hex } from '../src/lib/stable-json.js';
+import {
+  buildTotpDevicePayload,
+  currentTotpStep,
+  totpCode,
+} from '../src/lib/totp.js';
 
 interface ApiResponse<T = unknown> {
   status: number;
@@ -79,11 +87,22 @@ async function main(): Promise<void> {
     .limit(1);
   if (!admin) throw new Error('No hay administrador activo');
 
+  const [signer] = await db
+    .insert(users)
+    .values({
+      email: `smoke-sign-${Date.now()}@example.test`,
+      name: 'Firmante de prueba',
+      role: 'admin',
+      isActive: true,
+    })
+    .returning();
+  if (!signer) throw new Error('No se pudo crear el firmante temporal');
+
   const token = await signAccessToken({
-    sub: admin.id,
-    email: admin.email,
-    name: admin.name,
-    role: admin.role,
+    sub: signer.id,
+    email: signer.email,
+    name: signer.name,
+    role: signer.role,
   });
 
   const app = await buildApp();
@@ -128,7 +147,7 @@ async function main(): Promise<void> {
     // Sesión nativa: refresh y logout sin cookies.
     const refresh = generateRefreshToken();
     await db.insert(refreshTokens).values({
-      userId: admin.id,
+      userId: signer.id,
       tokenHash: refresh.hash,
       expiresAt: refreshTokenExpiry(1),
     });
@@ -160,7 +179,7 @@ async function main(): Promise<void> {
     const [document] = await db
       .insert(documents)
       .values({
-        ownerId: admin.id,
+        ownerId: signer.id,
         title: `Prueba de firma ${Date.now()}`,
         description: 'Documento temporal del smoke de firma móvil',
         docType: 'blank',
@@ -185,7 +204,7 @@ async function main(): Promise<void> {
       .insert(documentMessages)
       .values({
         documentId: document.id,
-        senderId: admin.id,
+        senderId: signer.id,
         subject: 'Solicitud de aprobación de prueba',
         body: 'Aprueba y firma este documento de prueba.',
         status: 'pending_approval',
@@ -196,7 +215,7 @@ async function main(): Promise<void> {
 
     await db.insert(documentMessageRecipients).values({
       messageId: message.id,
-      userId: admin.id,
+      userId: signer.id,
     });
 
     const { publicKey, privateKey } = generateKeyPairSync('ec', {
@@ -220,6 +239,52 @@ async function main(): Promise<void> {
     );
     assert(device.status === 200, 'Se registra la clave pública del dispositivo');
     deviceRowId = device.body.device.id;
+
+    // Vinculación de SirpefOffice Token: nonce firmado + código de un solo uso.
+    const pairingChallenge = await call<{ nonce: string }>(
+      app,
+      '/api/mobile/token/device-challenge',
+      token,
+      'POST',
+      { purpose: 'pairing' },
+      { 'x-device-id': deviceId },
+    );
+    assert(pairingChallenge.status === 200, 'Se crea el desafío de vinculación de Token');
+
+    const pairingPayload = buildTotpDevicePayload({
+      purpose: 'pairing',
+      nonce: pairingChallenge.body.nonce,
+    });
+    const pairingAssertion = cryptoSign(
+      'sha256',
+      Buffer.from(pairingPayload, 'utf8'),
+      { key: privateKey, dsaEncoding: 'der' },
+    ).toString('base64');
+
+    const pairing = await call<{ code: string }>(
+      app,
+      '/api/mobile/token/pairing',
+      token,
+      'POST',
+      { nonce: pairingChallenge.body.nonce, deviceAssertion: pairingAssertion },
+      { 'x-device-id': deviceId },
+    );
+    assert(pairing.status === 200, 'Se genera el código de vinculación de Token');
+
+    const paired = await call<{ secret: string }>(
+      app,
+      '/api/mobile/token/pair',
+      token,
+      'POST',
+      {
+        mode: 'pairing',
+        code: pairing.body.code,
+        deviceId: `smoke-phone-${Date.now()}`,
+        deviceLabel: 'Teléfono de prueba',
+      },
+    );
+    assert(paired.status === 200 && Boolean(paired.body.secret), 'La app Token obtiene el secreto');
+    const totpSecret = paired.body.secret;
 
     const challenge = await call<{
       challengeId: string;
@@ -252,6 +317,25 @@ async function main(): Promise<void> {
       key: privateKey,
       dsaEncoding: 'der',
     }).toString('base64');
+
+    const authorization = await call<{ authorized: boolean }>(
+      app,
+      `/api/documents/${document.id}/sign-authorization`,
+      token,
+      'POST',
+      {
+        messageId: message.id,
+        challengeId: challenge.body.challengeId,
+        code: totpCode({ secret: totpSecret, step: currentTotpStep() }),
+        signatureSha256,
+        deviceAssertion,
+      },
+      { 'x-device-id': deviceId },
+    );
+    assert(
+      authorization.status === 200 && authorization.body.authorized,
+      'El código de Token autoriza el desafío de firma',
+    );
 
     const signed = await call<{
       signed: boolean;
@@ -317,6 +401,76 @@ async function main(): Promise<void> {
     // El hash del contenido coincide con el que se firmó.
     assert(canonicalContentHash(document) === challenge.body.contentSha256, 'El hash del contenido es estable');
 
+    // Regresión: una plantilla numerada SIN variable `numero` no debe cambiar
+    // el hash al aprobar. Antes, `assignDocumentNumber` escribía data.numero y
+    // el sellado devolvía 409.
+    const [numberedTemplate] = await db
+      .insert(templates)
+      .values({
+        ownerId: signer.id,
+        name: `Smoke numerada ${Date.now()}`,
+        docType: 'letter',
+        description: 'Plantilla temporal para probar el hash',
+        schema: [],
+        body: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Número: {{numero_documento}}' }],
+            },
+          ],
+        },
+        numberingEnabled: true,
+      })
+      .returning();
+    if (!numberedTemplate) throw new Error('No se pudo crear la plantilla numerada');
+    await db.insert(numberingSeries).values({
+      templateId: numberedTemplate.id,
+      templateName: numberedTemplate.name,
+      prefix: 'SMK',
+      startValue: 1,
+      padding: 3,
+      includeYear: false,
+      createdBy: signer.id,
+    });
+    const [numberedDocument] = await db
+      .insert(documents)
+      .values({
+        ownerId: signer.id,
+        title: `Smoke hash numerado ${Date.now()}`,
+        docType: 'letter',
+        templateId: numberedTemplate.id,
+        status: 'in_review',
+        content: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Contenido' }] },
+          ],
+        },
+        data: {},
+        version: 1,
+      })
+      .returning();
+    if (!numberedDocument) throw new Error('No se pudo crear el documento numerado');
+
+    const hashBeforeNumber = canonicalContentHash(numberedDocument);
+    const [numberedAfter] = await db.transaction(async (tx) => {
+      await numberDocumentInTx(tx, numberedDocument.id);
+      return tx.select().from(documents).where(eq(documents.id, numberedDocument.id)).limit(1);
+    });
+    assert(Boolean(numberedAfter?.docNumber), 'La plantilla numerada recibe su correlativo');
+    assert(
+      canonicalContentHash(numberedAfter!) === hashBeforeNumber,
+      'Numerar no cambia el hash firmado (plantilla sin variable «numero»)',
+    );
+    assert(
+      numberedAfter!.data.numero === undefined,
+      'La numeración no escribe data.numero',
+    );
+    await db.delete(documents).where(eq(documents.id, numberedDocument.id));
+    await db.delete(templates).where(eq(templates.id, numberedTemplate.id));
+
     console.log(`\n✔ Flujo de firma móvil completo (${signed.body.certificate.serial})`);
   } finally {
     if (deviceRowId) {
@@ -329,6 +483,7 @@ async function main(): Promise<void> {
         force: true,
       });
     }
+    await db.delete(users).where(eq(users.id, signer.id));
     await app.close();
     await closePdfBrowser();
     await sql.end({ timeout: 5 });

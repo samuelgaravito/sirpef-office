@@ -1,4 +1,4 @@
-import type { VariableDef, VariableValues } from './types.js';
+import type { JSONContent, VariableDef, VariableValues } from './types.js';
 
 /**
  * Valores de muestra para las vistas previas y el modo «datos de ejemplo»
@@ -84,4 +84,58 @@ export function sampleValues(schema: VariableDef[]): VariableValues {
   }
 
   return values;
+}
+
+
+/** Espacio duro: conserva la alineación que el usuario escribió. */
+function preserveSpacing(value: string): string {
+  return value
+    .replace(/\t/g, '\u00A0'.repeat(4))
+    .replace(/^ +/gm, (spaces) => '\u00A0'.repeat(spaces.length))
+    .replace(/ {2,}/g, (spaces) => '\u00A0'.repeat(spaces.length));
+}
+
+function valueAt(values: VariableValues, path: string): unknown {
+  const parts = path.split('.');
+  let current: unknown = values;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      current = Number.isInteger(index) ? current[index] : undefined;
+    } else if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+/** Texto que produce el servidor para un valor interpolado. */
+export function variableValueText(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return preserveSpacing(value.join(', '));
+  return preserveSpacing(String(value));
+}
+
+/**
+ * Sustituye variables en el contenido de una cabecera/pie para que el editor
+ * mida el mismo HTML que la vista previa. No expande tablas repetibles.
+ */
+export function interpolateSimpleContent(
+  content: JSONContent,
+  values: VariableValues,
+): JSONContent {
+  const clone = JSON.parse(JSON.stringify(content)) as JSONContent;
+  const walk = (node: JSONContent): void => {
+    if (node.text) {
+      node.text = node.text.replace(/\{\{\s*([\w.[\]]+)\s*\}\}/g, (_match, path: string) =>
+        variableValueText(valueAt(values, path)),
+      );
+    }
+    node.content?.forEach(walk);
+  };
+  walk(clone);
+  return clone;
 }

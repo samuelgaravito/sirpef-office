@@ -14,6 +14,7 @@ import type {
   ChromeKind,
   ChromeSource,
   DesignTokens,
+  VariableValues,
 } from '@sirpefoffice/shared';
 
 interface ChromeBinding {
@@ -28,6 +29,7 @@ const props = defineProps<{
   design: DesignTokens | null;
   header: ChromeBinding;
   footer: ChromeBinding;
+  values?: VariableValues;
   chromeOpen: boolean;
   editable: boolean;
   activeChrome?: 'body' | 'header' | 'footer';
@@ -475,6 +477,7 @@ onBeforeUnmount(() => {
               :config="header.config"
               :page-number="page.index + 1"
               :page-count="displayPages.length"
+              :values="values"
             />
             <PageChromeBand
               v-else-if="chromeOpen && page.index === 0"
@@ -504,6 +507,7 @@ onBeforeUnmount(() => {
               :config="footer.config"
               :page-number="page.index + 1"
               :page-count="displayPages.length"
+              :values="values"
             />
             <PageChromeBand
               v-else-if="chromeOpen && page.index === 0"

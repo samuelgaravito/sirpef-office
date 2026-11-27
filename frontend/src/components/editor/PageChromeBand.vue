@@ -4,7 +4,7 @@ import { PanelBottom, PanelTop, RotateCcw } from 'lucide-vue-next';
 import { computed } from 'vue';
 
 import { bandImageStyleMm } from '@/lib/band-images';
-import { clampChromeWidth } from '@sirpefoffice/shared';
+import { chromeBandHeightMm, clampChromeWidth } from '@sirpefoffice/shared';
 import type { ChromeConfig, ChromeSource } from '@sirpefoffice/shared';
 
 const props = defineProps<{
@@ -38,7 +38,7 @@ const sourceLabel = computed(() =>
     ? 'Personalizado'
     : `Heredado de ${props.source === 'template' ? 'la plantilla' : 'el diseño'}`,
 );
-const heightValue = computed(() => Math.round((props.config?.heightMm ?? 16) * 10) / 10);
+const heightValue = computed(() => Math.round(chromeBandHeightMm(props.config, props.kind) * 10) / 10);
 const widthValue = computed(() => clampChromeWidth(props.config?.widthPercent));
 
 function onHeight(event: Event): void {
@@ -128,7 +128,7 @@ function onWidth(event: Event): void {
       :class="['wp-chrome-band__surface', { 'is-disabled': !config?.enabled }]"
       :style="{
         position: 'relative',
-        minHeight: `${config?.heightMm ?? 16}mm`,
+        minHeight: `${chromeBandHeightMm(config, kind)}mm`,
         width: `${widthValue}%`,
         marginLeft: 'auto',
         marginRight: 'auto',

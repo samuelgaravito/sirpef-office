@@ -29,6 +29,18 @@ interface SirpefApi {
     @POST("auth/mobile/local")
     suspend fun localLogin(@Body body: LocalLoginRequest): StoredSession
 
+    @POST("auth/mobile/pair")
+    suspend fun pairPreview(@Body body: MobilePairRequest): PairPreviewResponse
+
+    @POST("auth/mobile/pair/confirm")
+    suspend fun pairConfirm(@Body body: MobilePairConfirmRequest): StoredSession
+
+    @POST("auth/mobile/login-challenge")
+    suspend fun loginChallenge(@Body body: MobileLoginChallengeRequest): MobileLoginChallengeResponse
+
+    @POST("auth/mobile/login")
+    suspend fun login(@Body body: MobileLoginRequest): StoredSession
+
     @POST("auth/mobile/sva")
     suspend fun exchange(@Body body: MobileSvaRequest): StoredSession
 
@@ -45,6 +57,8 @@ interface SirpefApi {
     suspend fun documents(
         @Query("scope") scope: String,
         @Query("q") query: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("pageSize") pageSize: Int = 20,
     ): DocumentsResponse
 
     @GET("documents/{id}/pdf")
@@ -68,6 +82,52 @@ interface SirpefApi {
         @Path("id") documentId: String,
         @Body body: ChallengeRequest,
     ): ChallengeResponse
+
+    @GET("mobile/token/status")
+    suspend fun tokenStatus(): TokenStatus
+
+    @POST("mobile/token/device-challenge")
+    suspend fun tokenDeviceChallenge(@Body body: TokenPurposeRequest): DeviceChallengeResponse
+
+    @POST("mobile/token/pairing")
+    suspend fun createTokenPairing(@Body body: DeviceProofRequest): PairingCodeResponse
+
+    @POST("mobile/token/recovery-codes")
+    suspend fun createRecoveryCodes(@Body body: DeviceProofRequest): RecoveryCodesResponse
+
+    @POST("documents/{id}/sign-authorization")
+    suspend fun signAuthorization(
+        @Path("id") documentId: String,
+        @Body body: SignAuthorizationRequest,
+    ): SignAuthorizationResponse
+
+    @POST("mobile/inbox/{id}/reject")
+    suspend fun rejectMessage(
+        @Path("id") messageId: String,
+        @Body body: RejectRequest,
+    ): RejectResponse
+
+    @POST("mobile/inbox/{id}/annul")
+    suspend fun annulMessage(
+        @Path("id") messageId: String,
+        @Body body: AnnulRequest,
+    ): AnnulResponse
+
+    @POST("documents/{id}/emergency-edit")
+    suspend fun startEmergencyEdit(
+        @Path("id") documentId: String,
+        @Body body: EmergencyEditRequest,
+    ): EmergencyEditResponse
+
+    @POST("notifications/subscribe")
+    suspend fun registerPushSubscription(
+        @Body body: PushSubscriptionRequest,
+    ): JsonElement
+
+    @POST("notifications/unsubscribe")
+    suspend fun unregisterPushSubscription(
+        @Body body: Map<String, String>,
+    ): JsonElement
 
     @POST("inbox/{id}/approve-and-sign")
     suspend fun approveAndSign(
@@ -93,6 +153,7 @@ interface SirpefApi {
 
 private class SessionInterceptor(
     private val store: SessionStore,
+    private val onDeviceRevoked: () -> Unit,
 ) : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request().newBuilder()
@@ -104,7 +165,12 @@ private class SessionInterceptor(
                 store.current?.let { header("Authorization", "Bearer ${it.accessToken}") }
             }
             .build()
-        return chain.proceed(request)
+        val response = chain.proceed(request)
+        if (response.code == 401) {
+            val body = runCatching { response.peekBody(4096).string() }.getOrNull()
+            if (body?.contains("DEVICE_REVOKED") == true) onDeviceRevoked()
+        }
+        return response
     }
 }
 
@@ -133,12 +199,16 @@ object ApiFactory {
             .create(SvaApi::class.java)
     }
 
-    fun sirpef(baseUrl: String, store: SessionStore): SirpefApi {
+    fun sirpef(
+        baseUrl: String,
+        store: SessionStore,
+        onDeviceRevoked: () -> Unit = {},
+    ): SirpefApi {
         val client = OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
-            .addInterceptor(SessionInterceptor(store))
+            .addInterceptor(SessionInterceptor(store, onDeviceRevoked))
             .addInterceptor(logging())
             .build()
         return Retrofit.Builder()

@@ -11,6 +11,7 @@ import type {
   VariableValues,
 } from '@sirpefoffice/shared';
 import {
+  chromeBandHeightMm,
   clampChromeWidth,
   editorExtensions,
   PAGE_SIZES_CM,
@@ -666,8 +667,8 @@ export function renderChromeHtml(
   );
 }
 
-function chromeBandStyle(config: ChromeConfig): string {
-  const height = Number(config.heightMm);
+function chromeBandStyle(config: ChromeConfig, kind: 'header' | 'footer'): string {
+  const height = chromeBandHeightMm(config, kind);
   const width = clampChromeWidth(config.widthPercent);
   // El ancho debe ser explícito incluso al 100 %: estas bandas viven dentro de
   // contenedores flex y, con márgenes automáticos, sin `width` se encogen al
@@ -748,10 +749,10 @@ export function buildDocumentHtml(options: RenderOptions): string {
   }
 
   const headerBand = headerHtml
-    ? `<div class="doc-header-band" style="${chromeBandStyle(chrome!.header)}">${headerHtml}</div>`
+    ? `<div class="doc-header-band" style="${chromeBandStyle(chrome!.header, 'header')}">${headerHtml}</div>`
     : '';
   const footerBand = footerHtml
-    ? `<div class="doc-footer-band" style="${chromeBandStyle(chrome!.footer)}">${footerHtml}</div>`
+    ? `<div class="doc-footer-band" style="${chromeBandStyle(chrome!.footer, 'footer')}">${footerHtml}</div>`
     : '';
 
   const pageContent = options.forPdf
@@ -811,10 +812,10 @@ export function buildPaginatedDocumentHtml(options: PaginatedRenderOptions): str
       ? renderChromeHtml(chrome.footer, values, 'preview', pageNumber, pageCount)
       : '';
     const headerBand = headerHtml
-      ? `<div class="doc-header-band" style="${chromeBandStyle(chrome!.header)}">${headerHtml}</div>`
+      ? `<div class="doc-header-band" style="${chromeBandStyle(chrome!.header, 'header')}">${headerHtml}</div>`
       : '';
     const footerBand = footerHtml
-      ? `<div class="doc-footer-band" style="${chromeBandStyle(chrome!.footer)}">${footerHtml}</div>`
+      ? `<div class="doc-footer-band" style="${chromeBandStyle(chrome!.footer, 'footer')}">${footerHtml}</div>`
       : '';
 
     let legacyFooter = '';
@@ -923,7 +924,7 @@ export function buildPdfHeaderTemplate(
   const chromeHtml = renderChromeHtml(chrome?.header, values, 'pdf');
   if (chromeHtml && chrome) {
     parts.push(
-      `<div class="doc-chrome-band" style="${chromeBandStyle(chrome.header)}">${chromeHtml}</div>`,
+      `<div class="doc-chrome-band" style="${chromeBandStyle(chrome.header, 'header')}">${chromeHtml}</div>`,
     );
   }
 
@@ -941,7 +942,7 @@ export function buildPdfFooterTemplate(
   if (chrome) {
     const html = renderChromeHtml(chrome.footer, values, 'pdf');
     if (!html) return '<div></div>';
-    return `${chromeTemplateCss(design)}<div class="doc-chrome" style="${pdfChromeOffsetStyle('footer')}"><div class="doc-chrome-band" style="${chromeBandStyle(chrome.footer)}">${html}</div></div>`;
+    return `${chromeTemplateCss(design)}<div class="doc-chrome" style="${pdfChromeOffsetStyle('footer')}"><div class="doc-chrome-band" style="${chromeBandStyle(chrome.footer, 'footer')}">${html}</div></div>`;
   }
 
   if (!design.footer.enabled) return '<div></div>';

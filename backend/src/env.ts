@@ -127,7 +127,7 @@ const envSchema = z.object({
   /** Base pública para los enlaces de verificación del certificado. */
   PUBLIC_APP_URL: z.string().default('http://localhost:5173'),
   /** Vida de un desafío de firma: debe dar tiempo a dibujar y autenticarse. */
-  SIGNATURE_CHALLENGE_TTL_SECONDS: z.coerce.number().int().positive().default(180),
+  SIGNATURE_CHALLENGE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
   /** Tamaño máximo del PNG de la rúbrica. */
   SIGNATURE_MAX_PNG_BYTES: z.coerce.number().int().positive().default(524_288),
   /** Carpeta de PDFs sellados y certificados. */
@@ -135,10 +135,47 @@ const envSchema = z.object({
   /** Prefijo legible de la serie del certificado. */
   SIGNATURE_CERT_SERIAL_PREFIX: z.string().default('SF'),
 
+  /* ── Token TOTP de autorización de firma ──────────────────────────── */
+  /** Emisor que aparece en la URI otpauth://. */
+  TOTP_ISSUER: z.string().default('SirpefOffice'),
+  TOTP_PERIOD: z.coerce.number().int().positive().default(30),
+  TOTP_DIGITS: z.coerce.number().int().min(6).max(8).default(6),
+  /** Pasos de tolerancia hacia atrás y adelante. */
+  TOTP_WINDOW: z.coerce.number().int().min(0).max(2).default(1),
+  TOTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  TOTP_PAIRING_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+  /** Vigencia del código de alta del teléfono de firma. */
+  MOBILE_PAIRING_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /**
+   * Horas que dura una sesión móvil antes de exigir de nuevo
+   * cédula/correo + huella + TOTP. 0 obliga a reautenticar en cada refresh.
+   */
+  MOBILE_REAUTH_HOURS: z.coerce.number().int().min(0).default(24),
+  TOTP_RECOVERY_CODE_COUNT: z.coerce.number().int().min(1).max(20).default(3),
+  /**
+   * Si es true, aprobar y sellar exige un desafío autorizado con TOTP.
+   * Se puede dejar en false durante el despliegue escalonado.
+   */
+  TOTP_REQUIRED_FOR_SIGNING: boolTrueByDefault,
+  /**
+   * Llavero de claves de cifrado: JSON `{"1":"base64-de-32-bytes"}`.
+   * En desarrollo, si está vacío, se deriva una clave temporal de JWT_ACCESS_SECRET.
+   */
+  TOTP_ENCRYPTION_KEYS: z.string().default(''),
+  TOTP_ACTIVE_KEY_ID: z.string().default('1'),
+
   GOOGLE_CLIENT_ID: z.string().default(''),
   GOOGLE_CLIENT_SECRET: z.string().default(''),
   GOOGLE_REDIRECT_URI: z.string().default('http://localhost:3101/auth/google/callback'),
   GOOGLE_DOCUMENT_ID: z.string().default(''),
+
+  /* ── Notificaciones push ──────────────────────────────────────────── */
+  /** Claves VAPID para Web Push (generar con `npx web-push generate-vapid-keys`). */
+  VAPID_PUBLIC_KEY: z.string().default(''),
+  VAPID_PRIVATE_KEY: z.string().default(''),
+  VAPID_SUBJECT: z.string().default('mailto:soporte@sirpefoffice.local'),
+  /** JSON de la cuenta de servicio de Firebase, en base64 o ruta a un archivo. */
+  FCM_SERVICE_ACCOUNT_JSON: z.string().default(''),
 
   // Reservado para futuros usos
   ENABLE_TRACKED_CHANGES: bool,

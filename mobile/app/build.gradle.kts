@@ -5,8 +5,21 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// FCM solo se activa cuando el equipo tiene el archivo de Firebase.
+// Sin él la app compila y funciona; simplemente no recibe push con la app cerrada.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 val svaBaseUrl = providers.gradleProperty("svaBaseUrl").orElse("http://10.0.2.2:5005/").get()
 val sirpefBaseUrl = providers.gradleProperty("sirpefBaseUrl").orElse("http://10.0.2.2:3101/api/").get()
+// Permite capturas en release solo cuando se compila a propósito para pruebas:
+//   ./gradlew :app:assembleRelease -PallowScreenshots=true
+// Sin la propiedad, release mantiene FLAG_SECURE. Debug siempre permite capturas.
+val allowScreenshots = providers.gradleProperty("allowScreenshots")
+    .orElse("false")
+    .get()
+    .toBoolean()
 
 android {
     namespace = "ve.gob.mppef.sirpefoffice.firma"
@@ -24,6 +37,7 @@ android {
 
         buildConfigField("String", "SVA_BASE_URL", "\"$svaBaseUrl\"")
         buildConfigField("String", "SIRPEF_BASE_URL", "\"$sirpefBaseUrl\"")
+        buildConfigField("boolean", "ALLOW_SCREENSHOTS", allowScreenshots.toString())
     }
 
     buildTypes {
@@ -94,6 +108,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.zxing.core)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

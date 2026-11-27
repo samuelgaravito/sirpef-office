@@ -123,6 +123,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const payload = isJson ? await response.json() : await response.text();
 
   if (!response.ok) {
+    if (response.status === 429) {
+      throw new ApiError(
+        429,
+        'RATE_LIMITED',
+        'Demasiadas solicitudes seguidas. Espera unos segundos e inténtalo de nuevo.',
+      );
+    }
     if (!isJson) {
       // Un proxy (Nginx, Caddy) puede responder con HTML en vez de JSON.
       // Mostrar ese HTML dentro de un aviso sería un desastre: se explica

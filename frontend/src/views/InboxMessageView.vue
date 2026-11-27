@@ -23,15 +23,13 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
 import DocumentViewer from '@/components/documents/DocumentViewer.vue';
-import AnnulDocumentDialog from '@/components/inbox/AnnulDocumentDialog.vue';
-import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
-import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import InboxStatusChip from '@/components/inbox/InboxStatusChip.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
 import BaseSpinner from '@/components/ui/BaseSpinner.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { useInboxBadge } from '@/composables/useInboxBadge';
+import { onRealtimeEvent } from '@/composables/useRealtime';
 import { useToast } from '@/composables/useToast';
 import { errorMessage as explainError } from '@/lib/error-message';
 import {
@@ -39,6 +37,7 @@ import {
   type InboxStatusContext,
 } from '@/lib/labels';
 import { normalizeRouteId } from '@/lib/routes';
+import { isDocumentMessage, isInboxMessage } from '@sirpefoffice/shared';
 import { useAuthStore } from '@/stores/auth';
 import type { InboxMessageDetail, InboxMessageSummary, ListResponse } from '@/types';
 
@@ -52,13 +51,12 @@ const message = ref<InboxMessageDetail | null>(null);
 const loading = ref(true);
 const errorMessage = ref('');
 const cancelling = ref(false);
-const annulOpen = ref(false);
-const sendOpen = ref(false);
-const rejectOpen = ref(false);
 const viewerExpanded = ref(false);
 const detailsOpen = ref(true);
 const noteExpanded = ref(false);
 const pendingQueue = ref<InboxMessageSummary[]>([]);
+let liveTimer: number | undefined;
+let unsubscribeRealtime: (() => void) | undefined;
 
 const messageId = computed(() => normalizeRouteId(route.params.id));
 
@@ -231,36 +229,6 @@ async function cancelSend(): Promise<void> {
   }
 }
 
-function openApprove(): void {
-  viewerExpanded.value = false;
-  sendOpen.value = true;
-}
-
-function openReject(): void {
-  viewerExpanded.value = false;
-  rejectOpen.value = true;
-}
-
-function openAnnul(): void {
-  viewerExpanded.value = false;
-  annulOpen.value = true;
-}
-
-async function onRejected(): Promise<void> {
-  rejectOpen.value = false;
-  await load();
-}
-
-async function onAnnulled(): Promise<void> {
-  annulOpen.value = false;
-  await load();
-}
-
-async function onSent(): Promise<void> {
-  sendOpen.value = false;
-  await load();
-}
-
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
@@ -276,15 +244,9 @@ function onKeydown(event: KeyboardEvent): void {
     return;
   }
 
-  if (!canApprove.value || sendOpen.value || rejectOpen.value) return;
+  if (!canApprove.value) return;
 
-  if (event.key === 'a' || event.key === 'A') {
-    event.preventDefault();
-    openApprove();
-  } else if (event.key === 'r' || event.key === 'R') {
-    event.preventDefault();
-    openReject();
-  } else if (event.key === 'e' || event.key === 'E') {
+  if (event.key === 'e' || event.key === 'E') {
     event.preventDefault();
     openDocument();
   } else if (event.key === 'n' || event.key === 'N') {
@@ -297,17 +259,44 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 watch(messageId, () => {
-  sendOpen.value = false;
-  rejectOpen.value = false;
-  annulOpen.value = false;
   viewerExpanded.value = false;
   void load();
 });
+function handleRealtime(event: import('@sirpefoffice/shared').RealtimeMessage): void {
+  const current = message.value?.id;
+  const currentDocument = message.value?.document.id;
+  let relevant = false;
+
+  if (isInboxMessage(event) && event.payload) {
+    relevant =
+      event.payload.messageId === current ||
+      (event.payload.documentId === currentDocument &&
+        (event.type === 'inbox.message.signed' || event.type === 'inbox.message.reviewed'));
+  } else if (isDocumentMessage(event) && event.payload) {
+    relevant = event.payload.documentId === currentDocument;
+  }
+  if (!relevant) return;
+
+  window.clearTimeout(liveTimer);
+  liveTimer = window.setTimeout(async () => {
+    const wasPending = message.value?.status === 'pending_approval';
+    await load();
+    if (wasPending && message.value?.status !== 'pending_approval') {
+      toast.info('Este envío ya fue procesado desde otra sesión.');
+    }
+  }, 250);
+}
+
 onMounted(() => {
   window.addEventListener('keydown', onKeydown);
   void load();
+  unsubscribeRealtime = onRealtimeEvent(handleRealtime);
 });
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown);
+  window.clearTimeout(liveTimer);
+  unsubscribeRealtime?.();
+});
 </script>
 
 <template>
@@ -404,7 +393,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
               <template v-if="canApprove">
                 <p class="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-ink-subtle">
                   <ShieldCheck class="size-3.5 text-warning" />
-                  Tu decisión
+                  Revisión del envío
                 </p>
 
                 <div v-if="message.body" class="mt-2.5">
@@ -442,15 +431,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   </p>
                 </div>
 
-                <div class="mt-3 space-y-2">
-                  <button type="button" class="btn btn-primary btn-sm w-full" @click="openApprove">
-                    <CheckCircle2 class="size-4" />
-                    Aprobar y enviar
-                  </button>
-                  <button type="button" class="btn btn-outline btn-sm w-full" @click="openReject">
-                    <XCircle class="size-4" />
-                    Devolver
-                  </button>
+                <div class="mt-3 rounded-lg border border-warning/20 bg-warning-soft/50 px-2.5 py-2 text-[12.5px] leading-snug text-ink-muted">
+                  <p class="flex items-start gap-1.5">
+                    <ShieldCheck class="mt-0.5 size-3.5 shrink-0 text-warning" />
+                    <span>
+                      La aprobación o el rechazo se realizan desde la
+                      <strong class="font-medium text-ink">aplicación móvil de firma</strong>.
+                    </span>
+                  </p>
                 </div>
 
                 <div
@@ -486,7 +474,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                   </button>
                   <span
                     class="grid size-5 cursor-help place-items-center rounded-full border border-hairline text-[11.5px] font-semibold text-ink-subtle"
-                    title="Atajos: A aprobar · R devolver · E editar · N siguiente"
+                    title="Atajos: E editar · N siguiente. La decisión se toma en la app móvil."
                   >?</span>
                 </div>
               </template>
@@ -611,15 +599,35 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                     Quedó bloqueado como solo lectura.
                   </template>
                 </p>
-                <button
-                  v-if="canAnnul"
-                  type="button"
-                  class="btn btn-danger mt-3 w-full"
-                  @click="openAnnul"
+                <p
+                  v-if="!message.signature && !message.annulledAt"
+                  class="mt-2 rounded-lg border border-warning/20 bg-warning-soft/50 px-2.5 py-2 text-[12px] text-ink-muted"
                 >
-                  <Ban class="size-4" />
-                  Anular documento
-                </button>
+                  <strong class="font-medium text-ink">Pendiente de firma en la app.</strong>
+                  El aprobador debe completar el sellado desde la app móvil de firma para generar el certificado.
+                </p>
+                <div
+                  v-if="message.signature"
+                  class="mt-2 rounded-lg border border-success/20 bg-success-soft/50 px-2.5 py-2 text-[12px] text-ink"
+                >
+                  <p class="flex items-center gap-1.5 font-semibold text-success">
+                    <ShieldCheck class="size-3.5" />
+                    Firmado electrónicamente
+                  </p>
+                  <p class="mt-0.5 text-ink-muted">
+                    {{ message.signature.signerName }} · {{ formatDateTime(message.signature.signedAt) }}
+                  </p>
+                  <p class="mt-0.5 break-all text-[11px] text-ink-subtle">
+                    Serie {{ message.signature.serial }}
+                  </p>
+                </div>
+                <p
+                  v-if="canAnnul"
+                  class="mt-3 rounded-lg border border-hairline bg-surface-hover px-2.5 py-2 text-[12.5px] text-ink-muted"
+                >
+                  Para anularlo, usa <strong class="font-medium text-ink">Anular con Token</strong>
+                  en la app móvil de firma.
+                </p>
                 <button
                   v-if="auth.isAdmin && nextPending"
                   type="button"
@@ -775,20 +783,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
                 El documento cambió desde el envío (v{{ message.documentVersion }} → v{{ message.document.version }}). Revísalo antes de aprobar.
               </template>
               <template v-else>
-                {{ canApprove ? 'Revisa y decide sin salir de la vista.' : 'Vista final del documento.' }}
+                {{ canApprove ? 'La aprobación o el rechazo se realizan desde la app móvil.' : 'Vista final del documento.' }}
               </template>
             </span>
-            <template v-if="canApprove">
-              <button type="button" class="btn btn-outline btn-sm" @click="openReject">
-                <XCircle class="size-4" />
-                Devolver
-              </button>
-              <button type="button" class="btn btn-primary btn-sm" @click="openApprove">
-                <CheckCircle2 class="size-4" />
-                Aprobar y enviar
-              </button>
-            </template>
-            <button v-else type="button" class="btn btn-outline btn-sm" @click="viewerExpanded = false">
+            <button type="button" class="btn btn-outline btn-sm" @click="viewerExpanded = false">
               Cerrar
             </button>
           </div>
@@ -796,37 +794,5 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
       </div>
     </Teleport>
 
-    <RejectDocumentDialog
-      v-if="message"
-      :open="rejectOpen"
-      :message-id="message.id"
-      @close="rejectOpen = false"
-      @rejected="onRejected"
-    />
-
-    <AnnulDocumentDialog
-      v-if="message"
-      :open="annulOpen"
-      :message-id="message.id"
-      :expected-version="message.document.version"
-      @close="annulOpen = false"
-      @annulled="onAnnulled"
-    />
-
-    <SendDocumentDialog
-      v-if="message"
-      :open="sendOpen"
-      mode="approve"
-      :message-id="message.id"
-      :document-id="message.document.id"
-      :document-title="message.document.title"
-      :expected-version="message.document.version"
-      :sent-version="message.documentVersion"
-      :initial-subject="message.subject"
-      :initial-body="message.body"
-      :initial-recipient-ids="message.recipients.map((recipient) => recipient.userId)"
-      @close="sendOpen = false"
-      @sent="onSent"
-    />
   </AppShell>
 </template>

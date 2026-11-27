@@ -115,6 +115,14 @@ export type TemplatePermission = 'owner' | 'editor' | 'viewer';
 
 export interface DocumentDetailResponse {
   canExport: boolean;
+  /** Solo el admin que aprobó la versión vigente puede abrir una emergencia. */
+  canEmergencyEdit: boolean;
+  /** Edición de emergencia abierta por el usuario actual, si existe. */
+  emergencyEdit?: {
+    id: string;
+    reason: string;
+    expiresAt: string;
+  } | null;
   document: DocumentSummary & {
     content: JSONContent;
     data: VariableValues;

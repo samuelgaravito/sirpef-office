@@ -18,7 +18,11 @@ const emit = defineEmits<{
 }>();
 
 const isLocked = computed(
-  () => Boolean(props.document.lockedAt) || props.document.status === 'sent' || props.document.status === 'cancelled',
+  () =>
+    Boolean(props.document.lockedAt) ||
+    props.document.status === 'sent' ||
+    props.document.status === 'cancelled' ||
+    Boolean(props.document.emergencyEditOpen),
 );
 
 /** Número del documento o, si es borrador, el previsto (con su aviso en el título). */

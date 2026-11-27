@@ -19,8 +19,15 @@ export type UserRole = 'admin' | 'member';
 const RANK: Record<Permission, number> = { viewer: 1, editor: 2, owner: 3 };
 
 /** Un documento enviado, anulado (o sellado explícitamente) es de solo lectura. */
-export function isDocumentLocked(doc: Pick<DocumentRow, 'lockedAt' | 'status'>): boolean {
-  return doc.lockedAt !== null || doc.status === 'sent' || doc.status === 'cancelled';
+export function isDocumentLocked(
+  doc: Pick<DocumentRow, 'lockedAt' | 'status'> & { emergencyEditOpen?: boolean },
+): boolean {
+  return (
+    doc.lockedAt !== null ||
+    doc.status === 'sent' ||
+    doc.status === 'cancelled' ||
+    Boolean(doc.emergencyEditOpen)
+  );
 }
 
 /** Impide cualquier escritura sobre un documento ya aprobado y enviado. */
@@ -44,7 +51,7 @@ export function assertDocumentMutable(doc: DocumentRow): void {
 export async function canExportDocument(
   userId: string,
   role: UserRole,
-  doc: Pick<DocumentRow, 'id' | 'lockedAt' | 'status'>,
+  doc: Pick<DocumentRow, 'id' | 'lockedAt' | 'status'> & { emergencyEditOpen?: boolean },
 ): Promise<boolean> {
   if (role === 'admin') {
     if (!isDocumentLocked(doc)) return true;
@@ -113,9 +120,24 @@ export async function getDocumentAccess(
     .where(and(eq(documentShares.documentId, documentId), eq(documentShares.userId, userId)))
     .limit(1);
 
-  if (!share) throw notFound('Documento no encontrado');
+  if (share) return { document: doc, permission: share.permission };
 
-  return { document: doc, permission: share.permission };
+  // El aprobador conserva acceso al documento que aprobó, aunque no sea el
+  // propietario ni tenga una compartición explícita. Es necesario para poder
+  // revisarlo, exportarlo o abrir una edición de emergencia.
+  const [approver] = await db
+    .select({ id: documentMessages.id })
+    .from(documentMessages)
+    .where(
+      and(
+        eq(documentMessages.documentId, documentId),
+        eq(documentMessages.approvedById, userId),
+      ),
+    )
+    .limit(1);
+  if (approver) return { document: doc, permission: 'editor' };
+
+  throw notFound('Documento no encontrado');
 }
 
 /** Exige un permiso mínimo ('viewer' < 'editor' < 'owner'). */
