@@ -21,10 +21,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.fragment.app.FragmentActivity
 import ve.gob.mppef.sirpefoffice.firma.ui.screens.CertificateScreen
+import ve.gob.mppef.sirpefoffice.firma.ui.screens.DailyLoginScreen
 import ve.gob.mppef.sirpefoffice.firma.ui.screens.DocumentScreen
 import ve.gob.mppef.sirpefoffice.firma.ui.screens.HomeScreen
-import ve.gob.mppef.sirpefoffice.firma.ui.screens.LoginScreen
+import ve.gob.mppef.sirpefoffice.firma.ui.screens.PairingScreen
+import ve.gob.mppef.sirpefoffice.firma.ui.screens.PostPairingScreen
 import ve.gob.mppef.sirpefoffice.firma.ui.screens.ProfileScreen
+import ve.gob.mppef.sirpefoffice.firma.ui.components.VaultDoorOverlay
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Background
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Indigo
 
@@ -47,6 +50,16 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
             state.screen == Screen.PROFILE,
     ) {
         viewModel.back()
+    }
+
+    // El onboarding de Token es obligatorio: no se sale con Atrás.
+    BackHandler(enabled = state.screen == Screen.POST_PAIRING) { }
+
+    // En el login diario, Atrás vuelve del TOTP al identificador.
+    BackHandler(
+        enabled = state.screen == Screen.LOGIN && state.loginStep == LoginStep.TOTP,
+    ) {
+        viewModel.cancelDailyLogin()
     }
 
     // Las cabeceras de login/inicio son oscuras; las demás pantallas usan
@@ -72,10 +85,32 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
             }
         } else {
             when (state.screen) {
-                Screen.LOGIN -> LoginScreen(
-                    loading = state.loading,
-                    onLogin = viewModel::login,
-                    onLocalLogin = viewModel::loginLocal,
+                Screen.LOGIN -> if (state.enrolled) {
+                    DailyLoginScreen(
+                        state = state,
+                        onStart = { identifier ->
+                            viewModel.startDailyLogin(identifier, activity)
+                        },
+                        onSubmit = viewModel::submitDailyLogin,
+                        onRecoveryMode = viewModel::setLoginRecoveryMode,
+                        onBack = viewModel::cancelDailyLogin,
+                    )
+                } else {
+                    PairingScreen(
+                        state = state,
+                        onPair = viewModel::pair,
+                        onConfirm = { viewModel.confirmPairing(activity) },
+                        onCancel = viewModel::cancelPairing,
+                        onDebugLocalLogin = viewModel::debugLocalLogin,
+                    )
+                }
+
+                Screen.POST_PAIRING -> PostPairingScreen(
+                    state = state,
+                    onStartTokenPairing = { viewModel.startTokenPairing(activity) },
+                    onGenerateRecoveryCodes = { viewModel.generateRecoveryCodes(activity) },
+                    onRefreshTokenStatus = viewModel::refreshTokenStatus,
+                    onFinish = viewModel::finishPostPairing,
                 )
 
                 Screen.HOME -> HomeScreen(
@@ -100,6 +135,14 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     onReject = viewModel::rejectDocument,
                     onRejectReason = viewModel::setRejectReason,
                     onAllowEdit = viewModel::setAllowEdit,
+                    onSignApproved = viewModel::signApproved,
+                    onAnnul = viewModel::startAnnul,
+                    onAnnulReason = viewModel::setAnnulReason,
+                    onEmergency = viewModel::startEmergencyEdit,
+                    onEmergencyReason = viewModel::setEmergencyReason,
+                    onSubmitTotp = viewModel::submitTotp,
+                    onCancelTotp = viewModel::cancelTotp,
+                    onTotpPrefillConsumed = viewModel::clearTotpPrefill,
                 )
 
                 Screen.CERTIFICATE -> CertificateScreen(
@@ -111,8 +154,15 @@ fun SirpefApp(viewModel: MainViewModel, activity: FragmentActivity) {
                     state = state,
                     onBack = viewModel::back,
                     onLogout = viewModel::logout,
+                    onStartTokenPairing = { viewModel.startTokenPairing(activity) },
+                    onGenerateRecoveryCodes = { viewModel.generateRecoveryCodes(activity) },
+                    onClearTokenDialogs = viewModel::clearTokenDialogs,
                 )
             }
+        }
+
+        if (state.vaultOpening && state.screen == Screen.HOME) {
+            VaultDoorOverlay(onFinished = viewModel::onVaultOpened)
         }
 
         SnackbarHost(

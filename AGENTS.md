@@ -13,10 +13,12 @@ también.
 
 - **No es un workspace npm.** No hay `package.json` en la raíz. Hay **tres apps
   independientes**: `backend/` y `frontend/` (cada una con su `package.json`,
-  `package-lock.json` y `node_modules`) y **`mobile/`** (Gradle/Kotlin, sin npm). Además
-  está **`agent/`**: el agente de IA local, un proyecto mínimo aparte (solo depende de
-  `ws`) que se despliega como contenedor por equipo. Ejecuta `npm` siempre desde una de
-  las carpetas Node; la app Android se compila con Gradle.
+  `package-lock.json` y `node_modules`) y **`mobile/`** (Gradle/Kotlin, sin npm).
+  Además está **`sirpefoffice-token/`**, la segunda app Android (token TOTP de
+  autorización), también Gradle/Kotlin y sin npm. **`agent/`** es el agente de IA
+  local, un proyecto mínimo aparte (solo depende de `ws`) que se despliega como
+  contenedor por equipo. Ejecuta `npm` siempre desde una de las carpetas Node; las
+  apps Android se compilan con Gradle.
 - **`shared/src/` es la fuente única** de tipos, contratos y extensiones TipTap.
   `scripts/sync-shared.mjs` la **copia** a `backend/src/shared/` y `frontend/src/shared/`.
   Esas copias **están en `.gitignore` y se regeneran**: **nunca las edites**, edita
@@ -49,6 +51,9 @@ cd frontend && npm run build       # vue-tsc + bundle de Vite
 cd mobile && ./gradlew :app:testDebugUnitTest
 cd mobile && ./gradlew :app:lintDebug
 cd mobile && ./gradlew :app:assembleDebug
+cd sirpefoffice-token && ./gradlew :app:testDebugUnitTest
+cd sirpefoffice-token && ./gradlew :app:lintDebug
+cd sirpefoffice-token && ./gradlew :app:assembleDebug
 ```
 
 - **La API no se compila**: corre TypeScript directo con `tsx` (también en producción:
@@ -101,8 +106,13 @@ por terminado: `backend: npm run typecheck` y `frontend: npm run typecheck`.
   reales: solo el aprobador puede anular, se conserva el número y el sellado, el
   destinatario deja de verlo y HTML/PDF/DOCX llevan la marca de agua «ANULADO».
 - `npm run smoke:mobile-sign` prueba la firma móvil completa contra **PostgreSQL y Chrome
-  reales**: refresh/logout nativo, registro de clave EC, challenge, aprobación + firma,
-  PDF sellado, certificado y verificación pública. Limpia sus datos y archivos al final.
+  reales**: refresh/logout nativo, registro de clave EC, vinculación de Token, challenge,
+  autorización TOTP, aprobación + firma, PDF sellado, certificado y verificación pública.
+  Limpia sus datos y archivos al final.
+- `npm run smoke:token` prueba el token TOTP y la autorización de firma contra PostgreSQL:
+  vectores RFC 6238, vinculación, códigos de recuperación, replay, reset y limpieza.
+- `npm run smoke:emergency-edit` prueba la edición de emergencia con TOTP: solo el
+  aprobador, mensaje y certificado anteriores supersedidos y revisión pendiente.
 - `npm run smoke:*` restantes (inbox, annul, numbering, campaign, template-share) necesitan **la API
   levantada** en `SD_API` (por defecto `http://localhost:3101/api`) y **la misma base de
   datos**: importan `src/db/index.js` y firman tokens con `signAccessToken`. Crean
@@ -206,8 +216,9 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d
   flujos, API y render (léelo antes de tocar render o numeración). `docs/SVA.md` = integración
   con SVA y sus modos de autenticación (`local` / `hybrid` / `sva`).
   `docs/NOTIFICACIONES.md` = push dentro/fuera y contrato de eventos;
-  `docs/FIREBASE.md` = pasos para activar FCM en Android.
+  `docs/FIREBASE.md` = pasos para activar FCM en Android; `docs/TOKEN.md` = segunda app
+  Android, TOTP, vinculación, recuperación, retorno a Firma y edición de emergencia.
 - La tabla de variables del README y `docs/ARQUITECTURA.md` están **al día** con el código
-  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **21 tablas**), pero
+  (`ACCESS_TOKEN_TTL=8h`, `REFRESH_TOKEN_TTL_DAYS=90`, **4 diseños** y **30 tablas**), pero
   compruébalo: si vuelve a haber discrepancia, **manda el código ejecutable**.
 - Si el README y el código discrepan, **manda el código ejecutable**.

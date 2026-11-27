@@ -25,12 +25,11 @@ import {
 import { logActivity } from '../../lib/activity.js';
 import { assertDocumentDataComplete } from '../../lib/document-data.js';
 import { authenticate, requireAdmin } from '../../lib/auth-guard.js';
-import { numberDocumentInTx, previewDocumentNumber } from '../../lib/counter.js';
-import { badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
+import { previewDocumentNumber } from '../../lib/counter.js';
+import { AppError, badRequest, conflict, forbidden, internal, notFound } from '../../lib/errors.js';
 import { saveVersion } from '../../lib/versions.js';
 import { toSummary } from '../documents/routes.js';
 import { publishDocumentEvent, publishInboxEvent } from '../realtime/events.js';
-import { approveMessage } from './approve.js';
 
 /* ───────────────────────────── Esquemas ───────────────────────────── */
 
@@ -53,27 +52,6 @@ const createSchema = z.object({
   subject: z.string().trim().min(1).max(240),
   body: z.string().max(5000).default(''),
   expectedVersion: z.number().int().positive(),
-});
-
-const approveSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  subject: z.string().trim().min(1).max(240).optional(),
-  body: z.string().max(5000).optional(),
-  recipientIds: z.array(z.uuid()).min(1).max(50).optional(),
-  /** Si el asistente podrá exportar el memo una vez sellado. */
-  allowSenderExport: z.boolean().default(false),
-});
-
-const rejectSchema = z.object({
-  reason: z.string().trim().min(1).max(1000),
-  /** Si el asistente puede corregir y reenviar el memo (por defecto, sí). */
-  allowEdit: z.boolean().default(true),
-});
-
-const annulSchema = z.object({
-  expectedVersion: z.number().int().positive(),
-  /** Motivo opcional para dejar constancia de la anulación. */
-  reason: z.string().trim().max(1000).optional(),
 });
 
 const patchSchema = z
@@ -621,8 +599,6 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
 
     const now = new Date();
     let messageId = '';
-    let assignedDocNumber: string | null = null;
-    const direct = user.role === 'admin';
     let adminIds: string[] = [];
 
     await db.transaction(async (tx) => {
@@ -633,11 +609,11 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
           senderId: user.sub,
           subject: body.subject,
           body: body.body,
-          status: direct ? 'sent' : 'pending_approval',
+          status: 'pending_approval',
           documentVersion: document.version,
-          approvedById: direct ? user.sub : null,
-          approvedAt: direct ? now : null,
-          sentAt: direct ? now : null,
+          approvedById: null,
+          approvedAt: null,
+          sentAt: null,
         })
         .returning();
 
@@ -649,407 +625,93 @@ export async function inboxRoutes(app: FastifyInstance): Promise<void> {
         .insert(documentMessageRecipients)
         .values(recipientIds.map((userId) => ({ messageId: message.id, userId })));
 
-      if (direct) {
-        await tx
-          .update(documents)
-          .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
-          .where(eq(documents.id, document.id));
+      await tx
+        .update(documents)
+        .set({ status: 'in_review', updatedAt: now })
+        .where(eq(documents.id, document.id));
 
-        // El administrador envía directamente: el documento se oficializa y
-        // recibe su correlativo en la misma transacción del sello.
-        assignedDocNumber = await numberDocumentInTx(tx, document.id);
-
+      adminIds = await activeAdminIds();
+      if (adminIds.length > 0) {
         await tx
           .insert(documentShares)
           .values(
-            recipientIds.map((userId) => ({
+            adminIds.map((userId) => ({
               documentId: document.id,
               userId,
-              permission: 'viewer' as const,
+              permission: 'editor' as const,
             })),
           )
           .onConflictDoNothing();
-      } else {
-        await tx
-          .update(documents)
-          .set({ status: 'in_review', updatedAt: now })
-          .where(eq(documents.id, document.id));
-
-        adminIds = await activeAdminIds();
-        if (adminIds.length > 0) {
-          await tx
-            .insert(documentShares)
-            .values(
-              adminIds.map((userId) => ({
-                documentId: document.id,
-                userId,
-                permission: 'editor' as const,
-              })),
-            )
-            .onConflictDoNothing();
-        }
       }
     });
 
-    if (direct) {
-      await saveVersion(document.id, user.sub, 'manual', 'Aprobado y enviado desde la bandeja');
-      await logActivity(user.sub, 'document', document.id, 'sent', {
-        messageId,
-        recipientIds,
-        direct: true,
-      });
-      await publishInboxEvent({
-        type: 'inbox.message.created',
-        userIds: recipientIds,
-        messageId,
-        documentId: document.id,
-        documentTitle: document.title,
-        subject: body.subject,
-        actorId: user.sub,
-        actorName: user.name,
-        status: 'sent',
-      });
+    await logActivity(user.sub, 'document', document.id, 'submitted', {
+      messageId,
+      recipientIds,
+    });
+    // Guarda la versión exacta que se envió a revisión para poder compararla
+    // con los cambios posteriores desde el editor.
+    await saveVersion(document.id, user.sub, 'manual', 'Enviado a aprobación');
+    // El aviso va a los administradores: son los que pueden aprobarlo.
+    await publishInboxEvent({
+      type: 'inbox.message.pending',
+      userIds: adminIds,
+      messageId,
+      documentId: document.id,
+      documentTitle: document.title,
+      subject: body.subject,
+      actorId: user.sub,
+      actorName: user.name,
+      status: 'pending_approval',
+    });
 
-      await publishDocumentEvent({
-        type: 'document.locked',
-        documentId: document.id,
-        documentTitle: document.title,
-        actorId: user.sub,
-        actorName: user.name,
-        version: document.version,
-        updatedAt: now.toISOString(),
-        change: 'lock',
-        status: 'sent',
-      });
-    } else {
-      await logActivity(user.sub, 'document', document.id, 'submitted', {
-        messageId,
-        recipientIds,
-      });
-      // Guarda la versión exacta que se envió a revisión para poder compararla
-      // con los cambios posteriores desde el editor.
-      await saveVersion(document.id, user.sub, 'manual', 'Enviado a aprobación');
-      // El aviso va a los administradores: son los que pueden aprobarlo.
-      await publishInboxEvent({
-        type: 'inbox.message.pending',
-        userIds: adminIds,
-        messageId,
-        documentId: document.id,
-        documentTitle: document.title,
-        subject: body.subject,
-        actorId: user.sub,
-        actorName: user.name,
-        status: 'pending_approval',
-      });
-
-      await publishDocumentEvent({
-        type: 'document.updated',
-        documentId: document.id,
-        documentTitle: document.title,
-        actorId: user.sub,
-        actorName: user.name,
-        version: document.version,
-        updatedAt: now.toISOString(),
-        change: 'status',
-        status: 'in_review',
-      });
-    }
+    await publishDocumentEvent({
+      type: 'document.updated',
+      documentId: document.id,
+      documentTitle: document.title,
+      actorId: user.sub,
+      actorName: user.name,
+      version: document.version,
+      updatedAt: now.toISOString(),
+      change: 'status',
+      status: 'in_review',
+    });
 
     return reply.status(201).send({
       id: messageId,
-      status: direct ? 'sent' : 'pending_approval',
-      docNumber: assignedDocNumber,
+      status: 'pending_approval',
+      docNumber: null,
     });
   });
 
-  /** El jefe aprueba, sella el documento y lo envía a los destinatarios. */
+  /** Decisión deshabilitada en la web: solo la app móvil puede aprobar. */
   app.post('/:id/approve', async (request) => {
-    const user = await requireAdmin(request);
-    const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const body = approveSchema.parse(request.body);
-
-    const result = await approveMessage({
-      user,
-      messageId: id,
-      expectedVersion: body.expectedVersion,
-      subject: body.subject,
-      body: body.body,
-      allowSenderExport: body.allowSenderExport,
-      recipientIds: body.recipientIds,
-    });
-
-    return {
-      ok: true,
-      id,
-      status: 'sent',
-      docNumber: result.docNumber,
-    };
+    await requireAdmin(request);
+    throw new AppError(
+      409,
+      'WEB_APPROVAL_DISABLED',
+      'La aprobación se realiza desde la app móvil de firma.',
+    );
   });
 
-  /** Devuelve el documento al asistente con un motivo. */
+  /** Decisión deshabilitada en la web: solo la app móvil puede rechazar. */
   app.post('/:id/reject', async (request) => {
-    const user = await requireAdmin(request);
-    const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const body = rejectSchema.parse(request.body);
-
-    const [message] = await db
-      .select()
-      .from(documentMessages)
-      .where(eq(documentMessages.id, id))
-      .limit(1);
-
-    if (!message) throw notFound('Mensaje no encontrado');
-    if (message.status !== 'pending_approval') {
-      throw conflict('Este envío ya fue procesado');
-    }
-
-    const [document] = await db
-      .select()
-      .from(documents)
-      .where(eq(documents.id, message.documentId))
-      .limit(1);
-
-    if (!document || document.deletedAt) throw notFound('Documento no encontrado');
-    assertDocumentMutable(document);
-
-    const now = new Date();
-    const allowEdit = body.allowEdit;
-    await db.transaction(async (tx) => {
-      await tx
-        .update(documentMessages)
-        .set({
-          status: 'rejected',
-          rejectedReason: body.reason,
-          allowSenderEdit: allowEdit,
-          approvedById: user.sub,
-          approvedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(documentMessages.id, id));
-
-      await tx
-        .update(documents)
-        .set({
-          status: allowEdit ? 'draft' : 'rejected',
-          // Si no se permite corregir, el memo queda cerrado como solo lectura.
-          lockedAt: allowEdit ? null : now,
-          lockedBy: allowEdit ? null : user.sub,
-          updatedAt: now,
-        })
-        .where(eq(documents.id, document.id));
-    });
-
-    await logActivity(user.sub, 'document', document.id, 'rejected', {
-      messageId: id,
-      reason: body.reason,
-      allowEdit,
-    });
-
-    // Solo el remitente se entera del rechazo.
-    await publishInboxEvent({
-      type: 'inbox.result.rejected',
-      userIds: [message.senderId],
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject: message.subject,
-      actorId: user.sub,
-      actorName: user.name,
-      status: 'rejected',
-    });
-
-    // El aprobador que tiene la vista abierta (u otra pestaña suya) debe ver
-    // que el envío ya no está pendiente.
-    await publishInboxEvent({
-      type: 'inbox.message.reviewed',
-      userIds: [user.sub],
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject: message.subject,
-      actorId: user.sub,
-      actorName: user.name,
-      status: 'rejected',
-    });
-
-    await publishDocumentEvent({
-      type: allowEdit ? 'document.updated' : 'document.locked',
-      documentId: document.id,
-      documentTitle: document.title,
-      actorId: user.sub,
-      actorName: user.name,
-      version: document.version,
-      updatedAt: now.toISOString(),
-      change: allowEdit ? 'status' : 'lock',
-      status: allowEdit ? 'draft' : 'rejected',
-    });
-
-    return { ok: true, id, status: 'rejected', allowEdit };
+    await requireAdmin(request);
+    throw new AppError(
+      409,
+      'WEB_REJECT_DISABLED',
+      'El rechazo se realiza desde la app móvil de firma.',
+    );
   });
 
-  /** El remitente (o un admin) cancela una solicitud pendiente. */
-  app.post('/:id/cancel', async (request) => {
-    const user = await authenticate(request);
-    const { id } = z.object({ id: z.uuid() }).parse(request.params);
-
-    const [message] = await db
-      .select()
-      .from(documentMessages)
-      .where(eq(documentMessages.id, id))
-      .limit(1);
-
-    if (!message) throw notFound('Mensaje no encontrado');
-    if (message.senderId !== user.sub && user.role !== 'admin') {
-      throw forbidden('Solo el remitente o un administrador pueden cancelar el envío');
-    }
-    if (message.status !== 'pending_approval') {
-      throw conflict('Solo se puede cancelar un envío pendiente');
-    }
-
-    const { document } = await assertDocument(user.sub, message.documentId, 'viewer');
-    assertDocumentMutable(document);
-
-    const now = new Date();
-    await db.transaction(async (tx) => {
-      await tx
-        .update(documentMessages)
-        .set({ status: 'cancelled', updatedAt: now })
-        .where(eq(documentMessages.id, id));
-
-      await tx
-        .update(documents)
-        .set({ status: 'draft', updatedAt: now })
-        .where(eq(documents.id, document.id));
-    });
-
-    await logActivity(user.sub, 'document', document.id, 'cancelled', { messageId: id });
-
-    // El remitente y los administradores se enteran de la cancelación.
-    await publishInboxEvent({
-      type: 'inbox.message.cancelled',
-      userIds: [message.senderId, ...(await activeAdminIds())],
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject: message.subject,
-      actorId: user.sub,
-      actorName: user.name,
-      status: 'cancelled',
-    });
-
-    await publishDocumentEvent({
-      type: 'document.updated',
-      documentId: document.id,
-      documentTitle: document.title,
-      actorId: user.sub,
-      actorName: user.name,
-      version: document.version,
-      updatedAt: now.toISOString(),
-      change: 'status',
-      status: 'draft',
-    });
-
-    return { ok: true, id, status: 'cancelled' };
-  });
-
-  /**
-   * Anula un memo ya aprobado y enviado.
-   *
-   * Solo puede hacerlo el administrador que lo aprobó. El memo queda
-   * «Anulado», conserva su número correlativo y sigue bloqueado en solo
-   * lectura; deja de aparecer en la bandeja de los destinatarios.
-   */
+  /** Decisión deshabilitada en la web: solo la app móvil puede anular. */
   app.post('/:id/annul', async (request) => {
-    const admin = await requireAdmin(request);
-    const { id } = z.object({ id: z.uuid() }).parse(request.params);
-    const body = annulSchema.parse(request.body);
-
-    const [message] = await db
-      .select()
-      .from(documentMessages)
-      .where(eq(documentMessages.id, id))
-      .limit(1);
-
-    if (!message) throw notFound('Mensaje no encontrado');
-    if (message.status !== 'sent' || !message.sentAt) {
-      throw conflict('Solo se puede anular un memo aprobado y enviado');
-    }
-    if (message.approvedById !== admin.sub) {
-      throw forbidden(
-        'Solo el administrador que aprobó este documento puede anularlo',
-      );
-    }
-    if (message.annulledAt) {
-      throw conflict('Este memo ya fue anulado');
-    }
-
-    const [document] = await db
-      .select()
-      .from(documents)
-      .where(eq(documents.id, message.documentId))
-      .limit(1);
-
-    if (!document || document.deletedAt) throw notFound('Documento no encontrado');
-    if (document.version !== body.expectedVersion) {
-      throw conflict('El documento cambió desde que lo abriste', {
-        currentVersion: document.version,
-      });
-    }
-
-    const now = new Date();
-    const reason = body.reason && body.reason.length > 0 ? body.reason : null;
-
-    await db.transaction(async (tx) => {
-      await tx
-        .update(documentMessages)
-        .set({
-          status: 'cancelled',
-          annulledAt: now,
-          annulledReason: reason,
-          updatedAt: now,
-        })
-        .where(eq(documentMessages.id, id));
-
-      // El memo sigue sellado (locked_at/locked_by) y conserva su número:
-      // lo único que cambia es que queda marcado como anulado.
-      await tx
-        .update(documents)
-        .set({ status: 'cancelled', updatedAt: now })
-        .where(eq(documents.id, document.id));
-    });
-
-    await saveVersion(document.id, admin.sub, 'manual', 'Anulado');
-    await logActivity(admin.sub, 'document', document.id, 'annulled', {
-      messageId: id,
-      reason,
-    });
-
-    // El remitente y el aprobador conservan el registro de la anulación.
-    await publishInboxEvent({
-      type: 'inbox.message.annulled',
-      userIds: [message.senderId, admin.sub],
-      messageId: id,
-      documentId: document.id,
-      documentTitle: document.title,
-      subject: message.subject,
-      actorId: admin.sub,
-      actorName: admin.name,
-      status: 'cancelled',
-    });
-
-    await publishDocumentEvent({
-      type: 'document.updated',
-      documentId: document.id,
-      documentTitle: document.title,
-      actorId: admin.sub,
-      actorName: admin.name,
-      version: document.version,
-      updatedAt: now.toISOString(),
-      change: 'status',
-      status: 'cancelled',
-    });
-
-    return { ok: true, id, status: 'cancelled' };
+    await requireAdmin(request);
+    throw new AppError(
+      409,
+      'WEB_ANNUL_DISABLED',
+      'La anulación se realiza desde la app móvil de firma con el código de SirpefOffice Token.',
+    );
   });
 
   /** Marca como leído el mensaje (destinatario) o su resultado (remitente). */

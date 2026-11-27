@@ -32,6 +32,57 @@ data class LocalLoginRequest(
     val password: String,
 )
 
+/** Código de alta que genera la web para vincular este teléfono. */
+@Serializable
+data class MobilePairRequest(
+    val code: String,
+    val deviceId: String,
+)
+
+@Serializable
+data class PairPreviewResponse(
+    val user: PublicUser,
+    val pairToken: String,
+    val expiresAt: String? = null,
+)
+
+@Serializable
+data class MobilePairConfirmRequest(
+    val pairToken: String,
+    val deviceId: String,
+    val publicKey: String,
+    val deviceAssertion: String,
+    val model: String = "",
+    val appVersion: String = "",
+)
+
+@Serializable
+data class MobileLoginChallengeRequest(
+    val identifier: String,
+    val deviceId: String,
+)
+
+@Serializable
+data class MobileLoginChallengeResponse(
+    val challengeToken: String,
+    val nonce: String,
+    val expiresAt: String? = null,
+    val requiresTotp: Boolean = false,
+    val hasToken: Boolean = false,
+    val identifier: String,
+    val user: PublicUser,
+)
+
+@Serializable
+data class MobileLoginRequest(
+    val challengeToken: String,
+    val deviceId: String,
+    val identifier: String,
+    val deviceAssertion: String,
+    val code: String? = null,
+    val recoveryCode: String? = null,
+)
+
 @Serializable
 data class RefreshRequest(val refreshToken: String)
 
@@ -96,6 +147,12 @@ data class MobileDocument(
     val signed: Boolean = false,
     val certificateSerial: String? = null,
     val canSign: Boolean = false,
+    val needsSignature: Boolean = false,
+    val canAnnul: Boolean = false,
+    val annulled: Boolean = false,
+    val annulledAt: String? = null,
+    val annulledReason: String? = null,
+    val canEmergencyEdit: Boolean = false,
 )
 
 @Serializable
@@ -148,6 +205,67 @@ data class ChallengeResponse(
     val contentSha256: String,
     val purpose: String = "approval",
     val expiresAt: String,
+)
+
+@Serializable
+data class SignAuthorizationRequest(
+    val messageId: String,
+    val challengeId: String,
+    val code: String,
+    val signatureSha256: String,
+    val deviceAssertion: String,
+)
+
+@Serializable
+data class SignAuthorizationResponse(
+    val authorized: Boolean = false,
+    val challengeId: String? = null,
+    val expiresAt: String? = null,
+    val step: Int? = null,
+    val serverTime: String? = null,
+)
+
+@Serializable
+data class TokenStatus(
+    val paired: Boolean = false,
+    val account: String = "",
+    val issuer: String = "SirpefOffice",
+    val digits: Int = 6,
+    val period: Int = 30,
+    val algorithm: String = "SHA1",
+    val secretUpdatedAt: String? = null,
+    val pairedDeviceId: String? = null,
+    val pairedDeviceLabel: String? = null,
+    val pairedAt: String? = null,
+    val requiredForSigning: Boolean = true,
+    val serverTime: String? = null,
+)
+
+@Serializable
+data class TokenPurposeRequest(val purpose: String)
+
+@Serializable
+data class DeviceChallengeResponse(
+    val nonce: String,
+    val expiresAt: String,
+)
+
+@Serializable
+data class DeviceProofRequest(
+    val nonce: String,
+    val deviceAssertion: String,
+)
+
+@Serializable
+data class PairingCodeResponse(
+    val code: String,
+    val expiresAt: String,
+)
+
+@Serializable
+data class RecoveryCodesResponse(
+    val codes: List<String> = emptyList(),
+    val generatedAt: String? = null,
 )
 
 @Serializable
@@ -255,6 +373,34 @@ data class RejectResponse(
     val id: String? = null,
     val status: String? = null,
     val allowEdit: Boolean = true,
+)
+
+@Serializable
+data class AnnulRequest(
+    val reason: String? = null,
+    val expectedVersion: Int,
+    val code: String,
+)
+
+@Serializable
+data class AnnulResponse(
+    val ok: Boolean = true,
+    val id: String? = null,
+    val status: String? = null,
+)
+
+@Serializable
+data class EmergencyEditRequest(
+    val reason: String,
+    val expectedVersion: Int,
+    val code: String,
+)
+
+@Serializable
+data class EmergencyEditResponse(
+    val emergencyEditId: String,
+    val expiresAt: String,
+    val version: Int,
 )
 
 @Serializable

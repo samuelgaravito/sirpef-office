@@ -76,7 +76,7 @@ const description = computed(() =>
   isApprove.value
     ? 'Confirma el envío y los destinatarios. Al aprobar, el documento quedará bloqueado como solo lectura.'
     : auth.isAdmin
-      ? 'El documento se enviará y quedará bloqueado como solo lectura.'
+      ? 'Se enviará a tu bandeja de aprobación. Apruébalo y fírmalo en la app móvil.'
       : 'El jefe recibirá la solicitud y, cuando la apruebe, se enviará a los destinatarios.',
 );
 
@@ -187,7 +187,7 @@ async function submit(): Promise<void> {
         docNumber: string | null;
       }>('/inbox', { ...payload, documentId: props.documentId });
       if (response.status === 'pending_approval') {
-        toast.success('Enviado a aprobación del jefe');
+        toast.success('Enviado a la bandeja de aprobación. La decisión se toma en la app móvil.');
       } else if (response.docNumber) {
         toast.success(NUMBERING_MESSAGES.approvedAs(response.docNumber));
       } else {
@@ -389,7 +389,7 @@ async function submit(): Promise<void> {
       <button type="button" class="btn btn-outline" :disabled="submitting" @click="emit('close')">Cancelar</button>
       <button type="button" class="btn btn-primary" :disabled="!canSubmit" @click="submit">
         <component :is="submitting ? Loader2 : Send" :class="['size-4', submitting ? 'animate-spin' : '']" />
-        {{ submitting ? 'Enviando…' : isApprove ? 'Aprobar y enviar' : auth.isAdmin ? 'Enviar' : 'Enviar a aprobación' }}
+        {{ submitting ? 'Enviando…' : isApprove ? 'Aprobar y enviar' : 'Enviar a aprobación' }}
       </button>
     </template>
   </BaseModal>

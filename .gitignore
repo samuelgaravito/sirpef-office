@@ -53,6 +53,7 @@ video/
 mobile/app/google-services.json
 backend/data/firebase-service-account.json
 
-# APK de prueba generada localmente
-mobile/app-debug-lan.apk
+# APK de prueba generadas localmente
+mobile/*.apk
+sirpefoffice-token/*.apk
 mobile/app/build/outputs/

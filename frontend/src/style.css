@@ -678,26 +678,29 @@
   }
 
   /* Variables {{clave}} resaltadas solo en el editor (decoraciones). */
+  /*
+   * La decoración de variables no puede cambiar la métrica del texto: la
+   * paginación del editor debe medir exactamente lo mismo que la vista previa
+   * y el PDF, donde la variable ya es texto plano. Por eso no hay padding,
+   * borde, tamaño de fuente ni interlineado propios; solo pintura.
+   */
   :is(.doc-sheet, .doc-paged-flow) .tiptap .doc-var {
-    display: inline-block;
-    max-width: 100%;
+    display: inline;
     background: color-mix(in srgb, var(--color-accent) 8%, #f4f6f9);
-    border: 1px solid color-mix(in srgb, var(--color-accent) 32%, #d7dee8);
-    border-radius: 4px;
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 24%, transparent);
     color: color-mix(in srgb, var(--color-accent) 78%, #111827);
-    padding: 0 5px;
-    font-size: 0.95em;
-    font-weight: 500;
-    line-height: 1.35;
-    white-space: nowrap;
+    font: inherit;
+    line-height: inherit;
+    padding: 0;
+    white-space: normal;
     vertical-align: baseline;
   }
 
   :is(.doc-sheet, .doc-paged-flow) .tiptap .doc-var--resolved {
     background: #f1f3f6;
-    border-style: dashed;
+    box-shadow: 0 0 0 1px #cbd5e1;
     color: #475569;
-    opacity: 0.82;
   }
 
   :is(.doc-sheet, .doc-paged-flow) .tiptap .doc-var::selection {

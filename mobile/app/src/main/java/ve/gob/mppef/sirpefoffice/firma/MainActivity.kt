@@ -45,6 +45,7 @@ class MainActivity : FragmentActivity() {
         PushNotifications.ensureChannel(this)
         requestNotificationsPermission()
         handleNotificationIntent(intent)
+        handleTotpIntent(intent)
         // La barra de navegación comparte el fondo claro de la app: iconos oscuros.
         WindowCompat.getInsetsController(window, window.decorView)
             .isAppearanceLightNavigationBars = true
@@ -71,6 +72,15 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleNotificationIntent(intent)
+        handleTotpIntent(intent)
+    }
+
+    private fun handleTotpIntent(intent: Intent?) {
+        val code = intent?.getStringExtra(EXTRA_TOTP_CODE) ?: return
+        val remaining = intent.getIntExtra(EXTRA_TOTP_REMAINING, 30)
+        viewModel.receiveExternalTotp(code, remaining)
+        intent.removeExtra(EXTRA_TOTP_CODE)
+        intent.removeExtra(EXTRA_TOTP_REMAINING)
     }
 
     private fun handleNotificationIntent(intent: Intent?) {
@@ -81,6 +91,11 @@ class MainActivity : FragmentActivity() {
             intent.removeExtra("documentId")
             intent.removeExtra("messageId")
         }
+    }
+
+    private companion object {
+        const val EXTRA_TOTP_CODE = "ve.gob.mppef.sirpefoffice.extra.TOTP_CODE"
+        const val EXTRA_TOTP_REMAINING = "ve.gob.mppef.sirpefoffice.extra.TOTP_REMAINING"
     }
 
     private fun requestNotificationsPermission() {

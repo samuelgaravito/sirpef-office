@@ -23,9 +23,6 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { api, downloadFile } from '@/api/client';
 import DocumentViewer from '@/components/documents/DocumentViewer.vue';
-import AnnulDocumentDialog from '@/components/inbox/AnnulDocumentDialog.vue';
-import RejectDocumentDialog from '@/components/inbox/RejectDocumentDialog.vue';
-import SendDocumentDialog from '@/components/inbox/SendDocumentDialog.vue';
 import InboxStatusChip from '@/components/inbox/InboxStatusChip.vue';
 import AppShell from '@/components/layout/AppShell.vue';
 import BaseDropdown from '@/components/ui/BaseDropdown.vue';
@@ -54,9 +51,6 @@ const message = ref<InboxMessageDetail | null>(null);
 const loading = ref(true);
 const errorMessage = ref('');
 const cancelling = ref(false);
-const annulOpen = ref(false);
-const sendOpen = ref(false);
-const rejectOpen = ref(false);
 const viewerExpanded = ref(false);
 const detailsOpen = ref(true);
 const noteExpanded = ref(false);
@@ -235,36 +229,6 @@ async function cancelSend(): Promise<void> {
   }
 }
 
-function openApprove(): void {
-  viewerExpanded.value = false;
-  sendOpen.value = true;
-}
-
-function openReject(): void {
-  viewerExpanded.value = false;
-  rejectOpen.value = true;
-}
-
-function openAnnul(): void {
-  viewerExpanded.value = false;
-  annulOpen.value = true;
-}
-
-async function onRejected(): Promise<void> {
-  rejectOpen.value = false;
-  await load();
-}
-
-async function onAnnulled(): Promise<void> {
-  annulOpen.value = false;
-  await load();
-}
-
-async function onSent(): Promise<void> {
-  sendOpen.value = false;
-  await load();
-}
-
 function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
@@ -280,7 +244,7 @@ function onKeydown(event: KeyboardEvent): void {
     return;
   }
 
-  if (!canApprove.value || sendOpen.value || rejectOpen.value) return;
+  if (!canApprove.value) return;
 
   if (event.key === 'e' || event.key === 'E') {
     event.preventDefault();
@@ -295,9 +259,6 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 watch(messageId, () => {
-  sendOpen.value = false;
-  rejectOpen.value = false;
-  annulOpen.value = false;
   viewerExpanded.value = false;
   void load();
 });
@@ -319,9 +280,6 @@ function handleRealtime(event: import('@sirpefoffice/shared').RealtimeMessage): 
   window.clearTimeout(liveTimer);
   liveTimer = window.setTimeout(async () => {
     const wasPending = message.value?.status === 'pending_approval';
-    sendOpen.value = false;
-    rejectOpen.value = false;
-    annulOpen.value = false;
     await load();
     if (wasPending && message.value?.status !== 'pending_approval') {
       toast.info('Este envío ya fue procesado desde otra sesión.');
@@ -516,7 +474,7 @@ onBeforeUnmount(() => {
                   </button>
                   <span
                     class="grid size-5 cursor-help place-items-center rounded-full border border-hairline text-[11.5px] font-semibold text-ink-subtle"
-                    title="Atajos: A aprobar · R devolver · E editar · N siguiente"
+                    title="Atajos: E editar · N siguiente. La decisión se toma en la app móvil."
                   >?</span>
                 </div>
               </template>
@@ -641,6 +599,13 @@ onBeforeUnmount(() => {
                     Quedó bloqueado como solo lectura.
                   </template>
                 </p>
+                <p
+                  v-if="!message.signature && !message.annulledAt"
+                  class="mt-2 rounded-lg border border-warning/20 bg-warning-soft/50 px-2.5 py-2 text-[12px] text-ink-muted"
+                >
+                  <strong class="font-medium text-ink">Pendiente de firma en la app.</strong>
+                  El aprobador debe completar el sellado desde la app móvil de firma para generar el certificado.
+                </p>
                 <div
                   v-if="message.signature"
                   class="mt-2 rounded-lg border border-success/20 bg-success-soft/50 px-2.5 py-2 text-[12px] text-ink"
@@ -656,15 +621,13 @@ onBeforeUnmount(() => {
                     Serie {{ message.signature.serial }}
                   </p>
                 </div>
-                <button
+                <p
                   v-if="canAnnul"
-                  type="button"
-                  class="btn btn-danger mt-3 w-full"
-                  @click="openAnnul"
+                  class="mt-3 rounded-lg border border-hairline bg-surface-hover px-2.5 py-2 text-[12.5px] text-ink-muted"
                 >
-                  <Ban class="size-4" />
-                  Anular documento
-                </button>
+                  Para anularlo, usa <strong class="font-medium text-ink">Anular con Token</strong>
+                  en la app móvil de firma.
+                </p>
                 <button
                   v-if="auth.isAdmin && nextPending"
                   type="button"
@@ -831,37 +794,5 @@ onBeforeUnmount(() => {
       </div>
     </Teleport>
 
-    <RejectDocumentDialog
-      v-if="message"
-      :open="rejectOpen"
-      :message-id="message.id"
-      @close="rejectOpen = false"
-      @rejected="onRejected"
-    />
-
-    <AnnulDocumentDialog
-      v-if="message"
-      :open="annulOpen"
-      :message-id="message.id"
-      :expected-version="message.document.version"
-      @close="annulOpen = false"
-      @annulled="onAnnulled"
-    />
-
-    <SendDocumentDialog
-      v-if="message"
-      :open="sendOpen"
-      mode="approve"
-      :message-id="message.id"
-      :document-id="message.document.id"
-      :document-title="message.document.title"
-      :expected-version="message.document.version"
-      :sent-version="message.documentVersion"
-      :initial-subject="message.subject"
-      :initial-body="message.body"
-      :initial-recipient-ids="message.recipients.map((recipient) => recipient.userId)"
-      @close="sendOpen = false"
-      @sent="onSent"
-    />
   </AppShell>
 </template>

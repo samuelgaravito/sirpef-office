@@ -297,11 +297,12 @@ export async function sendPushForRealtimeEvent(event: RealtimeEvent): Promise<vo
   }
 
   if (event.type === 'document.shared') {
+    const documentId = event.payload.documentId;
     await sendPushToUsers(recipients, {
       title: 'Han compartido un documento contigo',
       body,
-      url: `/documents/${payload.documentId}`,
-      documentId: payload.documentId,
+      url: `/documents/${documentId}`,
+      documentId,
       type: event.type,
     });
   }

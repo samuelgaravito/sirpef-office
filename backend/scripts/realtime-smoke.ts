@@ -19,6 +19,7 @@ import { buildApp } from '../src/app.js';
 import { db, sql } from '../src/db/index.js';
 import { documents, users } from '../src/db/schema.js';
 import { signAccessToken } from '../src/lib/jwt.js';
+import { approveMessage } from '../src/modules/inbox/approve.js';
 import { publishInboxEvent } from '../src/modules/realtime/events.js';
 import { startRealtimeListener, stopRealtimeListener } from '../src/modules/realtime/hub.js';
 
@@ -178,6 +179,13 @@ async function main(): Promise<void> {
     /* 4. El envío de un documento avisa al administrador que puede aprobarlo. */
     const memberToken = await tokenFor(member);
     const adminToken = await tokenFor(admin);
+    const adminUser = {
+      sub: admin.id,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+      menus: [],
+    } as const;
 
     const created = await call<{ document: { id: string; version: number } }>(
       '/documents',
@@ -227,13 +235,13 @@ async function main(): Promise<void> {
 
     /* 5. La aprobación avisa al remitente. */
     const approvedForMember = waitForEvent(memberSocket.socket, 'inbox.result.approved');
-    const approved = await call<{ status: string }>(
-      `/inbox/${submitted.body.id}/approve`,
-      adminToken,
-      'POST',
-      { expectedVersion: created.body.document.version },
-    );
-    assert(approved.status === 200, 'El administrador aprueba el envío');
+    const approved = await approveMessage({
+      user: adminUser,
+      messageId: submitted.body.id,
+      expectedVersion: created.body.document.version,
+      allowSenderExport: false,
+    });
+    assert(approved.message.status === 'sent', 'El administrador aprueba el envío');
 
     const resultEvent = await approvedForMember;
     assert(

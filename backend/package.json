@@ -62,7 +62,13 @@
     "smoke:ai-node": "tsx scripts/ai-node-smoke.ts",
     "smoke:ai-conversations": "tsx scripts/ai-conversations-smoke.ts",
     "smoke:mobile-sign": "tsx scripts/mobile-signature-smoke.ts",
-    "smoke:mobile-auth": "tsx scripts/mobile-auth-smoke.ts"
+    "smoke:mobile-auth": "tsx scripts/mobile-auth-smoke.ts",
+    "smoke:token": "tsx scripts/token-smoke.ts",
+    "token:coverage": "tsx scripts/token-coverage.ts",
+    "token:reset": "tsx scripts/token-reset.ts",
+    "token:rotate-key": "tsx scripts/token-rotate-key.ts",
+    "token:reset-all": "tsx scripts/token-reset-all.ts",
+    "smoke:emergency-edit": "tsx scripts/emergency-edit-smoke.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.3",

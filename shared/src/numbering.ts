@@ -60,7 +60,16 @@ export function withDocumentNumber(
   pendingNumber?: string | null,
 ): VariableValues {
   const value = docNumber || (pendingNumber ? pendingNumberText(pendingNumber) : '');
-  return { ...values, [DOCUMENT_NUMBER_VARIABLE]: value };
+  const next: VariableValues = { ...values, [DOCUMENT_NUMBER_VARIABLE]: value };
+
+  // Compatibilidad: las plantillas antiguas usan `{{numero}}` como campo
+  // manual. Ahora el correlativo lo posee la serie, así que se resuelve al
+  // renderizar y nunca se persiste en `data` (eso rompería el hash firmado).
+  if (next.numero === undefined || next.numero === null || next.numero === '') {
+    next.numero = value;
+  }
+
+  return next;
 }
 
 /** Configuración de una serie de numeración (identificada por su `id`). */

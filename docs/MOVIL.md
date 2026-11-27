@@ -1,16 +1,95 @@
 # Aplicación móvil de firma electrónica
 
 App Android nativa para que un administrador **apruebe y firme** memorándums
-desde el teléfono. La identidad sale de SVA; SirpefOffice emite una sesión
-local y el sellado se hace siempre en el servidor. La app no tiene login local:
-requiere `AUTH_MODE=sva` o `hybrid` y un SVA accesible.
+desde el teléfono. El alta se autoriza desde la web con un código; el login
+diario usa cédula/correo, huella y TOTP. SVA sigue siendo la fuente de identidad
+de la web y el sellado se hace siempre en el servidor. La app ya no pide la
+contraseña de SVA.
 
-- Código: `mobile/` (Kotlin 2, Jetpack Compose, Material 3).
-- Backend: `backend/src/modules/mobile/`.
-- Migración: `backend/drizzle/0026_eminent_peter_quill.sql`.
-- Smokes: `smoke:mobile-auth` (SVA simulado) y `smoke:mobile-sign` (DB + Chrome).
+- `mobile/` (Kotlin 2, Jetpack Compose, Material 3).
+- `sirpefoffice-token/` (app Token, Kotlin 2, Jetpack Compose).
+- Backend: `backend/src/modules/mobile/` y `backend/src/modules/token/`.
+- Migración: `backend/drizzle/0026_eminent_peter_quill.sql` y `0029_worthless_chronomancer.sql`.
+- Smokes: `smoke:mobile-auth` (SVA simulado), `smoke:token` y `smoke:mobile-sign` (DB + Chrome).
 
-## Flujo
+## Alta sin contraseña
+
+La app Firma ya no pide la cédula ni la contraseña de SVA para entrar. El alta
+se autoriza desde la web:
+
+1. Un administrador entra a **Ajustes → Dispositivos de firma** y pulsa
+   *Vincular teléfono*. La web comprueba que su nombre, correo y cédula estén
+   completos.
+2. La web muestra un código de un solo uso (`XXXX-XXXX`, 15 minutos).
+3. En la app: *Vincula este teléfono* → se escribe el código.
+4. La app recibe el perfil de SVA (nombre, cédula, correo y rol) y muestra una
+   pantalla de confirmación. **No edita** esos datos.
+5. Al confirmar, la app crea la clave EC del dispositivo, pide biometría y firma
+   el payload `SIRPEF-PAIR|<pairToken>|<deviceId>`.
+6. El backend valida el código, la clave y la firma, revoca el teléfono anterior
+   y registra el nuevo. Después emite la sesión nativa.
+
+Endpoints nuevos:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `POST` | `/api/auth/mobile/pairing` | La web genera el código de alta. |
+| `POST` | `/api/auth/mobile/pair` | La app canjea el código por el perfil y un `pairToken`. |
+| `POST` | `/api/auth/mobile/pair/confirm` | La app confirma con su clave pública y biometría; se emite la sesión. |
+| `POST` | `/api/auth/mobile/login-challenge` | Valida cédula/correo + teléfono y devuelve un desafío firmado. |
+| `POST` | `/api/auth/mobile/login` | Firma del teléfono + TOTP o código de recuperación. |
+| `POST` | `/api/auth/token/pair` | La app Token canjea el código de Firma sin SVA. |
+
+El código se guarda solo como hash y se consume al confirmar. La sesión de la
+web sigue siendo la que autoriza el primer teléfono.
+
+## Después de vincular
+
+La app muestra una pantalla de éxito animada y pasa a **Asocia SirpefOffice
+Token**:
+
+1. Genera un código de vinculación de Token (5 minutos).
+2. La app Token se abre con ese código y recibe el secreto una sola vez.
+3. La Firma detecta que el Token está activo y muestra **3 códigos de
+   recuperación de 6 palabras + 2 dígitos**, que se guardan fuera del teléfono.
+4. Al terminar, entra a la bóveda.
+
+La app Token ya no pide SVA ni contraseña: usa `POST /api/auth/token/pair`.
+
+## Login diario
+
+Al abrir la app en frío (o después de cerrar sesión):
+
+1. Cédula o correo.
+2. Huella: la app firma `SIRPEF-LOGIN|nonce|deviceId|identifier`.
+3. Código de 6 dígitos de SirpefOffice Token, o un código de recuperación.
+4. El servidor valida dispositivo, firma y TOTP y emite la sesión.
+
+La sesión conserva `authAt`; cuando supera `MOBILE_REAUTH_HOURS` (24 por
+defecto) el refresh responde `401 REAUTH_REQUIRED` y la app vuelve a pedir el
+login completo. Para el ejercicio se puede poner `MOBILE_REAUTH_HOURS=0` y
+forzar el login en cada apertura.
+
+## Revocación desde la web
+
+Al revocar un teléfono en **Ajustes → Dispositivos de firma**:
+
+1. El dispositivo queda `revoked`.
+2. Se revocan sus refresh tokens.
+3. Se publica `mobile.device.revoked` por el WebSocket.
+4. El access token móvil lleva el `deviceId`; en la siguiente petición el
+   backend responde `401 DEVICE_REVOKED`.
+5. La app borra la sesión y el enrolamiento y vuelve a **“Vincula este
+   teléfono”** con el mensaje “Este teléfono fue desvinculado. Pide un nuevo
+   código en la web.”
+
+La app Token es independiente: si también se pierde, hay que desvincularla
+desde Firma o restablecerla con un código de recuperación.
+
+## Flujo heredado (SVA, compatibilidad)
+
+El flujo actual de alta y login está descrito arriba. Este bloque se conserva
+para versiones antiguas de la app y para el canje de SVA.
 
 ```text
 1. App → SVA POST /auth/login/mobile { userCedula, password }
@@ -31,7 +110,11 @@ requiere `AUTH_MODE=sva` o `hybrid` y un SVA accesible.
 7. Al firmar:
    POST /api/documents/:id/sign-challenge { messageId }
    BiometricPrompt desbloquea la clave EC y firma el payload canónico.
+   La app pide el código de 6 dígitos de SirpefOffice Token.
+   POST /api/documents/:id/sign-authorization { challengeId, code,
+     signatureSha256, deviceAssertion }
    POST /api/inbox/:id/approve-and-sign
+     ├─ exige el desafío autorizado con TOTP
      ├─ aprueba el envío y asigna el correlativo
      ├─ renderiza el PDF final
      ├─ añade una hoja de firmas con QR
@@ -51,8 +134,10 @@ SIRPEF-SIGN|challengeId|documentId|messageId|version|contentSha256|signatureSha2
 
 - `contentSha256` es un SHA-256 estable de `content`, `data`, `title`,
   `header`, `footer`, `docType`, `templateId`, `designId` y `version`.
-- El hash no incluye estado ni número correlativo, de modo que sigue siendo
-  válido cuando la aprobación asigna el número.
+- El hash no incluye estado ni número correlativo. La numeración ya **no**
+  escribe `data.numero`: el correlativo vive en sus columnas y se resuelve al
+  renderizar (`{{numero_documento}}` o, por compatibilidad, `{{numero}}`). Así
+  el hash sigue siendo válido cuando la aprobación asigna el número.
 - `signatureSha256` es el SHA-256 del PNG de la rúbrica.
 - La aserción ECDSA se envía en base64 (DER, `SHA256withECDSA`).
 
@@ -60,20 +145,33 @@ SIRPEF-SIGN|challengeId|documentId|messageId|version|contentSha256|signatureSha2
 
 | Método | Ruta | Uso |
 | --- | --- | --- |
-| `POST` | `/api/auth/mobile/sva` | Canje de la sesión SVA sin cookies. |
+| `POST` | `/api/auth/mobile/sva` | Canje de la sesión SVA sin cookies (compatibilidad). |
+| `POST` | `/api/auth/mobile/pairing` | Código de alta del teléfono desde la web. |
+| `POST` | `/api/auth/mobile/pair` | Canje del código y perfil de SVA. |
+| `POST` | `/api/auth/mobile/pair/confirm` | Confirma clave y biometría; emite la sesión. |
+| `POST` | `/api/auth/mobile/login-challenge` | Desafío de login diario. |
+| `POST` | `/api/auth/mobile/login` | Login con huella + TOTP o recuperación. |
+| `POST` | `/api/auth/token/pair` | Vinculación de la app Token sin SVA. |
 | `POST` | `/api/auth/mobile/refresh` | Rotación del refresh token nativo. |
 | `POST` | `/api/auth/mobile/logout` | Revoca el refresh token. |
 | `GET` | `/api/mobile/bootstrap` | Usuario, rol, contadores y capacidades. |
-| `GET` | `/api/mobile/documents` | `scope=all\|pending\|received\|sent\|signed`, `q`, `page`, `pageSize`; devuelve `items`, `page`, `pageSize` y `total`. |
+| `GET` | `/api/mobile/documents` | `scope=all\|pending\|received\|sent\|signed\|needs_signature`, `q`, `page`, `pageSize`; devuelve `items`, `page`, `pageSize` y `total`. |
 | `GET` | `/api/documents/:id/pdf` | PDF actual; `?sealed=1` devuelve la copia firmada. |
 | `GET/POST` | `/api/mobile/devices` | Listar y vincular dispositivos. |
 | `DELETE` | `/api/mobile/devices/:id` | Revocar un dispositivo. |
 | `POST` | `/api/documents/:id/sign-challenge` | Nonce, versión y hash del contenido. |
-| `POST` | `/api/inbox/:id/approve-and-sign` | Aprobar, sellar y certificar en una llamada. |
-| `POST` | `/api/inbox/:id/reject` | Devolver o rechazar con motivo y opción de corrección. |
+| `POST` | `/api/documents/:id/sign-authorization` | Valida el código TOTP y el dispositivo; autoriza el desafío. |
+| `GET` | `/api/mobile/token/status` | Estado de SirpefOffice Token. |
+| `POST` | `/api/mobile/token/device-challenge` | Nonce para vincular Token o generar códigos de recuperación. |
+| `POST` | `/api/mobile/token/pairing` | Código de vinculación para la app Token. |
+| `POST` | `/api/mobile/token/recovery-codes` | Códigos de recuperación de un solo uso. |
+| `POST` | `/api/inbox/:id/approve-and-sign` | Aprobar, firmar y certificar en una sola transacción. Si falla, no aprueba. |
+| `POST` | `/api/mobile/inbox/:id/reject` | Devolver o rechazar con motivo y opción de corrección. |
+| `POST` | `/api/mobile/inbox/:id/annul` | Anular un memo aprobado con código TOTP. |
+| `POST` | `/api/documents/:id/emergency-edit` | Autorizar una edición de emergencia con TOTP. Después se edita en la web. |
 | `POST` | `/api/notifications/subscribe` | Registrar el token FCM del dispositivo. |
 | `POST` | `/api/notifications/unsubscribe` | Dar de baja el token al cerrar sesión. |
-| `POST` | `/api/documents/:id/sign` | Reintentar el sellado de un envío ya aprobado. |
+| `POST` | `/api/documents/:id/sign` | Completar el sellado de un envío ya aprobado que quedó sin firma. |
 | `GET` | `/api/documents/:id/certificate` | Certificado JSON del firmante. |
 | `GET` | `/api/documents/:id/certificate.pdf` | Certificado PDF. |
 | `GET` | `/api/verify/:token` | Verificación pública del QR. |
@@ -89,6 +187,10 @@ opaco que generó la app. La app añade además `Authorization: Bearer <access>`
 | `signature_challenges` | Documento, mensaje, versión, hash, nonce, expiración y uso. |
 | `document_signatures` | Rúbrica PNG, trazos, dispositivo, hashes y estado. |
 | `signature_certificates` | Serie, token de verificación hasheado, certificado JSON y rutas. |
+| `totp_credentials` | Secreto TOTP cifrado y teléfono Token activo. |
+| `totp_pairing_codes` | Códigos de vinculación hasheados. |
+| `totp_recovery_codes` | Códigos de recuperación hasheados. |
+| `totp_device_challenges` | Nonces firmados para vincular y recuperar Token. |
 
 El PDF sellado y el certificado PDF se guardan en `SIGNATURE_DIR`
 (`backend/data/signatures` por defecto). El token del QR solo se guarda como
@@ -98,10 +200,16 @@ SHA-256; el valor real viaja en el enlace y en el PDF.
 
 ```dotenv
 PUBLIC_APP_URL=http://localhost:5173
-SIGNATURE_CHALLENGE_TTL_SECONDS=180
+SIGNATURE_CHALLENGE_TTL_SECONDS=300
 SIGNATURE_MAX_PNG_BYTES=524288
 SIGNATURE_DIR=./data/signatures
 SIGNATURE_CERT_SERIAL_PREFIX=SF
+# SirpefOffice Token (TOTP)
+TOTP_ENCRYPTION_KEYS={"1":"..."}
+TOTP_ACTIVE_KEY_ID=1
+TOTP_REQUIRED_FOR_SIGNING=true
+MOBILE_PAIRING_TTL_SECONDS=900
+MOBILE_REAUTH_HOURS=24
 ```
 
 `PUBLIC_APP_URL` debe ser la URL pública que aparece en el QR. En producción,
@@ -256,6 +364,8 @@ cd backend
 npm run typecheck
 npm run smoke:errors
 npm run smoke:mobile-auth   # SVA simulado, sin SVA real
+npm run smoke:token         # TOTP contra PostgreSQL
+npm run smoke:emergency-edit # edición de emergencia con TOTP
 npm run smoke:mobile-sign   # PostgreSQL + Chrome reales
 ```
 
@@ -289,6 +399,10 @@ Pruebas manuales recomendadas:
   `BIOMETRIC_STRONG` y se invalida si se enrola una biometría nueva.
 - El servidor verifica la aserción, el dispositivo activo, el challenge de un
   solo uso, la versión y el hash antes de sellar.
+- El sellado exige además un código TOTP de SirpefOffice Token autorizado contra
+  el desafío. Sin código no se aprueba ni se sella.
+- El código TOTP se consume una sola vez; no se puede reutilizar en otro
+  documento ni en el mismo intervalo.
 - El QR público no revela el contenido del memorándum.
 - No se afirma validez jurídica cualificada. Es una **constancia de firma
   electrónica simple auditada**. PAdES/X.509/TSA queda para una fase posterior.
@@ -298,9 +412,32 @@ Pruebas manuales recomendadas:
 - Solo Android.
 - Solo firma del administrador al aprobar; no firma del creador ni acuse de
   destinatarios.
+- La firma exige SirpefOffice Token; si el administrador no lo tiene vinculado,
+  no puede sellar.
 - No sube PDFs externos ni escanea con cámara.
 - Sin OTP por correo (SirpefOffice no tiene SMTP configurado).
 - Sin modo offline de firma. Las notificaciones push funcionan con FCM cuando se configura Firebase; sin credenciales, la app actualiza en vivo solo mientras está abierta.
 - El lienzo se puede ampliar en vertical; la rotación real a horizontal queda pendiente.
 - La app no descarga todavía el certificado PDF para compartirlo; el backend
   ya lo genera y expone.
+
+## Volver desde Token
+
+Desde la app Token se puede pulsar **Copiar y volver a Firma**. El código se
+copia y se envía por Intent a la app de firma, que lo autocompleta en el
+diálogo. El backend sigue validando el código y el dispositivo.
+
+## Edición de emergencia
+
+Solo el administrador que aprobó la versión vigente puede reabrir un documento
+bloqueado. La web exige TOTP de SirpefOffice Token, motivo y número del
+documento. Al primer cambio:
+
+- el documento pasa a `in_review`;
+- las firmas y certificados anteriores quedan supersedidos;
+- el mensaje anterior queda `superseded`;
+- se crea una revisión pendiente;
+- el aprobador debe volver a aprobar y firmar.
+
+El QR del certificado anterior responde `valid:false` y `superseded:true`.
+El detalle está en [`docs/TOKEN.md`](TOKEN.md).

@@ -180,7 +180,7 @@ function handle(message: RealtimeMessage): void {
   if (!userId.value) return;
 
   const payload = message.payload;
-  if (payload?.actorId && payload.actorId === userId.value) return;
+  if (payload && 'actorId' in payload && payload.actorId === userId.value) return;
 
   const copy = describe(message);
   if (!copy) return;

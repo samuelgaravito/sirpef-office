@@ -1,9 +1,18 @@
 package ve.gob.mppef.sirpefoffice.firma.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,10 +20,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -25,38 +39,50 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.NotificationsNone
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,6 +120,18 @@ fun HomeScreen(
     val context = LocalContext.current
     val user = state.user
     val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+
+    // El buscador enfocado colapsa la cabecera: saludo y métricas se pliegan.
+    var searchFocused by remember { mutableStateOf(false) }
+    val compact = searchFocused
+
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    val dockVisible = !compact && !imeVisible
+    val navigationBars = with(density) {
+        WindowInsets.navigationBars.getBottom(this).toDp()
+    }
 
     // Cada cambio de página vuelve al inicio de la lista, como una hoja nueva.
     LaunchedEffect(state.page) {
@@ -102,52 +140,71 @@ fun HomeScreen(
         }
     }
 
-    Scaffold(
-        containerColor = Background,
-        contentWindowInsets = WindowInsets(0),
-        bottomBar = {
-            HomeDock(
-                onDocuments = { onFilter(DocumentFilter.ALL) },
-                onAdd = {
-                    Toast.makeText(
-                        context,
-                        "La importación de PDFs llegará en la próxima versión.",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                },
-                onProfile = onProfile,
-            )
-        },
-    ) { padding ->
+    // Al entrar en modo búsqueda la cabecera se pega arriba antes de plegarse.
+    LaunchedEffect(compact) {
+        if (compact && listState.firstVisibleItemIndex > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    // Si el sistema oculta el teclado con el campo aún enfocado (botón atrás del
+    // IME o gesto de navegación), salimos del modo búsqueda para no dejar la
+    // cabecera colapsada sin teclado.
+    var imeWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) {
+            imeWasVisible = true
+        } else if (imeWasVisible && searchFocused) {
+            imeWasVisible = false
+            focusManager.clearFocus()
+        }
+    }
+
+    BackHandler(enabled = searchFocused) { focusManager.clearFocus() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Background),
+    ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(bottom = 24.dp),
+                .imePadding(),
+            contentPadding = PaddingValues(
+                // La última tarjeta queda por encima del dock y del círculo central.
+                bottom = if (dockVisible) navigationBars + 120.dp else 24.dp,
+            ),
         ) {
             item {
-                VaultHeader(
-                    name = user?.name ?: "Usuario",
-                    role = user?.role ?: "member",
-                    pending = state.counts.pending,
-                    received = state.counts.received,
-                    signed = state.counts.signed,
-                    search = state.search,
-                    loading = state.loading,
-                    onSearch = onSearch,
-                    onRefresh = onRefresh,
-                    onPending = { onFilter(DocumentFilter.PENDING) },
-                    onReceived = { onFilter(DocumentFilter.RECEIVED) },
-                    onSigned = { onFilter(DocumentFilter.SIGNED) },
-                )
-            }
-
-            item {
-                FilterRow(
-                    selected = state.filter,
-                    onFilter = onFilter,
-                )
+                // Cabecera y filtros comparten el mismo ítem: así el LazyColumn
+                // no puede medir los filtros contra el alto restante ni dejar
+                // un hueco entre la cabecera y las tarjetas.
+                Column {
+                    VaultHeader(
+                        name = user?.name ?: "Usuario",
+                        role = user?.role ?: "member",
+                        pending = state.counts.pending,
+                        received = state.counts.received,
+                        signed = state.counts.signed,
+                        search = state.search,
+                        loading = state.loading,
+                        compact = compact,
+                        onSearch = onSearch,
+                        onSearchFocusChanged = { searchFocused = it },
+                        onRefresh = onRefresh,
+                        onPending = { onFilter(DocumentFilter.PENDING) },
+                        onReceived = { onFilter(DocumentFilter.RECEIVED) },
+                        onSigned = { onFilter(DocumentFilter.SIGNED) },
+                    )
+                    if (!compact) {
+                        FilterRow(
+                            selected = state.filter,
+                            onFilter = onFilter,
+                        )
+                    }
+                }
             }
 
             if (state.loading && state.documents.isEmpty()) {
@@ -188,6 +245,21 @@ fun HomeScreen(
                 }
             }
         }
+
+        if (dockVisible) {
+            HomeDock(
+                onDocuments = { onFilter(DocumentFilter.ALL) },
+                onAdd = {
+                    Toast.makeText(
+                        context,
+                        "La importación de PDFs llegará en la próxima versión.",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                },
+                onProfile = onProfile,
+                modifier = Modifier.align(Alignment.BottomCenter),
+            )
+        }
     }
 }
 
@@ -200,12 +272,28 @@ private fun VaultHeader(
     signed: Int,
     search: String,
     loading: Boolean,
+    compact: Boolean,
     onSearch: (String) -> Unit,
+    onSearchFocusChanged: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onPending: () -> Unit,
     onReceived: () -> Unit,
     onSigned: () -> Unit,
 ) {
+    val focusManager = LocalFocusManager.current
+    val verticalPadding by animateDpAsState(
+        targetValue = if (compact) 10.dp else 18.dp,
+        label = "cabecera-vertical",
+    )
+    val enter = expandVertically(
+        animationSpec = tween(220),
+        expandFrom = Alignment.Top,
+    ) + fadeIn(animationSpec = tween(180))
+    val exit = shrinkVertically(
+        animationSpec = tween(220),
+        shrinkTowards = Alignment.Top,
+    ) + fadeOut(animationSpec = tween(120))
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -216,86 +304,90 @@ private fun VaultHeader(
                 RoundedCornerShape(bottomStart = 32.dp, bottomEnd = 32.dp),
             )
             .statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 18.dp),
+            .padding(horizontal = 20.dp)
+            .padding(vertical = verticalPadding),
     ) {
         Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                BrandMark(size = 44.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
+            AnimatedVisibility(visible = !compact, enter = enter, exit = exit) {
+                Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "Hola, ${name.substringBefore(' ')}",
-                            color = Color(0xFFB5B6BB),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Surface(
-                            color = BrandMint.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(6.dp),
-                        ) {
+                        BrandMark(size = 44.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "Hola, ${name.substringBefore(' ')}",
+                                    color = Color(0xFFB5B6BB),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Surface(
+                                    color = BrandMint.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(6.dp),
+                                ) {
+                                    Text(
+                                        if (role == "admin") "ADMIN" else "SVA",
+                                        color = BrandMint,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                    )
+                                }
+                            }
                             Text(
-                                if (role == "admin") "ADMIN" else "SVA",
-                                color = BrandMint,
+                                "Bóveda de Firmas",
+                                color = White,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                            )
+                            Text(
+                                "SIRPEF · GESTIÓN DOCUMENTAL",
+                                color = Color(0xFF9DB9D8),
                                 style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                letterSpacing = 1.4.sp,
                             )
                         }
-                    }
-                    Text(
-                        "Bóveda de Firmas",
-                        color = White,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                    )
-                    Text(
-                        "SIRPEF · GESTIÓN DOCUMENTAL",
-                        color = Color(0xFF9DB9D8),
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 1.4.sp,
-                    )
-                }
-                IconButton(onClick = onRefresh) {
-                    Icon(
-                        Icons.Outlined.Refresh,
-                        contentDescription = "Actualizar",
-                        tint = if (loading) Color(0xFF9DB9D8) else Color(0xFFE3E4E8),
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
-                        .clickable(onClick = onReceived),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Outlined.NotificationsNone,
-                        contentDescription = "Documentos recibidos",
-                        tint = Color(0xFFE3E4E8),
-                        modifier = Modifier.size(20.dp),
-                    )
-                    if (received > 0) {
+                        IconButton(onClick = onRefresh) {
+                            Icon(
+                                Icons.Outlined.Refresh,
+                                contentDescription = "Actualizar",
+                                tint = if (loading) Color(0xFF9DB9D8) else Color(0xFFE3E4E8),
+                            )
+                        }
                         Box(
                             modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(top = 5.dp, end = 5.dp)
-                                .background(Danger, CircleShape)
-                                .padding(horizontal = 4.dp, vertical = 1.dp),
+                                .size(40.dp)
+                                .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                                .clickable(onClick = onReceived),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Text(
-                                if (received > 99) "99+" else received.toString(),
-                                color = White,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
+                            Icon(
+                                Icons.Outlined.NotificationsNone,
+                                contentDescription = "Documentos recibidos",
+                                tint = Color(0xFFE3E4E8),
+                                modifier = Modifier.size(20.dp),
                             )
+                            if (received > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(top = 5.dp, end = 5.dp)
+                                        .background(Danger, CircleShape)
+                                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                                ) {
+                                    Text(
+                                        if (received > 99) "99+" else received.toString(),
+                                        color = White,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
                         }
                     }
+                    Spacer(Modifier.height(18.dp))
                 }
             }
-
-            Spacer(Modifier.height(18.dp))
 
             TextField(
                 value = search,
@@ -315,7 +407,23 @@ private fun VaultHeader(
                         modifier = Modifier.size(18.dp),
                     )
                 },
+                trailingIcon = if (search.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { onSearch("") }) {
+                            Icon(
+                                Icons.Outlined.Close,
+                                contentDescription = "Limpiar búsqueda",
+                                tint = Color(0xFF9DB9D8),
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                } else {
+                    null
+                },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
                 shape = RoundedCornerShape(16.dp),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.White.copy(alpha = 0.12f),
@@ -326,47 +434,55 @@ private fun VaultHeader(
                     unfocusedTextColor = White,
                     cursorColor = White,
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { onSearchFocusChanged(it.isFocused) },
             )
 
-            Spacer(Modifier.height(16.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                MetricCard(
-                    title = "Acción requerida",
-                    value = pending,
-                    caption = "pendientes",
-                    colors = listOf(Indigo, Violet),
-                    icon = {
-                        Icon(
-                            Icons.Outlined.Description,
-                            contentDescription = null,
-                            tint = White,
-                            modifier = Modifier.size(16.dp),
+            AnimatedVisibility(visible = !compact, enter = enter, exit = exit) {
+                Column {
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        MetricCard(
+                            title = "Acción requerida",
+                            value = pending,
+                            caption = "pendientes",
+                            colors = listOf(Indigo, Violet),
+                            icon = {
+                                Icon(
+                                    Icons.Outlined.Description,
+                                    contentDescription = null,
+                                    tint = White,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClick = onPending),
                         )
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClick = onPending),
-                )
-                MetricCard(
-                    title = "Completados",
-                    value = signed,
-                    caption = "verificados",
-                    colors = listOf(Color.White.copy(alpha = 0.12f), Color.White.copy(alpha = 0.07f)),
-                    icon = {
-                        Icon(
-                            Icons.Outlined.CheckCircle,
-                            contentDescription = null,
-                            tint = BrandMint,
-                            modifier = Modifier.size(16.dp),
+                        MetricCard(
+                            title = "Completados",
+                            value = signed,
+                            caption = "verificados",
+                            colors = listOf(
+                                Color.White.copy(alpha = 0.12f),
+                                Color.White.copy(alpha = 0.07f),
+                            ),
+                            icon = {
+                                Icon(
+                                    Icons.Outlined.CheckCircle,
+                                    contentDescription = null,
+                                    tint = BrandMint,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable(onClick = onSigned),
+                            valueColor = White,
                         )
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(onClick = onSigned),
-                    valueColor = White,
-                )
+                    }
+                }
             }
         }
     }
@@ -479,7 +595,7 @@ private fun DocumentCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val pending = !document.signed && document.status == "pending_approval"
+    val pending = !document.signed && (document.status == "pending_approval" || document.needsSignature)
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -518,6 +634,7 @@ private fun DocumentCard(
                     ) {
                         Text(
                             when {
+                                document.annulled -> "ANULADO"
                                 document.signed -> "FIRMADO"
                                 pending -> "POR FIRMAR"
                                 else -> "ENVIADO"
@@ -551,7 +668,7 @@ private fun DocumentCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            if (pending && document.canSign) {
+            if (pending && (document.canSign || document.needsSignature)) {
                 Surface(
                     color = Ink,
                     shape = RoundedCornerShape(12.dp),
@@ -598,7 +715,7 @@ private fun EmptyDocuments(filter: DocumentFilter) {
             Spacer(Modifier.height(8.dp))
             Text(
                 when (filter) {
-                    DocumentFilter.PENDING -> "No tienes documentos pendientes de firma."
+                    DocumentFilter.PENDING -> "No tienes envíos pendientes de aprobación."
                     DocumentFilter.RECEIVED -> "No has recibido documentos todavía."
                     DocumentFilter.SIGNED -> "Todavía no has firmado documentos."
                     DocumentFilter.ALL -> "No se encontraron documentos."
@@ -759,59 +876,142 @@ private fun HomeDock(
     onDocuments: () -> Unit,
     onAdd: () -> Unit,
     onProfile: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
+    val shape = RoundedCornerShape(28.dp)
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .navigationBarsPadding()
-            .padding(horizontal = 18.dp, vertical = 10.dp),
+            .padding(horizontal = 18.dp)
+            .padding(top = 24.dp, bottom = 10.dp),
+    ) {
+        // Barra «pill» semitransparente: el contenido se intuye por detrás.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(76.dp)
+                .align(Alignment.BottomCenter)
+                .shadow(
+                    elevation = 18.dp,
+                    shape = shape,
+                    clip = false,
+                    ambientColor = Color.Black.copy(alpha = 0.35f),
+                    spotColor = Color.Black.copy(alpha = 0.45f),
+                )
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF0A2444).copy(alpha = 0.97f),
+                            Color(0xFF061C38).copy(alpha = 0.97f),
+                        ),
+                    ),
+                    shape,
+                )
+                .border(
+                    width = 1.dp,
+                    brush = Brush.verticalGradient(
+                        listOf(White.copy(alpha = 0.18f), White.copy(alpha = 0.04f)),
+                    ),
+                    shape = shape,
+                ),
+        )
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(76.dp)
+                .align(Alignment.BottomCenter),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DockItem(
+                label = "Documentos",
+                icon = Icons.Outlined.Description,
+                color = BrandMint,
+                onClick = onDocuments,
+                modifier = Modifier.weight(1f),
+            )
+            DockCenter(
+                onClick = onAdd,
+                modifier = Modifier.weight(1f),
+            )
+            DockItem(
+                label = "Identidad",
+                icon = Icons.Outlined.Fingerprint,
+                color = Color(0xFF8FAFCB),
+                onClick = onProfile,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DockCenter(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.offset(y = (-18).dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
-            color = Ink.copy(alpha = 0.97f),
-            shadowElevation = 12.dp,
+            onClick = onClick,
+            shape = CircleShape,
+            color = White,
+            shadowElevation = 10.dp,
+            modifier = Modifier.size(54.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 22.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                DockItem("Documentos", Icons.Outlined.Description, BrandMint, onDocuments)
-                FloatingActionButton(
-                    onClick = onAdd,
-                    containerColor = Indigo,
-                    contentColor = White,
-                    modifier = Modifier.size(48.dp),
-                    shape = RoundedCornerShape(16.dp),
-                ) {
-                    Icon(Icons.Outlined.Add, contentDescription = "Añadir documento")
-                }
-                DockItem("Identidad", Icons.Outlined.Fingerprint, Color(0xFF9DB9D8), onProfile)
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Outlined.Add,
+                    contentDescription = "Añadir documento",
+                    tint = Indigo,
+                    modifier = Modifier.size(26.dp),
+                )
             }
         }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Añadir",
+            color = White,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 
 @Composable
 private fun DockItem(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     color: Color,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable(onClick = onClick),
+    Box(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = label },
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = color, modifier = Modifier.size(20.dp))
-        Text(
-            label,
-            color = color,
-            style = MaterialTheme.typography.labelSmall,
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                label,
+                color = color,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+            )
+        }
     }
 }
 

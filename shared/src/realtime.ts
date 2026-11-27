@@ -53,14 +53,25 @@ export const DOCUMENT_REALTIME_EVENT_TYPES = [
   'document.locked',
 ] as const;
 
+/** Eventos del ciclo de vida del teléfono de firma. */
+export const MOBILE_REALTIME_EVENT_TYPES = [
+  /** La web revocó este teléfono; la app debe cerrar la sesión. */
+  'mobile.device.revoked',
+] as const;
+
 export const REALTIME_EVENT_TYPES = [
   ...INBOX_REALTIME_EVENT_TYPES,
   ...DOCUMENT_REALTIME_EVENT_TYPES,
+  ...MOBILE_REALTIME_EVENT_TYPES,
 ] as const;
 
 export type InboxRealtimeEventType = (typeof INBOX_REALTIME_EVENT_TYPES)[number];
 export type DocumentRealtimeEventType = (typeof DOCUMENT_REALTIME_EVENT_TYPES)[number];
-export type RealtimeEventType = InboxRealtimeEventType | DocumentRealtimeEventType;
+export type MobileRealtimeEventType = (typeof MOBILE_REALTIME_EVENT_TYPES)[number];
+export type RealtimeEventType =
+  | InboxRealtimeEventType
+  | DocumentRealtimeEventType
+  | MobileRealtimeEventType;
 
 export type DocumentRealtimeChange =
   | 'create'
@@ -101,7 +112,15 @@ export interface DocumentRealtimeEventPayload {
   status?: string | null;
 }
 
-export type RealtimeEventPayload = InboxRealtimeEventPayload | DocumentRealtimeEventPayload;
+/** Datos mínimos del teléfono revocado. */
+export interface MobileRealtimeEventPayload {
+  deviceId: string;
+}
+
+export type RealtimeEventPayload =
+  | InboxRealtimeEventPayload
+  | DocumentRealtimeEventPayload
+  | MobileRealtimeEventPayload;
 
 /**
  * Evento tal y como viaja por PostgreSQL. `userIds` decide quién lo recibe:
@@ -121,7 +140,17 @@ export type DocumentRealtimeEvent = {
   ts: string;
 };
 
-export type RealtimeEvent = InboxRealtimeEvent | DocumentRealtimeEvent;
+export type MobileRealtimeEvent = {
+  type: MobileRealtimeEventType;
+  userIds: string[];
+  payload: MobileRealtimeEventPayload;
+  ts: string;
+};
+
+export type RealtimeEvent =
+  | InboxRealtimeEvent
+  | DocumentRealtimeEvent
+  | MobileRealtimeEvent;
 
 /** Lo que llega al navegador: el evento sin la lista de destinatarios. */
 export type InboxRealtimeMessage = {
@@ -136,7 +165,16 @@ export type DocumentRealtimeMessage = {
   ts: string;
 };
 
-export type RealtimeMessage = InboxRealtimeMessage | DocumentRealtimeMessage;
+export type MobileRealtimeMessage = {
+  type: MobileRealtimeEventType;
+  payload: MobileRealtimeEventPayload;
+  ts: string;
+};
+
+export type RealtimeMessage =
+  | InboxRealtimeMessage
+  | DocumentRealtimeMessage
+  | MobileRealtimeMessage;
 
 /** ¿El evento afecta a la bandeja? */
 export function isInboxRealtimeEvent(type: RealtimeEventType): type is InboxRealtimeEventType {
@@ -148,6 +186,13 @@ export function isDocumentRealtimeEvent(
   type: RealtimeEventType,
 ): type is DocumentRealtimeEventType {
   return type.startsWith('document.');
+}
+
+/** ¿El evento afecta al dispositivo móvil? */
+export function isMobileRealtimeEvent(
+  type: RealtimeEventType,
+): type is MobileRealtimeEventType {
+  return type.startsWith('mobile.');
 }
 
 /** Estrecha un mensaje a los eventos de bandeja. */

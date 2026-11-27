@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue';
 
 import AppShell from '@/components/layout/AppShell.vue';
 import PageHeader from '@/components/layout/PageHeader.vue';
+import SigningDevicesCard from '@/components/settings/SigningDevicesCard.vue';
 import UserAvatar from '@/components/ui/UserAvatar.vue';
 import { api } from '@/api/client';
 import { svaUsersUrl } from '@/lib/sva';
@@ -496,6 +497,9 @@ onUnmounted(() => {
           </button>
         </div>
       </section>
+
+      <!-- Teléfonos de firma -->
+      <SigningDevicesCard v-if="auth.isAdmin" class="mt-5" />
 
       <!-- Avisos -->
       <section class="card mt-5 p-5">

@@ -290,6 +290,8 @@ export interface DocumentSummary {
   lockedAt: string | null;
   /** Usuario que aprobó y envió el documento. */
   lockedBy: string | null;
+  /** El documento está en una ventana de edición de emergencia. */
+  emergencyEditOpen?: boolean;
   createdAt: string;
   updatedAt: string;
   /** Fecha de borrado lógico; `null` o ausente = activo. */
@@ -464,6 +466,7 @@ export const INBOX_MESSAGE_STATUSES = [
   'sent',
   'rejected',
   'cancelled',
+  'superseded',
 ] as const;
 
 export type InboxMessageStatus = (typeof INBOX_MESSAGE_STATUSES)[number];

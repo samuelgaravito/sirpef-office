@@ -36,6 +36,30 @@ class SessionStore(context: Context) {
             return created
         }
 
+    /** El teléfono ya fue vinculado; el próximo arranque pide login diario. */
+    val enrolled: Boolean
+        get() = prefs.getBoolean(KEY_ENROLLED, false)
+
+    /** Correo o cédula que se muestra precargado en el login. */
+    val identifier: String
+        get() = prefs.getString(KEY_IDENTIFIER, "") ?: ""
+
+    fun saveEnrollment(user: PublicUser) {
+        val identifier = user.cedula?.takeIf { it.isNotBlank() } ?: user.email
+        prefs.edit()
+            .putBoolean(KEY_ENROLLED, true)
+            .putString(KEY_IDENTIFIER, identifier)
+            .apply()
+    }
+
+    /** La web revocó el teléfono: hay que empezar el alta desde cero. */
+    fun clearEnrollment() {
+        prefs.edit()
+            .remove(KEY_ENROLLED)
+            .remove(KEY_IDENTIFIER)
+            .apply()
+    }
+
     fun save(session: StoredSession) {
         cached = session
         val plain = json.encodeToString(session)
@@ -96,6 +120,8 @@ class SessionStore(context: Context) {
         const val PREFS = "sirpefoffice_firma_session"
         const val KEY_SESSION = "session"
         const val KEY_DEVICE_ID = "device_id"
+        const val KEY_ENROLLED = "enrolled"
+        const val KEY_IDENTIFIER = "identifier"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "sirpefoffice_session_aes"
         const val TRANSFORMATION = "AES/GCM/NoPadding"

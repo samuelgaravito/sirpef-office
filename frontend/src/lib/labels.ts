@@ -59,6 +59,7 @@ export const INBOX_STATUS_LABELS: Record<InboxMessageStatus, string> = {
   sent: 'Aprobado y enviado',
   rejected: 'Rechazado',
   cancelled: 'Anulado',
+  superseded: 'Reemplazado por revisión',
 };
 
 /** Contexto desde el que el usuario mira el mensaje. */

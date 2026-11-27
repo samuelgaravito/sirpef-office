@@ -50,6 +50,7 @@ app/src/main/java/ve/gob/mppef/sirpefoffice/firma/
 ```
 
 Documentación completa: [`../docs/MOVIL.md`](../docs/MOVIL.md).
+Token de autorización: [`../docs/TOKEN.md`](../docs/TOKEN.md).
 
 ## Probar sin SVA
 
@@ -71,6 +72,7 @@ para la firma tipográfica. Licencias en [`FUENTES.md`](FUENTES.md).
 
 - La app no guarda la contraseña de SVA.
 - La clave de firma es EC P-256 en el Android Keystore, ligada a biometría.
+- El sellado exige el código de 6 dígitos de **SirpefOffice Token**.
 - El acceso HTTP solo está permitido para desarrollo. En producción usa HTTPS
   y desactiva `usesCleartextTraffic`.
-- Esta versión no sube PDFs externos, no usa OTP y no tiene push.
+- Esta versión no sube PDFs externos, no usa OTP por correo y no tiene push.

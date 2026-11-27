@@ -33,6 +33,7 @@ import { db } from '../../db/index.js';
 import {
   designs,
   documentMessageRecipients,
+  documentEmergencyEdits,
   documentMessages,
   documentShares,
   documentVersions,
@@ -46,11 +47,11 @@ import {
   assertDocumentMutable,
   canExportDocument,
   getDocumentAccess,
+  isDocumentLocked,
 } from '../../lib/access.js';
 import { logActivity } from '../../lib/activity.js';
 import { authenticate } from '../../lib/auth-guard.js';
 import {
-  numberDocumentInTx,
   numberingPreviewsFor,
   previewDocumentNumber,
   templateNumberingFrom,
@@ -59,6 +60,11 @@ import { badRequest, conflict, forbidden, internal, locked, notFound } from '../
 import { resolveTemplateDesign } from '../../lib/active-design.js';
 import { sameJson } from '../../lib/json.js';
 import { saveVersion } from '../../lib/versions.js';
+import {
+  activeEmergencyEdit,
+  assertEmergencyEditor,
+  markEmergencyChanged,
+} from './emergency.js';
 import { publishDocumentEvent } from '../realtime/events.js';
 import {
   chromeOverrideSchema,
@@ -123,17 +129,6 @@ const shareSchema = z.object({
   userId: z.uuid(),
   permission: z.enum(['editor', 'viewer']),
 });
-
-/**
- * Estados que convierten al documento en un registro oficial y, por tanto,
- * disparan la asignación del correlativo.
- */
-const OFFICIAL_STATUSES: ReadonlyArray<(typeof DOCUMENT_STATUSES)[number]> = [
-  'sent',
-  'approved',
-  'final',
-  'archived',
-];
 
 /* ─────────────────────── Guardado de versiones ─────────────────────── */
 
@@ -227,6 +222,7 @@ export function toSummary(
     permission,
     lockedAt: row.lockedAt?.toISOString() ?? null,
     lockedBy: row.lockedBy ?? null,
+    emergencyEditOpen: row.emergencyEditOpen,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     deletedAt: row.deletedAt?.toISOString() ?? null,
@@ -455,6 +451,43 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       .orderBy(desc(documentMessages.createdAt))
       .limit(1);
 
+    const [lastSentMessage] = await db
+      .select({
+        id: documentMessages.id,
+        approvedById: documentMessages.approvedById,
+      })
+      .from(documentMessages)
+      .where(
+        and(
+          eq(documentMessages.documentId, id),
+          eq(documentMessages.status, 'sent'),
+        ),
+      )
+      .orderBy(desc(documentMessages.approvedAt))
+      .limit(1);
+
+    const [openEmergencyEdit] = await db
+      .select({
+        id: documentEmergencyEdits.id,
+        reason: documentEmergencyEdits.reason,
+        expiresAt: documentEmergencyEdits.expiresAt,
+        requestedBy: documentEmergencyEdits.requestedBy,
+      })
+      .from(documentEmergencyEdits)
+      .where(
+        and(
+          eq(documentEmergencyEdits.documentId, id),
+          eq(documentEmergencyEdits.status, 'open'),
+        ),
+      )
+      .limit(1);
+
+    const canEmergencyEdit =
+      user.role === 'admin' &&
+      Boolean(document.lockedAt || document.status === 'sent') &&
+      Boolean(lastSentMessage && lastSentMessage.approvedById === user.sub) &&
+      !openEmergencyEdit;
+
     const numberingPreview = document.docNumber
       ? null
       : await previewDocumentNumber({
@@ -524,6 +557,15 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
 
     return {
       canExport: await canExportDocument(user.sub, user.role, document),
+      canEmergencyEdit,
+      emergencyEdit:
+        openEmergencyEdit && openEmergencyEdit.requestedBy === user.sub
+          ? {
+              id: openEmergencyEdit.id,
+              reason: openEmergencyEdit.reason,
+              expiresAt: openEmergencyEdit.expiresAt.toISOString(),
+            }
+          : null,
       document: {
         ...toSummary(
           document,
@@ -687,8 +729,16 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
     const { id } = z.object({ id: z.uuid() }).parse(request.params);
     const body = contentSchema.parse(request.body);
 
-    const { document, permission } = await assertDocument(user.sub, id, 'editor');
-    assertDocumentMutable(document);
+    const { document, permission } = await getDocumentAccess(user.sub, id);
+    const emergencyEdit = await activeEmergencyEdit(user.sub, id);
+    if (emergencyEdit) {
+      await assertEmergencyEditor(user, id);
+    } else {
+      if (permission !== 'owner' && permission !== 'editor') {
+        throw forbidden('Necesitas permiso de edición sobre este documento');
+      }
+      assertDocumentMutable(document);
+    }
     await assertNoPendingEdit(user, id);
 
     const next = {
@@ -739,17 +789,25 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    await saveVersion(
-      id,
-      user.sub,
-      body.ai ? 'ai' : body.checkpoint ? 'manual' : 'auto',
-      body.note ??
-        (body.ai
-          ? 'Redacción con el asistente de IA'
-          : body.checkpoint
-            ? 'Punto de control'
-            : ''),
-    );
+    if (emergencyEdit) {
+      await markEmergencyChanged({ user, document, edit: emergencyEdit });
+      await logActivity(user.sub, 'document', id, 'emergency_edit_saved', {
+        emergencyEditId: emergencyEdit.id,
+        version: updated.version,
+      });
+    } else {
+      await saveVersion(
+        id,
+        user.sub,
+        body.ai ? 'ai' : body.checkpoint ? 'manual' : 'auto',
+        body.note ??
+          (body.ai
+            ? 'Redacción con el asistente de IA'
+            : body.checkpoint
+              ? 'Punto de control'
+              : ''),
+      );
+    }
 
     if (body.ai) {
       await logActivity(user.sub, 'document', id, 'ai_drafted', { version: updated.version });
@@ -766,7 +824,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       version: updated.version,
       updatedAt: updated.updatedAt.toISOString(),
       change: 'content',
-      status: updated.status,
+      status: emergencyEdit ? 'in_review' : updated.status,
     });
 
     return {
@@ -814,52 +872,20 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
-    let updated: typeof documents.$inferSelect | undefined;
-    const becomesOfficial =
-      body.status !== undefined &&
-      OFFICIAL_STATUSES.includes(body.status) &&
-      !document.docNumber;
-
-    if (becomesOfficial) {
-      // El cambio de estado y la asignación del número deben ser atómicos.
-      updated = await db.transaction(async (tx) => {
-        const [row] = await tx
-          .update(documents)
-          .set({
-            title: body.title ?? document.title,
-            description: body.description ?? document.description,
-            status: body.status ?? document.status,
-            designId: body.designId === undefined ? document.designId : body.designId,
-            data: body.data ?? document.data,
-            updatedAt: new Date(),
-          })
-          .where(eq(documents.id, id))
-          .returning();
-        if (!row) return undefined;
-
-        await numberDocumentInTx(tx, row.id);
-
-        const [numbered] = await tx
-          .select()
-          .from(documents)
-          .where(eq(documents.id, id))
-          .limit(1);
-        return numbered ?? row;
-      });
-    } else {
-      [updated] = await db
-        .update(documents)
-        .set({
-          title: body.title ?? document.title,
-          description: body.description ?? document.description,
-          status: body.status ?? document.status,
-          designId: body.designId === undefined ? document.designId : body.designId,
-          data: body.data ?? document.data,
-          updatedAt: new Date(),
-        })
-        .where(eq(documents.id, id))
-        .returning();
-    }
+    // El correlativo solo se asigna en la aprobación móvil. Cambiar el
+    // estado desde la web no oficializa ni numera el documento.
+    const [updated] = await db
+      .update(documents)
+      .set({
+        title: body.title ?? document.title,
+        description: body.description ?? document.description,
+        status: body.status ?? document.status,
+        designId: body.designId === undefined ? document.designId : body.designId,
+        data: body.data ?? document.data,
+        updatedAt: new Date(),
+      })
+      .where(eq(documents.id, id))
+      .returning();
 
     if (!updated) throw internal('DOCUMENT_UPDATE_FAILED', 'No se pudo actualizar el documento');
 

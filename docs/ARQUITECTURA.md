@@ -199,8 +199,11 @@ document_counters (series_id, year) → secuencia emitida al oficializar
    número**: se muestra el número previsto, que no reserva el contador.
 3. El jefe (`admin`) lo ve en **Bandeja → Recibidos**, dentro del bloque destacado
    «Requiere tu aprobación». Desde la web puede abrirlo, revisarlo y corregirlo,
-   pero **no aprobar ni rechazar**: la decisión se toma en la **app móvil de firma**.
+   pero **no aprobar, rechazar, anular ni iniciar una emergencia**: todas las
+   decisiones se toman en la **app móvil de firma** con el código de Token.
    La web solo muestra una tarjeta informativa con el enlace a la solicitud.
+   El envío directo del administrador tampoco se autoaprueba: siempre crea un
+   `pending_approval`.
 4. La aprobación es atómica: el mensaje pasa a `sent`, el memo a `sent`, se
    rellena `locked_at`/`locked_by`, `allow_sender_export` y los destinatarios
    reciben acceso `viewer`. **En la misma transacción se asigna el correlativo**:
@@ -277,8 +280,8 @@ document_counters (series_id, year) → secuencia emitida al oficializar
   envío y en la bandeja. Dentro del documento, `{{numero_documento}}` se sustituye
   visualmente por el número (decoración de ProseMirror, sin tocar el contenido); en
   la vista previa y el PDF de un borrador aparece como `MEM-0008-2026 (previsto)`.
-- Al aprobar, `POST /api/inbox/:id/approve` y el envío directo devuelven `docNumber`
-  para que el cliente confirme el número real (y avise si difiere del previsto).
+- Al aprobar, `POST /api/inbox/:id/approve-and-sign` devuelve `docNumber` y el
+  certificado para que la app confirme el número real en la misma operación.
 - Herramientas de mantenimiento: `npm run db:migrate:numbering` (migración de datos
   idempotente), `npm run db:reconcile-counters` (recalcula y corrige) y
   `npm run db:purge-empty-drafts` (elimina borradores vacíos; simulación por
@@ -1183,11 +1186,13 @@ Base: `/api`. Autenticación: `Authorization: Bearer <accessToken>` salvo en log
 | `GET` | `/inbox?scope=received\|sent\|approved\|rejected&filter=all\|pending\|sent&status=all\|pending_approval\|sent\|rejected\|cancelled` | Bandeja paginada. `sent` incluye los envíos propios, los memos aprobados/rechazados por el usuario y los que él mismo anuló. `filter` solo aplica a `received`; `status` solo a `sent`. `pending` requiere administrador. |
 | `GET` | `/inbox/unread-count` | Contadores de no leídos, pendientes de aprobación y resultados propios sin ver, con desglose `sections` (Recibidos, Enviados, Aprobados, Rechazados) y el último resultado. |
 | `GET` | `/inbox/:id` | Detalle del mensaje, destinatarios y memo adjunto. |
-| `POST` | `/inbox` | Crea el envío: `pending_approval` para `member`, envío directo para `admin`. |
-| `POST` | `/inbox/:id/approve` | El jefe aprueba, sella el memo y lo envía. |
-| `POST` | `/inbox/:id/reject` | Rechaza con motivo. Acepta `allowEdit` (por defecto `true`): con edición el memo vuelve a borrador; sin edición queda cerrado y bloqueado. |
+| `POST` | `/inbox` | Crea el envío en `pending_approval` para todos los roles, incluido `admin`. |
+| `POST` | `/inbox/:id/approve` | Deshabilitado en la web: responde `409 WEB_APPROVAL_DISABLED`. |
+| `POST` | `/inbox/:id/reject` | Deshabilitado en la web: responde `409 WEB_REJECT_DISABLED`. |
+| `POST` | `/mobile/inbox/:id/reject` | Rechaza con motivo desde la app. Acepta `allowEdit`. |
 | `POST` | `/inbox/:id/cancel` | El remitente cancela un envío pendiente. |
-| `POST` | `/inbox/:id/annul` | El administrador que aprobó el memo lo anula: `expectedVersion` y `reason` opcional. Conserva el número y el bloqueo; el memo deja de verse en la bandeja de los destinatarios. |
+| `POST` | `/inbox/:id/annul` | Deshabilitado en la web: responde `409 WEB_ANNUL_DISABLED`. |
+| `POST` | `/mobile/inbox/:id/annul` | El aprobador anula con `expectedVersion`, `reason` opcional y código TOTP. Conserva número y bloqueo. |
 | `PATCH` | `/inbox/:id` | `read` para el destinatario o `resultRead` para el remitente (aprobado/rechazado visto). |
 | `GET` | `/stats/overview?dateFrom=<ISO>&dateTo=<ISO>` | Resumen del espacio (propios + compartidos, mismo criterio que `/documents?scope=all`): totales, plantillas más usadas, actividad mensual y resultados de aprobación. El filtro limita por fecha de creación de documentos, plantillas y diseños; sin fechas abarca todo el histórico. |
 | `GET` | `/stats/panel?dateFrom=<ISO>&dateTo=<ISO>&docType=&status=&scope=&templateId=&q=&dateField=` | Panel de un conjunto de documentos: totales, desglose por tipo y estado, actividad mensual y plantillas más usadas. Es el mismo motor que alimenta el dashboard del chat de consulta. |
@@ -1262,21 +1267,54 @@ SVA /auth/login/mobile → /api/auth/mobile/sva
   → POST /api/mobile/devices (clave pública)
   → POST /api/documents/:id/sign-challenge
   → BiometricPrompt + SHA256withECDSA
+  → código TOTP de SirpefOffice Token
+  → POST /api/documents/:id/sign-authorization
   → POST /api/inbox/:id/approve-and-sign
 ```
 
 - `signature_challenges` liga usuario, dispositivo, documento, versión y hash
-  canónico del contenido. Es de un solo uso y caduca en 180 s.
+  canónico del contenido. Es de un solo uso y caduca en 180 s (se recomiendan
+  300 s con el flujo TOTP).
+- `totp_credentials` guarda el secreto TOTP cifrado con AES-256-GCM y el teléfono
+  Token activo. Solo hay uno por usuario.
+- `totp_pairing_codes`, `totp_recovery_codes` y `totp_device_challenges` cubren
+  vinculación, recuperación y nonces firmados por la clave EC.
+- `sign-authorization` exige código TOTP + aserción del dispositivo + desafío
+  vigente; marca el desafío como autorizado y consume el paso TOTP.
 - `document_signatures` guarda la rúbrica PNG, los trazos, los hashes y la
   aserción verificada.
 - `signature_certificates` guarda la serie, el token del QR (solo su SHA-256),
   el PDF sellado y el certificado PDF.
+- La aprobación con firma es **atómica**: en una sola transacción se asigna el
+  número, se actualiza el estado, se firma y se emite el certificado. Si
+  cualquier paso falla, se revierte todo y el envío sigue pendiente; nunca
+  queda un `sent` sin certificado.
 - El PDF se renderiza de nuevo con el número ya asignado, se le añade una
   **hoja de firmas** y se calcula su SHA-256. El PDF original no se altera.
+- Si un envío quedó aprobado sin firma (datos antiguos o un fallo previo), la
+  app muestra «pendiente de tu firma» y completa el sellado sin renumerar.
 - La verificación pública (`GET /api/verify/:token`) devuelve solo datos del
   certificado, sin contenido del memo ni IP del firmante.
 - El detalle operativo, las variables y la compilación están en
-  [`docs/MOVIL.md`](MOVIL.md).
+  [`docs/MOVIL.md`](MOVIL.md) y [`docs/TOKEN.md`](TOKEN.md).
+
+### 9.2 Edición de emergencia
+
+Solo el administrador que aprobó la versión vigente puede reabrir un documento
+bloqueado. La autorización se solicita desde la **app móvil de firma** con el
+código de SirpefOffice Token y un motivo; la web detecta la autorización y
+habilita el editor durante 30 minutos. Al primer cambio:
+
+- `documents.status` pasa a `in_review` y se limpia el sello;
+- `document_signatures` y `signature_certificates` anteriores quedan
+  `superseded`;
+- el mensaje `sent` anterior pasa a `superseded`;
+- se guarda una versión `emergency` y una fila en `document_emergency_edits`;
+- al terminar se crea un nuevo mensaje `pending_approval`.
+
+El certificado anterior deja de validar; el QR responde `valid:false` y
+`superseded:true`. El documento conserva su número y debe reaprobarse y
+refirmarse.
 
 ---
 
@@ -1291,6 +1329,8 @@ SVA /auth/login/mobile → /api/auth/mobile/sva
 | Escalada de privilegios | `assertDocument` + comprobación de rol en rutas de administración. |
 | Fuga de claves de IA | La clave solo se lee en el servidor; nunca se devuelve al cliente. |
 | Fuerza bruta de correlativos | `INSERT … ON CONFLICT DO UPDATE` transaccional. |
+| Reutilización de código TOTP | Paso consumido atómicamente + desafío de un solo uso + aserción del dispositivo. |
+| Robo de secreto TOTP | AES-256-GCM con llavero, AAD por usuario, Keystore con biometría en el teléfono. |
 | CSRF | Cookies `sameSite=lax` + token Bearer en cabecera para escrituras. |
 
 Recomendaciones de producción: HTTPS detrás de proxy, secretos de 32 bytes, backups

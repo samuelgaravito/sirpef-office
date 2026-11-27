@@ -37,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,8 +61,10 @@ import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import ve.gob.mppef.sirpefoffice.firma.data.SignatureCapture
 import ve.gob.mppef.sirpefoffice.firma.ui.DocumentDecision
+import ve.gob.mppef.sirpefoffice.firma.ui.TotpAction
 import ve.gob.mppef.sirpefoffice.firma.ui.UiState
 import ve.gob.mppef.sirpefoffice.firma.ui.components.SignatureDialog
+import ve.gob.mppef.sirpefoffice.firma.ui.components.TotpDialog
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Background
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Danger
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Indigo
@@ -71,6 +74,8 @@ import ve.gob.mppef.sirpefoffice.firma.ui.theme.SlateLight
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.Success
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.SuccessSoft
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.SurfaceSoft
+import ve.gob.mppef.sirpefoffice.firma.ui.theme.Warning
+import ve.gob.mppef.sirpefoffice.firma.ui.theme.WarningSoft
 import ve.gob.mppef.sirpefoffice.firma.ui.theme.White
 
 @Composable
@@ -86,6 +91,14 @@ fun DocumentScreen(
     onReject: () -> Unit,
     onRejectReason: (String) -> Unit,
     onAllowEdit: (Boolean) -> Unit,
+    onSignApproved: (FragmentActivity) -> Unit,
+    onAnnul: () -> Unit,
+    onAnnulReason: (String) -> Unit,
+    onEmergency: () -> Unit,
+    onEmergencyReason: (String) -> Unit,
+    onSubmitTotp: (String) -> Unit,
+    onCancelTotp: () -> Unit,
+    onTotpPrefillConsumed: () -> Unit,
 ) {
     val document = state.selected
     var showSignature by remember { mutableStateOf(false) }
@@ -144,6 +157,7 @@ fun DocumentScreen(
             DocumentBottomBar(
                 state = state,
                 onApprove = { onApprove(activity) },
+                onSignApproved = { onSignApproved(activity) },
                 onRetry = { onRetry(activity) },
                 onReject = onReject,
             )
@@ -157,6 +171,35 @@ fun DocumentScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { VerificationCard(state) }
+
+            if (state.tokenStatus?.paired == false && state.selected?.canSign == true) {
+                item {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = WarningSoft,
+                    ) {
+                        Row(
+                            Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Lock,
+                                contentDescription = null,
+                                tint = Warning,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Configura SirpefOffice Token desde Identidad y dispositivo para poder sellar.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF8A4B08),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                }
+            }
 
             if (state.pdfLoading) {
                 item {
@@ -222,6 +265,21 @@ fun DocumentScreen(
                 }
             }
 
+            if (
+                document != null &&
+                (document.canAnnul || document.canEmergencyEdit || document.annulled)
+            ) {
+                item {
+                    ApproverActions(
+                        state = state,
+                        onAnnulReason = onAnnulReason,
+                        onAnnul = onAnnul,
+                        onEmergencyReason = onEmergencyReason,
+                        onEmergency = onEmergency,
+                    )
+                }
+            }
+
             item {
                 SignatureSection(
                     state = state,
@@ -242,6 +300,34 @@ fun DocumentScreen(
             },
         )
     }
+
+    if (state.awaitingTotp) {
+        TotpDialog(
+            submitting = state.totpSubmitting,
+            error = state.totpError,
+            title = when (state.totpAction) {
+                TotpAction.SIGN -> "Autoriza el sellado"
+                TotpAction.ANNUL -> "Autoriza la anulación"
+                TotpAction.EMERGENCY -> "Autoriza la edición de emergencia"
+            },
+            message = when (state.totpAction) {
+                TotpAction.SIGN ->
+                    "Abre SirpefOffice Token e introduce el código de 6 dígitos. " +
+                        "El código cambia cada 30 segundos."
+                TotpAction.ANNUL ->
+                    "La anulación conserva el número y el sello, pero deja el documento marcado como ANULADO. " +
+                        "Introduce el código de SirpefOffice Token."
+                TotpAction.EMERGENCY ->
+                    "Autoriza la reapertura del documento. Después podrás editarlo en la web durante 30 minutos. " +
+                        "Introduce el código de SirpefOffice Token."
+            },
+            prefill = state.totpPrefill,
+            prefillRemaining = state.totpPrefillRemaining,
+            onPrefillConsumed = onTotpPrefillConsumed,
+            onDismiss = onCancelTotp,
+            onSubmit = onSubmitTotp,
+        )
+    }
 }
 
 @Composable
@@ -258,12 +344,22 @@ private fun VerificationCard(state: UiState) {
                 Box(
                     Modifier
                         .size(8.dp)
-                        .background(if (document.signed) Success else Indigo, RoundedCornerShape(50)),
+                        .background(
+                            when {
+                                document.annulled -> Danger
+                                document.signed -> Success
+                                document.needsSignature -> Warning
+                                else -> Indigo
+                            },
+                            RoundedCornerShape(50),
+                        ),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     when {
+                        document.annulled -> "Documento anulado"
                         document.signed -> "Documento firmado y sellado"
+                        document.needsSignature -> "Documento aprobado pendiente de tu firma"
                         !document.canSign -> "Documento recibido"
                         else -> "Contenido listo para revisión"
                     },
@@ -425,7 +521,7 @@ private fun SignatureSection(
                     }
                 }
 
-                !document.canSign -> {
+                !document.canSign && !document.needsSignature -> {
                     Text(
                         "Documento recibido. Puedes consultarlo en modo lectura; no requiere tu firma.",
                         style = MaterialTheme.typography.bodySmall,
@@ -492,7 +588,7 @@ private fun SignatureSection(
                     }
                 }
 
-                document.canSign -> {
+                document.canSign || document.needsSignature -> {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -541,7 +637,11 @@ private fun SignatureSection(
 
             // El texto de apoyo vive en la tarjeta porque la barra inferior solo
             // aparece cuando hay una acción real que confirmar.
-            if (!document.signed && document.canSign && state.signature == null) {
+            if (
+                !document.signed &&
+                (document.canSign || document.needsSignature) &&
+                state.signature == null
+            ) {
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "La firma se valida con biometría y se sella en el servidor.",
@@ -663,9 +763,105 @@ private fun RejectSection(
 }
 
 @Composable
+private fun ApproverActions(
+    state: UiState,
+    onAnnulReason: (String) -> Unit,
+    onAnnul: () -> Unit,
+    onEmergencyReason: (String) -> Unit,
+    onEmergency: () -> Unit,
+) {
+    val document = state.selected ?: return
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = White,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "ACCIONES DEL APROBADOR",
+                style = MaterialTheme.typography.labelSmall,
+                color = Slate,
+                fontWeight = FontWeight.Bold,
+            )
+
+            if (document.annulled) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Documento anulado. Conserva su número y su sello, pero ya no se muestra a los destinatarios.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Danger,
+                )
+            } else if (document.canAnnul) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Anular documento",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Ink,
+                )
+                Text(
+                    "Requiere el código de SirpefOffice Token. El número y el sello se conservan.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate,
+                )
+                Spacer(Modifier.height(8.dp))
+                TextField(
+                    value = state.annulReason,
+                    onValueChange = onAnnulReason,
+                    label = { Text("Motivo (opcional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.signing,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onAnnul,
+                    enabled = !state.signing,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Anular con Token")
+                }
+            }
+
+            if (document.canEmergencyEdit) {
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Edición de emergencia",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Ink,
+                )
+                Text(
+                    "Autoriza desde aquí y luego edita en la web durante 30 minutos. " +
+                        "La firma anterior quedará invalidada y habrá que reaprobar.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Slate,
+                )
+                Spacer(Modifier.height(8.dp))
+                TextField(
+                    value = state.emergencyReason,
+                    onValueChange = onEmergencyReason,
+                    label = { Text("Motivo (mínimo 10 caracteres)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.signing,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onEmergency,
+                    enabled = !state.signing && state.emergencyReason.trim().length >= 10,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Autorizar edición")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DocumentBottomBar(
     state: UiState,
     onApprove: () -> Unit,
+    onSignApproved: () -> Unit,
     onRetry: () -> Unit,
     onReject: () -> Unit,
 ) {
@@ -676,11 +872,11 @@ private fun DocumentBottomBar(
             !document.signed &&
             document.canSign &&
             state.decision == DocumentDecision.REJECT
+    val signOnly = document != null && document.needsSignature && !document.signed
     val ready =
         document != null &&
             !document.signed &&
-            document.canSign &&
-            state.decision == DocumentDecision.APPROVE &&
+            ((document.canSign && state.decision == DocumentDecision.APPROVE) || signOnly) &&
             state.signature != null
 
     if (!retry && !rejecting && !ready) return
@@ -728,7 +924,7 @@ private fun DocumentBottomBar(
                 }
             } else {
                 Button(
-                    onClick = onApprove,
+                    onClick = if (signOnly) onSignApproved else onApprove,
                     enabled = !state.signing,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -743,7 +939,10 @@ private fun DocumentBottomBar(
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        Text("Confirmar y sellar firma", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (signOnly) "Firmar y generar certificado" else "Confirmar y sellar firma",
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
             }

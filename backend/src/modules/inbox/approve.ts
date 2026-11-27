@@ -8,13 +8,15 @@ import {
   documents,
   users,
   type DocumentMessageRow,
+  type DocumentRow,
 } from '../../db/schema.js';
 import { assertDocumentDataComplete } from '../../lib/document-data.js';
 import { assertDocumentMutable } from '../../lib/access.js';
 import type { AuthenticatedUser } from '../../lib/auth-guard.js';
 import { logActivity } from '../../lib/activity.js';
 import { numberDocumentInTx } from '../../lib/counter.js';
-import { badRequest, conflict, notFound } from '../../lib/errors.js';
+import type { DbExecutor } from '../../lib/numbering.js';
+import { badRequest, conflict, internal, notFound } from '../../lib/errors.js';
 import { saveVersion } from '../../lib/versions.js';
 import { publishDocumentEvent, publishInboxEvent } from '../realtime/events.js';
 
@@ -28,6 +30,14 @@ export interface ApproveMessageInput {
   recipientIds?: string[];
 }
 
+export interface ApproveInTxResult {
+  message: DocumentMessageRow;
+  document: DocumentRow;
+  docNumber: string | null;
+  subject: string;
+  recipientIds: string[];
+}
+
 export interface ApproveMessageResult {
   message: DocumentMessageRow;
   documentId: string;
@@ -37,17 +47,30 @@ export interface ApproveMessageResult {
 }
 
 /**
- * Aprueba un envío pendiente, sella el documento y asigna su correlativo.
- * Vive fuera de la ruta para que la app móvil pueda reutilizarlo antes de
- * estampar la firma sin duplicar la lógica de negocio.
+ * Aprueba un envío pendiente y asigna su correlativo **dentro de la
+ * transacción del llamador**. No publica eventos ni guarda versión: eso se
+ * hace después del commit con `publishApprovalEffects`.
+ *
+ * Se usa tanto en la aprobación simple (scripts) como en la aprobación con
+ * firma atómica de la app móvil.
  */
-export async function approveMessage(input: ApproveMessageInput): Promise<ApproveMessageResult> {
-  const { user, messageId, expectedVersion, allowSenderExport } = input;
+export async function approveInTx(
+  tx: DbExecutor,
+  input: ApproveMessageInput,
+): Promise<ApproveInTxResult> {
+  const {
+    user,
+    messageId,
+    expectedVersion,
+    allowSenderExport,
+    recipientIds: requestedRecipients,
+  } = input;
 
-  const [message] = await db
+  const [message] = await tx
     .select()
     .from(documentMessages)
     .where(eq(documentMessages.id, messageId))
+    .for('update')
     .limit(1);
 
   if (!message) throw notFound('Mensaje no encontrado');
@@ -55,10 +78,11 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     throw conflict('Este envío ya fue procesado');
   }
 
-  const [document] = await db
+  const [document] = await tx
     .select()
     .from(documents)
     .where(eq(documents.id, message.documentId))
+    .for('update')
     .limit(1);
 
   if (!document || document.deletedAt) throw notFound('Documento no encontrado');
@@ -72,21 +96,28 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
   }
 
   const now = new Date();
-  let assignedDocNumber: string | null = null;
-
   let recipientIds: string[];
-  if (input.recipientIds) {
-    recipientIds = [...new Set(input.recipientIds)];
+
+  if (requestedRecipients) {
+    recipientIds = [...new Set(requestedRecipients)];
     if (recipientIds.length === 0) throw badRequest('Selecciona al menos un destinatario');
-    const rows = await db
+
+    const rows = await tx
       .select({ id: users.id })
       .from(users)
       .where(and(inArray(users.id, recipientIds), eq(users.isActive, true)));
     if (rows.length !== recipientIds.length) {
       throw badRequest('Uno o más destinatarios no existen o están inactivos');
     }
+
+    await tx
+      .delete(documentMessageRecipients)
+      .where(eq(documentMessageRecipients.messageId, messageId));
+    await tx
+      .insert(documentMessageRecipients)
+      .values(recipientIds.map((userId) => ({ messageId, userId })));
   } else {
-    const currentRecipients = await db
+    const currentRecipients = await tx
       .select({ userId: documentMessageRecipients.userId })
       .from(documentMessageRecipients)
       .where(eq(documentMessageRecipients.messageId, messageId));
@@ -97,51 +128,48 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     throw badRequest('El envío no tiene destinatarios');
   }
 
-  await db.transaction(async (tx) => {
-    if (input.recipientIds) {
-      await tx
-        .delete(documentMessageRecipients)
-        .where(eq(documentMessageRecipients.messageId, messageId));
-      await tx
-        .insert(documentMessageRecipients)
-        .values(recipientIds.map((userId) => ({ messageId, userId })));
-    }
+  await tx
+    .update(documentMessages)
+    .set({
+      status: 'sent',
+      subject: input.subject ?? message.subject,
+      body: input.body ?? message.body,
+      approvedById: user.sub,
+      approvedAt: now,
+      sentAt: now,
+      allowSenderExport,
+      documentVersion: document.version,
+      updatedAt: now,
+    })
+    .where(eq(documentMessages.id, messageId));
 
-    await tx
-      .update(documentMessages)
-      .set({
-        status: 'sent',
-        subject: input.subject ?? message.subject,
-        body: input.body ?? message.body,
-        approvedById: user.sub,
-        approvedAt: now,
-        sentAt: now,
-        allowSenderExport,
-        documentVersion: document.version,
-        updatedAt: now,
-      })
-      .where(eq(documentMessages.id, messageId));
+  await tx
+    .update(documents)
+    .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
+    .where(eq(documents.id, document.id));
 
-    await tx
-      .update(documents)
-      .set({ status: 'sent', lockedAt: now, lockedBy: user.sub, updatedAt: now })
-      .where(eq(documents.id, document.id));
+  // El correlativo se reserva en la misma transacción. No toca `data`.
+  const docNumber = await numberDocumentInTx(tx, document.id);
 
-    // Aprobación: el memo se sella y recibe su número correlativo de forma
-    // atómica con el cambio de estado. Si ya tenía número, es idempotente.
-    assignedDocNumber = await numberDocumentInTx(tx, document.id);
+  const [updatedDocument] = await tx
+    .select()
+    .from(documents)
+    .where(eq(documents.id, document.id))
+    .limit(1);
+  if (!updatedDocument) {
+    throw internal('APPROVE_DOCUMENT_MISSING', 'No se pudo recargar el documento aprobado');
+  }
 
-    await tx
-      .insert(documentShares)
-      .values(
-        recipientIds.map((userId) => ({
-          documentId: document.id,
-          userId,
-          permission: 'viewer' as const,
-        })),
-      )
-      .onConflictDoNothing();
-  });
+  await tx
+    .insert(documentShares)
+    .values(
+      recipientIds.map((userId) => ({
+        documentId: document.id,
+        userId,
+        permission: 'viewer' as const,
+      })),
+    )
+    .onConflictDoNothing();
 
   const approved: DocumentMessageRow = {
     ...message,
@@ -156,21 +184,36 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     updatedAt: now,
   };
 
+  return {
+    message: approved,
+    document: updatedDocument,
+    docNumber,
+    subject: approved.subject,
+    recipientIds,
+  };
+}
+
+/** Efectos posteriores al commit de una aprobación. */
+export async function publishApprovalEffects(
+  result: ApproveInTxResult,
+  user: AuthenticatedUser,
+): Promise<void> {
+  const { message, document, recipientIds } = result;
+
   await saveVersion(document.id, user.sub, 'manual', 'Aprobado y enviado');
   await logActivity(user.sub, 'document', document.id, 'approved', {
-    messageId,
+    messageId: message.id,
     version: document.version,
   });
-  await logActivity(user.sub, 'document', document.id, 'sent', { messageId });
+  await logActivity(user.sub, 'document', document.id, 'sent', { messageId: message.id });
 
-  const subject = approved.subject;
   await publishInboxEvent({
     type: 'inbox.message.approved',
     userIds: recipientIds,
-    messageId,
+    messageId: message.id,
     documentId: document.id,
     documentTitle: document.title,
-    subject,
+    subject: message.subject,
     actorId: user.sub,
     actorName: user.name,
     status: 'sent',
@@ -178,29 +221,25 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
   await publishInboxEvent({
     type: 'inbox.result.approved',
     userIds: [message.senderId],
-    messageId,
+    messageId: message.id,
     documentId: document.id,
     documentTitle: document.title,
-    subject,
+    subject: message.subject,
     actorId: user.sub,
     actorName: user.name,
     status: 'sent',
   });
-
-  // La vista del aprobador (web, otra pestaña o la app) deja de mostrar la
-  // solicitud como pendiente en cuanto se aprueba.
   await publishInboxEvent({
     type: 'inbox.message.reviewed',
     userIds: [user.sub],
-    messageId,
+    messageId: message.id,
     documentId: document.id,
     documentTitle: document.title,
-    subject,
+    subject: message.subject,
     actorId: user.sub,
     actorName: user.name,
     status: 'sent',
   });
-
   await publishDocumentEvent({
     type: 'document.locked',
     documentId: document.id,
@@ -212,13 +251,25 @@ export async function approveMessage(input: ApproveMessageInput): Promise<Approv
     change: 'lock',
     status: 'sent',
   });
+}
+
+/**
+ * Aprueba un envío pendiente y le asigna su correlativo.
+ *
+ * Se conserva para scripts y flujos internos. La app móvil usa
+ * `approveAndSeal`, que hace aprobación + firma + certificado en una sola
+ * transacción.
+ */
+export async function approveMessage(input: ApproveMessageInput): Promise<ApproveMessageResult> {
+  const result = await db.transaction((tx) => approveInTx(tx, input));
+  await publishApprovalEffects(result, input.user);
 
   return {
-    message: approved,
-    documentId: document.id,
-    docNumber: assignedDocNumber,
-    subject,
-    recipientIds,
+    message: result.message,
+    documentId: result.document.id,
+    docNumber: result.docNumber,
+    subject: result.subject,
+    recipientIds: result.recipientIds,
   };
 }
 

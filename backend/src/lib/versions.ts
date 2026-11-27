@@ -13,7 +13,7 @@ const AUTO_MERGE_MS = 90_000;
 export async function saveVersion(
   documentId: string,
   userId: string,
-  kind: 'auto' | 'manual' | 'ai' | 'export' | 'restore',
+  kind: 'auto' | 'manual' | 'ai' | 'export' | 'restore' | 'emergency',
   note = '',
 ): Promise<void> {
   const [doc] = await db.select().from(documents).where(eq(documents.id, documentId)).limit(1);
